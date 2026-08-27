@@ -65,7 +65,7 @@ def run_single(client, info, cfg, all_style_prices, calibrated_weights=None, pro
     return FullPrediction(info=info, features=feats, voting=voting, channels=channels, grade=grade)
 
 
-def run_batch(cfg, styles_path, images_dir, mode, out_dir):
+def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="tongzhuang-outdoor"):
     styles = read_styles_excel(styles_path, images_dir)
     if not styles:
         log.error("没有读取到任何款式，请检查 %s", styles_path)
@@ -194,6 +194,60 @@ def run_batch(cfg, styles_path, images_dir, mode, out_dir):
             log.info("✅ 校准层训练完成：R²=%.3f，非零特征=%d", metrics["r2"], metrics["non_zero_features"])
         else:
             log.info("ℹ️ 样本不足或未安装sklearn，校准层未训练（冷启动模式继续使用默认权重）")
+
+        # ---- v2 过渡：额外跑 3Loop 优化内核（spec §5/§8/§9）----
+        # 产物写到 brand_cfg.calibrated_dir（brand_profiles/<brand>/calibrated/），
+        # 与 v1 旧路径 out_dir/calibration/feature_weights.yaml 物理隔离，
+        # 不破坏 run_single 加载旧权重的逻辑。
+        # 下次 v2 PredictionPipeline.run_one 会自动加载 3Loop 权重。
+        try:
+            from .config import load_brand_profile
+            from .core.optimization_kernel import build_history_df, run_all_loops
+            brand_cfg = load_brand_profile(brand_id)
+            sales_lookup = {
+                p.info.style_id: float(p.info.sales_qty)
+                for p in predictions
+                if p.info.sales_qty and p.info.sales_qty > 0
+            }
+            history_df = build_history_df(predictions, sales_lookup=sales_lookup)
+            sales_col = "sales"
+            if sales_col not in history_df.columns or history_df[sales_col].sum() == 0:
+                log.warning(
+                    "⚠️ v2 3Loop 跳过：predictions 全无销量（info.sales_qty=0），"
+                    "无回归信号。请在 styles Excel 填销量列或用 sales_lookup 注入。"
+                )
+            else:
+                artifacts_dir = Path(brand_cfg.calibrated_dir)
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                v2_result = run_all_loops(
+                    brand_cfg=brand_cfg,
+                    history_df=history_df,
+                    prediction_artifacts_dir=artifacts_dir,
+                    sales_col=sales_col,
+                )
+                log.info(
+                    "✅ v2 3Loop 校准完成：写入 %d 个产物 → %s",
+                    len(v2_result.output_files), artifacts_dir,
+                )
+                log.info(
+                    "   Loop1 applied=%s (ρ %.3f→%.3f), Loop2 applied=%s (ρ %.3f→%.3f), "
+                    "Loop3 applied=%s (ρ %.3f→%.3f)",
+                    v2_result.loop1.applied,
+                    v2_result.loop1.old_spearman_avg, v2_result.loop1.new_spearman_avg,
+                    v2_result.loop2.applied,
+                    v2_result.loop2.old_spearman, v2_result.loop2.new_spearman,
+                    v2_result.loop3.applied,
+                    v2_result.loop3.old_engine_spearman, v2_result.loop3.new_engine_spearman,
+                )
+                log.info(
+                    "   残差 μ=%.4f σ=%.4f, over=%d, under=%d, bias=%s",
+                    v2_result.residual.residual_mean, v2_result.residual.residual_std,
+                    len(v2_result.residual.overperformers),
+                    len(v2_result.residual.underperformers),
+                    v2_result.residual.system_bias_flag,
+                )
+        except Exception as e:
+            log.warning("v2 3Loop 校准失败（不影响 v1 主流程）：%s", e)
 
     return predictions
 
@@ -535,7 +589,7 @@ def main(argv=None):
         log.warning("训练模式需先跑过一次 backtest（会自动触发训练），或手动准备 %s", pkl)
         return
 
-    run_batch(cfg, styles_path, images_dir, args.mode, out_dir)
+    run_batch(cfg, styles_path, images_dir, args.mode, out_dir, brand_id=args.brand)
 
 
 if __name__ == "__main__":
