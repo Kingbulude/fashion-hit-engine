@@ -57,52 +57,6 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def load_config(
-    env_path: Path | None = None,
-    config_dir: Path = CONFIG_DIR,
-) -> AppConfig:
-    """加载全部配置（.env + 三个YAML文件）"""
-    # .env 优先用户指定，其次项目根目录
-    env_file = env_path or (PROJECT_ROOT / ".env")
-    if env_file.exists():
-        load_dotenv(env_file)
-    else:
-        load_dotenv()  # 回退到系统环境变量
-
-    api = APIConfig(
-        dashscope_api_key=os.getenv("DASHSCOPE_API_KEY", ""),
-        volc_api_key=os.getenv("VOLC_API_KEY"),
-        volc_endpoint=os.getenv("VOLC_ENDPOINT"),
-        feature_extraction_models=[
-            m.strip() for m in os.getenv("FEATURE_EXTRACTION_MODELS", "qwen3-vl-plus,qwen3.5-omni").split(",") if m.strip()
-        ],
-        persona_models=[
-            m.strip() for m in os.getenv("PERSONA_MODELS", "qwen3-max,deepseek-v4-pro").split(",") if m.strip()
-        ],
-        qpm_limit=int(os.getenv("QPM_LIMIT", "45")),
-        max_concurrent_personas=int(os.getenv("MAX_CONCURRENT_PERSONAS", "8")),
-        max_retries=int(os.getenv("MAX_RETRIES", "3")),
-    )
-
-    paths = PathConfig(
-        styles_xlsx=Path(os.getenv("STYLES_XLSX", str(PROJECT_ROOT / "data" / "styles.xlsx"))),
-        sales_xlsx=Path(os.getenv("SALES_XLSX", str(PROJECT_ROOT / "data" / "sales.xlsx"))),
-        images_dir=Path(os.getenv("IMAGES_DIR", str(PROJECT_ROOT / "data" / "images"))),
-        output_dir=Path(os.getenv("OUTPUT_DIR", str(PROJECT_ROOT / "output"))),
-        reports_dir=Path(os.getenv("OUTPUT_DIR", str(PROJECT_ROOT / "output"))) / "reports",
-    )
-
-    # 确保目录存在
-    for p in [paths.images_dir, paths.output_dir, paths.reports_dir]:
-        p.mkdir(parents=True, exist_ok=True)
-
-    features = _load_yaml(config_dir / "features_bars.yaml")
-    personas = _load_yaml(config_dir / "personas.yaml")
-    scoring = _load_yaml(config_dir / "scoring_weights.yaml")
-
-    return AppConfig(api=api, paths=paths, features=features, personas=personas, scoring=scoring)
-
-
 # ========== 品牌配置加载（新架构 v2.0）==========
 
 def list_available_brands() -> list[str]:
@@ -273,18 +227,12 @@ def load_config(
     env_path: Path | None = None,
     config_dir: Path = CONFIG_DIR,
 ) -> AppConfig:
-    """[DEPRECATED v2.0] 加载全部配置（.env + 三个YAML文件）
+    """加载默认品牌配置（.env + tongzhuang-outdoor 品牌适配包）。
 
-    新代码请改用 load_brand_profile(brand_id)。此函数内部薄包装调用
-    load_brand_profile("tongzhuang-outdoor") 并返回兼容的 AppConfig dict 结构。
+    通用入口：等价于 load_brand_profile("tongzhuang-outdoor") + 注入 .env 的 API 配置。
+    需要切换品牌时请直接用 load_brand_profile(brand_id)。
+    config_dir 参数保留用于向后兼容（实际配置从 brand_profiles/ 加载）。
     """
-    warnings.warn(
-        "load_config() is deprecated, use load_brand_profile(brand_id) instead. "
-        "See docs/superpowers/plans/2026-08-27-generic-architecture-refactor.md",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
     # .env 优先用户指定，其次项目根目录
     env_file = env_path or (PROJECT_ROOT / ".env")
     if env_file.exists():

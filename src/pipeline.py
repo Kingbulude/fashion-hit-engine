@@ -20,8 +20,7 @@ import sys
 import zlib
 from pathlib import Path
 
-from .calibration import train_calibration
-from .channel_scoring import calculate_channel_scores, evaluate_channels
+from .channel_scoring import calculate_channel_scores
 from .config import AppConfig, load_brand_profile, load_config
 from .core.ensemble_engine import synthesise_final_score
 from .data_io import load_styles_from_excel, read_styles_excel, save_predictions_xlsx
@@ -60,7 +59,7 @@ def _setup_logging(verbose: bool) -> None:
 def run_single(client, info, cfg, all_style_prices, calibrated_weights=None, progress=False):
     feats = extract_style_features(client, info, cfg, progress=progress)
     voting = run_persona_voting(client, info, feats, cfg, progress=progress)
-    channels, _ = evaluate_channels(info, feats, voting, cfg, all_style_prices=all_style_prices)
+    channels, _ = calculate_channel_scores(info, feats, voting, cfg, all_style_prices=all_style_prices)
     grade = decide_grade(info, feats, voting, channels, cfg, calibrated_weights=calibrated_weights)
     return FullPrediction(info=info, features=feats, voting=voting, channels=channels, grade=grade)
 
@@ -188,12 +187,8 @@ def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="tongzhuang-
         )
         log.info("回测详情报告 → %s", summary_path)
 
-        log.info("\n----- 校准层训练（如果样本够10个） -----")
-        metrics = train_calibration(predictions, out_dir / "calibration")
-        if metrics:
-            log.info("✅ 校准层训练完成：R²=%.3f，非零特征=%d", metrics["r2"], metrics["non_zero_features"])
-        else:
-            log.info("ℹ️ 样本不足或未安装sklearn，校准层未训练（冷启动模式继续使用默认权重）")
+        # v1 train_calibration 已移除：校准统一由下方 v2 run_all_loops 3Loop 内核完成
+        # （产物写 brand_cfg.calibrated_dir，下次评估自动加载）
 
         # ---- v2 过渡：额外跑 3Loop 优化内核（spec §5/§8/§9）----
         # 产物写到 brand_cfg.calibrated_dir（brand_profiles/<brand>/calibrated/），
@@ -582,9 +577,14 @@ def main(argv=None):
         if pkl.exists():
             import pickle
             preds = pickle.load(pkl.read_bytes())
-            metrics = train_calibration(preds, out_dir / "calibration")
-            if metrics:
-                log.info("✅ 单独训练完成：R²=%.3f", metrics["r2"])
+            # v2 路径：3Loop 优化内核替代 v1 train_calibration
+            sales_lookup = {p.info.style_id: float(p.info.sales_qty or 0) for p in preds}
+            pl = PredictionPipeline(brand_id=args.brand, llm_backend="mock")
+            result = pl.run_backtest_calibration(predictions=preds, sales_lookup=sales_lookup)
+            if result is not None:
+                log.info("✅ 3Loop 校准完成，产物写入 %s", pl.brand_cfg.calibrated_dir)
+            else:
+                log.info("ℹ️ 样本不足或无销量信号，校准未执行（冷启动模式继续）")
             return
         log.warning("训练模式需先跑过一次 backtest（会自动触发训练），或手动准备 %s", pkl)
         return

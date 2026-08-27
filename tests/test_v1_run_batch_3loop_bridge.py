@@ -21,50 +21,8 @@ sys.path.insert(0, str(ROOT))
 
 
 # ============================================================
-# 1. 不破坏 v1 旧路径：train_calibration 仍产出 feature_weights.yaml
-# ============================================================
-def test_v1_run_batch_still_produces_feature_weights_yaml():
-    """v1 backtest 分支接入 3Loop 后，train_calibration 仍应被调用，
-    产出 out_dir/calibration/feature_weights.yaml（v1 旧权重加载路径）。
-    """
-    from src.pipeline import run_batch
-    from src.config import load_config, load_brand_profile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        out_dir = tmpdir / "output"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        # 用 mock 模式跑 run_batch（不需真实 LLM）
-        cfg = load_config()
-        # 用品牌 profile 验证真实样式 Excel 路径
-        brand_id = "tongzhuang-outdoor"
-        styles_path = ROOT / "data" / "styles.xlsx"
-        images_dir = ROOT / "data" / "images"
-
-        if not styles_path.exists():
-            pytest.skip("data/styles.xlsx 不存在，跳过集成测试")
-
-        # 跑 backtest 模式（会触发 train_calibration + 3Loop）
-        try:
-            predictions = run_batch(
-                cfg, styles_path, images_dir, "backtest", out_dir,
-                brand_id=brand_id,
-            )
-        except SystemExit:
-            pytest.skip("styles.xlsx 读取失败或无图片，跳过集成测试")
-
-        # v1 旧路径产物：feature_weights.yaml
-        fw_path = out_dir / "calibration" / "feature_weights.yaml"
-        assert fw_path.exists(), (
-            f"v1 旧路径应产出 feature_weights.yaml, 但 {fw_path} 不存在"
-        )
-
-        print(f"✅ v1 旧路径保留：{fw_path} 存在")
-
-
-# ============================================================
-# 2. v2 3Loop 产物写入 brand_cfg.calibrated_dir
+# v2 3Loop 产物写入 brand_cfg.calibrated_dir
+# （v1 train_calibration 旧路径已移除，统一走 3Loop 内核）
 # ============================================================
 def test_v1_run_batch_produces_3loop_artifacts_in_calibrated_dir():
     """v1 backtest 分支接入 3Loop 后，应产出 loop1/2/3 artifacts

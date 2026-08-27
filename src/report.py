@@ -69,6 +69,17 @@ def generate_markdown_report(
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{pred.info.style_id}_grade.md"
 
+    text = _render_markdown_text(pred, brand_cfg)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _render_markdown_text(pred: FullPrediction, brand_cfg: BrandConfig | None = None) -> str:
+    """构造单款 Markdown 报告字符串（不写文件）。
+
+    generate_markdown_report（落盘）与 render_single_report_markdown（直接返回字符串）
+    共用此核心逻辑，避免重复维护。
+    """
     brand_name, brand_id, n_calibrated = _resolve_brand_info(brand_cfg)
     calibrate_label = "0（冷启动）" if n_calibrated == 0 else str(n_calibrated)
 
@@ -188,8 +199,12 @@ def generate_markdown_report(
         "",
         "*AI模拟30人设双重决策+视觉特征多模型交叉验证得出。为内部参考辅助工具，不替代专业判断。*",
     ]
-    path.write_text("\n".join(lines), encoding="utf-8")
-    return path
+    return "\n".join(lines)
+
+
+def render_single_report_markdown(pred: FullPrediction, brand_cfg: BrandConfig | None = None) -> str:
+    """返回单款 Markdown 报告字符串（供 Streamlit 直接显示 / 打包下载，无需写文件）。"""
+    return _render_markdown_text(pred, brand_cfg)
 
 
 def generate_backtest_summary(

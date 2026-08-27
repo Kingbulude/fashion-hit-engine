@@ -14,6 +14,10 @@ build/
 # === Runtime artifacts ===
 output/
 calibration/
+# 3Loop校准产物(运行时生成,每品牌每季不同,不入库;保留 .gitkeep 占位)
+brand_profiles/*/calibrated/*.yaml
+brand_profiles/*/calibrated/*.json
+brand_profiles/*/calibrated/*.md
 *.log
 
 # === IDE ===

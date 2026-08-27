@@ -459,17 +459,3 @@ def calculate_channel_scores(
         "pv_raw": perceived_value,
     }
     return channels, debug
-
-
-# ========== 旧兼容 evaluate_channels（薄包装，内部调用 calculate_channel_scores）==========
-def evaluate_channels(
-    info: StyleInfo,
-    feats: StyleFeatures,
-    voting: VotingResult,
-    cfg: AppConfig,
-    all_style_prices: list[float] | None = None,
-) -> tuple[ChannelScores, dict[str, Any]]:
-    """[DEPRECATED v2.0] 旧接口，请改用 calculate_channel_scores()。"""
-    return calculate_channel_scores(
-        info, feats, voting, cfg, all_style_prices, brand_cfg=None, category_id=None,
-    )
