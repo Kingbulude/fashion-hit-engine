@@ -8,7 +8,7 @@ httpx
 
 # ===== 数据处理 =====
 pandas
-numpy<2              # scikit-learn 1.4.x 与 numpy 2 不兼容
+numpy>=1.26          # 注：原 `numpy<2` 与 Python 3.14 不兼容（无 wheel）；scikit-learn 1.5+ 已支持 numpy 2
 openpyxl
 
 # ===== 机器学习（校准层） =====

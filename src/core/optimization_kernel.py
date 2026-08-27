@@ -591,6 +591,23 @@ def _write_yaml(path: Path, obj: Any) -> None:
     )
 
 
+def _rank_percentile(values: "pd.Series | list[float]") -> pd.Series:
+    """将数值序列转为 [0, 1] 的秩百分位（spec §9.1 归一化）。
+
+    spec §9.1：y_i = 真实销量排名（0-1归一化），ŷ_i = 3Loop校准后的预测分。
+    残差 ε = y - ŷ 只有在两者同尺度时才有统计意义；原始销量（千级）与
+    引擎集成分（0-10）直接相减会让 μ/σ 失真、±2σ 失效。
+    用 (rank-1)/(n-1)：最小值→0，最大值→1，并列用 average 秩。
+    """
+    s = values if isinstance(values, pd.Series) else pd.Series(values)
+    n = len(s)
+    if n == 0:
+        return s.astype(float)
+    if n == 1:
+        return pd.Series([0.5])
+    return (s.rank(method="average") - 1) / (n - 1)
+
+
 def _engine_score_ensemble(
     df: pd.DataFrame,
     engine_weights: dict[str, float],
@@ -616,6 +633,87 @@ def _engine_score_ensemble(
         + df[channel_cols[1]] * channel_weights.get(channel_cols[1], 0.5)
     )
     return 0.5 * engine_part + 0.5 * channel_part
+
+
+def build_history_df(
+    predictions: list[Any],
+    sales_col: str = "sales",
+    sales_lookup: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    """从 FullPrediction 列表构造 history_df，含 run_all_loops 所需全部列。
+
+    列：style_id, F01-F10 (10 特征分), P01-P30 (30 人设投票分),
+        persona_score, channel_score, price_value_score,
+        natural_score, live_score, sales。
+
+    用 getattr 鸭子类型访问，避免与 src.types 强耦合；
+    用于 smoke test 与 pipeline.py backtest 分支共用，避免两边重复逻辑。
+
+    Args:
+        predictions: list[FullPrediction] 或同形状鸭子类型对象
+        sales_col: 销量列名，默认 "sales"
+        sales_lookup: 当 prediction.info.sales_qty 为 0/None 时的兜底销量映射
+            {style_id: sales_qty}，便于回测注入真实销量
+    """
+    persona_ids = [f"P{i:02d}" for i in range(1, 31)]
+    feature_cols = [f"F{i:02d}" for i in range(1, 11)]
+    sales_lookup = sales_lookup or {}
+    rows: list[dict[str, Any]] = []
+
+    for p in predictions:
+        info = getattr(p, "info", None)
+        voting = getattr(p, "voting", None)
+        channels = getattr(p, "channels", None)
+        features = getattr(getattr(p, "features", None), "features", {}) or {}
+
+        style_id = getattr(info, "style_id", "unknown")
+        # 销量：info.sales_qty 优先，0/None 时回退 sales_lookup（回测注入真实销量）
+        sales = float(
+            getattr(info, "sales_qty", 0)
+            or sales_lookup.get(style_id, 0.0)
+        )
+
+        # F01-F10：按 features 字典顺序取前 10 个；不足用 5.0 兜底
+        feat_row: dict[str, float] = {}
+        feat_items = list(features.items())[:10]
+        for i, (_, f) in enumerate(feat_items):
+            feat_row[feature_cols[i]] = float(getattr(f, "score", 5.0))
+        for i in range(len(feat_items), 10):
+            feat_row[feature_cols[i]] = 5.0
+
+        # P01-P30：votes 不足 30 用 weighted_score 兜底
+        weighted_score = float(getattr(voting, "weighted_score", 5.0))
+        votes = getattr(voting, "votes", None) or []
+        persona_row: dict[str, float] = {}
+        for pi in range(30):
+            if pi < len(votes):
+                persona_row[persona_ids[pi]] = float(
+                    getattr(votes[pi], "final_score", weighted_score)
+                )
+            else:
+                persona_row[persona_ids[pi]] = weighted_score
+
+        # 三大引擎 + 双渠道
+        natural = float(getattr(channels, "natural_score", 5.0))
+        live = float(getattr(channels, "live_score", 5.0))
+        perceived = float(getattr(channels, "perceived_value", 5.0))
+        eng_row = {
+            "persona_score": weighted_score,
+            "channel_score": (natural + live) / 2,
+            "price_value_score": perceived,
+            "natural_score": natural,
+            "live_score": live,
+            sales_col: sales,
+        }
+
+        rows.append({
+            "style_id": style_id,
+            **feat_row,
+            **persona_row,
+            **eng_row,
+        })
+
+    return pd.DataFrame(rows)
 
 
 def run_all_loops(
@@ -718,7 +816,12 @@ def run_all_loops(
             history_df, r3.engine_weights, r3.channel_weights,
         )
         y_true_series = history_df[sales_col].astype(float)
-        r4 = ResidualDecomposer.decompose(y_true_series, y_pred_series, history_df)
+        # spec §9.1：残差 ε = y - ŷ 要求两边同尺度。原始销量（千级）与
+        # 引擎集成分（0-10）量级差 1000×，必须先归一化到 [0,1] 秩百分位，
+        # 否则 μ/σ 失真、±2σ 区间覆盖全数据 → 残差分离器实际失效。
+        y_pred_norm = _rank_percentile(y_pred_series)
+        y_true_norm = _rank_percentile(y_true_series)
+        r4 = ResidualDecomposer.decompose(y_true_norm, y_pred_norm, history_df)
         residual_path = calibrated_dir / "residual_decompose.yaml"
         _write_yaml(residual_path, {
             "residual_mean": r4.residual_mean,

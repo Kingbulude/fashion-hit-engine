@@ -131,40 +131,11 @@ def stage_b_run_3loop(preds: list[FullPrediction], pl: PredictionPipeline):
     print("🧠 阶段 B：核心优化内核 3Loop + 残差分离")
     print("=" * 100)
     # 1) 构造历史DataFrame：F01-F10 / P01-P30 / 三大引擎+双渠道 / sales
-    import pandas as pd
-    rows = []
-    persona_ids = [f"P{i:02d}" for i in range(1, 31)]
-    feature_cols = [f"F{i:02d}" for i in range(1, 11)]
-    for p in preds:
-        truth = p.info.sales_qty or GRADE_SALES.get(p.info.style_id, 1000)
-        feat_row = {}
-        for i, (k, f) in enumerate(p.features.features.items()):
-            col = feature_cols[i] if i < len(feature_cols) else k
-            feat_row[col] = f.score
-        persona_row = {}
-        votes = getattr(p.voting, "votes", None)
-        weighted_score = p.voting.weighted_score
-        if votes:
-            for pi, pv in enumerate(votes[:30]):
-                persona_row[persona_ids[pi]] = getattr(pv, "final_score", weighted_score)
-            for pi in range(len(votes), 30):
-                persona_row[persona_ids[pi]] = weighted_score
-        else:
-            for pid in persona_ids:
-                persona_row[pid] = weighted_score
-        eng_row = {
-            "persona_score": weighted_score,
-            "channel_score": (p.channels.natural_score + p.channels.live_score) / 2,
-            "price_value_score": p.channels.perceived_value,
-            "natural_score": p.channels.natural_score,
-            "live_score": p.channels.live_score,
-            "sales": float(truth),
-        }
-        rows.append({**feat_row, **persona_row, **eng_row, "style_id": p.info.style_id})
-    history_df = pd.DataFrame(rows)
+    #    用 build_history_df 复用函数（与 pipeline.py backtest 分支共用）
+    from src.core.optimization_kernel import build_history_df, run_all_loops
+    history_df = build_history_df(preds, sales_lookup=GRADE_SALES)
 
     # 2) 调用 run_all_loops
-    from src.core.optimization_kernel import run_all_loops
     out_dir = ROOT / "output"
     try:
         result = run_all_loops(

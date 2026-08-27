@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import zlib
 from pathlib import Path
 
 from .calibration import train_calibration
@@ -258,7 +259,10 @@ class PredictionPipeline:
     # ===== mock 人设投票（不依赖LLM，用于smoke test）=====
     def _mock_voting(self, style_id: str, feats: StyleFeatures) -> VotingResult:
         import random
-        random.seed(hash(f"{style_id}_vote") & 0xFFFFFFFF)
+        # 注：原 hash() 跨进程随机化（PYTHONHASHSEED）→ mock 投票每进程不同 →
+        # smoke test 非确定性（sp_sales 在 0.90~0.99 漂移、阈值 0.92 随机失败）。
+        # 改用 zlib.crc32 提供确定性 hash。
+        random.seed(zlib.crc32(f"{style_id}_vote".encode()))
         target_age = int(getattr(self.brand_cfg.decision_structure, "default_target_age", 10))
         n_personas = 30
         votes = []
@@ -405,7 +409,7 @@ class PredictionPipeline:
         for i in range(n):
             cid, cname, price_base = categories_pool[i % len(categories_pool)]
             import random
-            random.seed(hash(f"smk_{self.brand_id}_{i}") & 0xFFFFFFFF)
+            random.seed(zlib.crc32(f"smk_{self.brand_id}_{i}".encode()))
             price = round(price_base + random.uniform(-20, 30), 0)
             styles.append(StyleInfo(
                 style_id=f"T251{i+1:03d}",
@@ -424,6 +428,79 @@ class PredictionPipeline:
         for info in styles:
             results.append(self.run_one(info, use_mock=True))
         return results
+
+    def run_backtest_calibration(
+        self,
+        predictions: list[FullPrediction] | None = None,
+        sales_lookup: dict[str, float] | None = None,
+        out_dir: Path | None = None,
+    ) -> "RunAllLoopsResult | None":
+        """对一批预测结果跑 3Loop 优化内核 + 残差分离（spec §5/§8/§9）。
+
+        v2 推荐的校准入口，替代 v1 run_batch 里仅跑 Loop2 的 train_calibration。
+        产物写到 brand_cfg.calibrated_dir，下次 run_one 可加载 loop1/2/3 权重。
+
+        Args:
+            predictions: 已跑完的预测结果；为 None 时用 run_smoke_test_data(10) 兜底
+            sales_lookup: 真实销量映射 {style_id: sales_qty}；mock 数据需注入真实销量
+            out_dir: 预测产物目录；默认 brand_cfg.calibrated_dir 的父级 output
+
+        Returns:
+            RunAllLoopsResult 或 None（样本不足/失败时）
+        """
+        if predictions is None:
+            predictions = self.run_smoke_test_data(n=10)
+
+        from .core.optimization_kernel import build_history_df, run_all_loops
+        history_df = build_history_df(predictions, sales_lookup=sales_lookup)
+
+        # 销量全 0 → run_all_loops 无信号，提前拦截
+        sales_col = "sales"
+        if sales_col not in history_df.columns or history_df[sales_col].sum() == 0:
+            log.warning(
+                "⚠️ predictions 全无销量（info.sales_qty=0 且 sales_lookup 为空），"
+                "3Loop 无回归信号，跳过校准。请用 sales_lookup 注入真实销量。"
+            )
+            return None
+
+        if out_dir is None:
+            # 默认输出到 brand calibrated_dir 的同级 output
+            out_dir = Path(self.brand_cfg.calibrated_dir).parent / "output"
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            result = run_all_loops(
+                brand_cfg=self.brand_cfg,
+                history_df=history_df,
+                prediction_artifacts_dir=out_dir,
+                sales_col=sales_col,
+            )
+            log.info(
+                "✅ 3Loop 校准完成：写入 %d 个产物文件 → %s",
+                len(result.output_files), self.brand_cfg.calibrated_dir,
+            )
+            log.info(
+                "   Loop1 applied=%s (ρ %.3f→%.3f), Loop2 applied=%s (ρ %.3f→%.3f), "
+                "Loop3 applied=%s (ρ %.3f→%.3f)",
+                result.loop1.applied,
+                result.loop1.old_spearman_avg, result.loop1.new_spearman_avg,
+                result.loop2.applied,
+                result.loop2.old_spearman, result.loop2.new_spearman,
+                result.loop3.applied,
+                result.loop3.old_engine_spearman, result.loop3.new_engine_spearman,
+            )
+            log.info(
+                "   残差 μ=%.4f σ=%.4f, over=%d, under=%d, bias=%s",
+                result.residual.residual_mean, result.residual.residual_std,
+                len(result.residual.overperformers),
+                len(result.residual.underperformers),
+                result.residual.system_bias_flag,
+            )
+            return result
+        except Exception as e:
+            log.exception("3Loop 校准失败：%s", e)
+            return None
 
 
 # ========== CLI 入口（保持原逻辑）==========

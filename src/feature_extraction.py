@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -123,7 +124,10 @@ class FeatureExtractionEngine:
         - fixed_feature_scores 传10个浮点数时，按BARS量表顺序覆盖F01-F10分数，用于冒烟测试确定性结果
         """
         import random
-        random.seed(hash(style_id) & 0xFFFFFFFF)
+        # 注：原 hash() 跨进程随机化（PYTHONHASHSEED），导致 mock 特征每进程不同、
+        # smoke test 跨进程非确定性（sp_sales 在 0.90~0.99 漂移、阈值 0.92 随机失败）。
+        # 改用 zlib.crc32 提供确定性 hash。
+        random.seed(zlib.crc32(style_id.encode()))
         result = StyleFeatures(style_id=style_id)
         keys_ordered = list(self._bars_cfg["features"].keys())
         for i, key in enumerate(keys_ordered):
