@@ -1,0 +1,5 @@
+residual_mean: 5.551115123125783e-18
+residual_std: 0.31426968052735443
+system_bias_flag: NO_SIGNIFICANT_BIAS
+overperformers: []
+underperformers: []
