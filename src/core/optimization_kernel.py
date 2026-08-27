@@ -159,13 +159,29 @@ class PersonaDistributionFitResult:
 
 
 class PersonaDistributionFitter:
-    """对 P01..P30 人设列用 Lasso(alpha=0.05, max_iter=5000) 拟合销量，
-    系数取 abs 后归一化得到 30 维分布权重。保护机制：新 Spearman ≥ 旧+0.01
-    才更新，否则保持上一轮（默认均匀）。
+    """对 P01..P30 人设列用 Lasso(alpha=0.05, max_iter=5000) 拟合销量（spec §8.2）。
+
+    数学形式（spec §8.2）::
+
+        min_w  Σ_i (y_i - Σ_k w_k · vote_k(x_i))² + λ · Σ_k |w_k|
+        s.t.   Σ_k w_k = 1
+               w_k ≥ w_min = 1/(2×30)        # 多样性保护下限 ≈1.67%
+
+    其中：
+      - y_i          = 真实销量排名（0-1 rank percentile，spec §9.1）
+      - vote_k(x_i)  = 人设投票分（1-10 量表 → /10 → [0,1]）
+      - 系数方向性   = 保留 Lasso 符号；正相关人设获高权重，
+                       负相关人设降至 0（最终被 w_min floor 抬起），
+                       不再使用 abs()——避免把负相关人设误判为"强相关"
+
+    保护机制（spec §8.4）：新 Spearman ≥ 旧+MIN_IMPROVEMENT 才接受，
+    否则回滚到均匀分布。
     """
 
     PERSONA_COLS = [f"P{i:02d}" for i in range(1, 31)]
     MIN_IMPROVEMENT = 0.01
+    W_MIN = 1.0 / (2 * len(PERSONA_COLS))   # spec §8.2: ≈1.67%
+    VOTE_SCALE = 10.0                        # 人设分 1-10 → /10 → [0,1]
 
     @classmethod
     def fit(
@@ -205,14 +221,18 @@ class PersonaDistributionFitter:
                 raise ValueError(f"df 缺少必需列: {missing}")
 
             df_work = df[required].dropna().copy()
+            n_p = len(cls.PERSONA_COLS)
             if len(df_work) < 5:
                 raise ValueError(f"样本量不足（{len(df_work)}<5），无法拟合Lasso")
 
-            X = df_work[cls.PERSONA_COLS].values.astype(float)
-            y = df_work[sales_col].values.astype(float)
+            # --- spec §8.2/§9.1 归一化 ---
+            # vote_k(x_i): 1-10 量表 → /10 → [0,1]
+            X = df_work[cls.PERSONA_COLS].values.astype(float) / cls.VOTE_SCALE
+            # y_i: 真实销量 → [0,1] rank percentile（spec §9.1）
+            y = _rank_percentile(df_work[sales_col]).values.astype(float)
 
             # --- 旧：均匀权重加权分 vs y 的 Spearman ---
-            uniform_score = df_work[cls.PERSONA_COLS].mean(axis=1).values
+            uniform_score = X.mean(axis=1)
             try:
                 old_sp, _ = spearmanr(uniform_score, y)
                 old_sp = 0.0 if math.isnan(old_sp) else float(old_sp)
@@ -228,13 +248,8 @@ class PersonaDistributionFitter:
                 log.warning("Lasso 拟合异常，降级均匀权重: %s", exc)
                 raw_coef = {col: 1.0 for col in cls.PERSONA_COLS}
 
-            # --- abs + 归一化得到权重 ---
-            abs_coef = {col: abs(v) for col, v in raw_coef.items()}
-            total = sum(abs_coef.values())
-            if total < 1e-12:
-                weights = {col: 1.0 / len(cls.PERSONA_COLS) for col in cls.PERSONA_COLS}
-            else:
-                weights = {col: v / total for col, v in abs_coef.items()}
+            # --- 保留方向性：正相关人设获高权重，负相关人设降至 0 ---
+            weights = cls._weights_from_raw_coef(raw_coef)
 
             # --- 新加权分 vs y 的 Spearman ---
             weight_arr = np.array([weights[col] for col in cls.PERSONA_COLS], dtype=float)
@@ -247,9 +262,10 @@ class PersonaDistributionFitter:
 
             applied = new_sp >= old_sp + cls.MIN_IMPROVEMENT - 1e-9
             if not applied:
-                weights = {col: 1.0 / len(cls.PERSONA_COLS) for col in cls.PERSONA_COLS}
+                # spec §8.4: 回滚到更新前状态（均匀分布）
+                weights = {col: 1.0 / n_p for col in cls.PERSONA_COLS}
                 log.info(
-                    "Loop2 保护触发：新Spearman(%.4f) - 旧(%.4f) = %.4f < %.2f，保持均匀",
+                    "Loop2 保护触发：新Spearman(%.4f) - 旧(%.4f) = %.4f < %.2f，回滚均匀",
                     new_sp, old_sp, new_sp - old_sp, cls.MIN_IMPROVEMENT,
                 )
             else:
@@ -275,6 +291,49 @@ class PersonaDistributionFitter:
                 lasso_raw_coef={c: 0.0 for c in cls.PERSONA_COLS},
                 applied=False,
             )
+
+    @classmethod
+    def _weights_from_raw_coef(
+        cls,
+        raw_coef: dict[str, float],
+    ) -> dict[str, float]:
+        """从 Lasso 原始系数计算最终权重（spec §8.2 数学合规）。
+
+        实现：
+          1. 保留方向性：负系数 → pos_coef=0（不进入权重）；
+             正系数 → 保留。spec §8.2 要求 w_k ≥ w_min > 0，
+             所以负相关人设反向预测，不能进入权重。
+             （旧 bug 用 abs() 把负相关误判为"强相关"调高，违反 spec 语义）
+          2. 正系数归一化：sum(pos_coef) = 1
+          3. spec §8.2 下限约束：w_k = w_min + pool · normalized[col]
+             其中 pool = 1 − w_min·n，保证 sum(w) = 1 且每个 w_k ≥ w_min
+          4. 浮点修正：重新归一化到严格 sum=1
+
+        该方法独立可测，与 Lasso 拟合解耦。
+        """
+        n_p = len(cls.PERSONA_COLS)
+        pos_coef = {col: max(0.0, v) for col, v in raw_coef.items()}
+        total = sum(pos_coef.values())
+
+        if total < 1e-12:
+            # 所有系数 ≤ 0：均匀分布（仍满足 w_k ≥ w_min，因 1/n > 1/(2n)）
+            return {col: 1.0 / n_p for col in cls.PERSONA_COLS}
+
+        # 1. 正系数归一化到 [0,1]，sum=1
+        norm = {col: v / total for col, v in pos_coef.items()}
+        # 2. spec §8.2 下限约束：w_k = w_min + pool · normalized[col]
+        #    其中 pool = 1 − w_min·n（≈0.5），保证 sum=1 且每项 ≥ w_min
+        pool = 1.0 - cls.W_MIN * n_p
+        if pool <= 0:
+            # 边界：w_min·n ≥ 1，退化为均匀
+            return {col: 1.0 / n_p for col in cls.PERSONA_COLS}
+        weights = {
+            col: cls.W_MIN + pool * norm[col]
+            for col in cls.PERSONA_COLS
+        }
+        # 浮点修正：重新归一化到严格 sum=1
+        total_w = sum(weights.values())
+        return {col: w / total_w for col, w in weights.items()}
 
 
 # ============================================================
@@ -862,19 +921,40 @@ def run_all_loops(
         md_lines.append(f"- 旧Spearman: {r2.old_spearman:.4f}")
         md_lines.append(f"- 新Spearman: {r2.new_spearman:.4f}")
         md_lines.append(f"- Δ: {r2.new_spearman - r2.old_spearman:.4f}")
+        w_min = PersonaDistributionFitter.W_MIN
+        md_lines.append(f"- 多样性下限 w_min = 1/(2×30) ≈ {w_min:.6f}")
+        md_lines.append(
+            f"- 系数方向性: 已保留正负号（正相关→权重，负相关→降至 w_min）"
+        )
         md_lines.append("")
-        md_lines.append("| 人设 | Lasso原始系数 | 归一化权重 |")
-        md_lines.append("|------|---------------|------------|")
-        non_zero_count = 0
+        md_lines.append("| 人设 | Lasso原始系数 | 方向 | 归一化权重 | 触底? |")
+        md_lines.append("|------|---------------|------|------------|-------|")
+        pos_count = 0
+        neg_count = 0
+        zero_count = 0
+        floor_count = 0
         for col in PersonaDistributionFitter.PERSONA_COLS:
             raw = r2.lasso_raw_coef.get(col, 0.0)
-            if abs(raw) > 1e-6:
-                non_zero_count += 1
+            w = r2.persona_weights.get(col, 0.0)
+            if raw > 1e-6:
+                direction, pos_count = "+", pos_count + 1
+            elif raw < -1e-6:
+                direction, neg_count = "-", neg_count + 1
+            else:
+                direction, zero_count = "0", zero_count + 1
+            is_floor = w <= w_min + 1e-9
+            if is_floor:
+                floor_count += 1
             md_lines.append(
-                f"| {col} | {raw:.6f} | {r2.persona_weights.get(col, 0.0):.6f} |"
+                f"| {col} | {raw:.6f} | {direction} | {w:.6f} | "
+                f"{'是' if is_floor else ''} |"
             )
         md_lines.append("")
-        md_lines.append(f"- 非零人设: {non_zero_count}/{len(PersonaDistributionFitter.PERSONA_COLS)}")
+        md_lines.append(
+            f"- 系数方向: 正 {pos_count} / 负 {neg_count} / 零 {zero_count} "
+            f"(共 {len(PersonaDistributionFitter.PERSONA_COLS)})"
+        )
+        md_lines.append(f"- 触 w_min 下限人设: {floor_count}/{len(PersonaDistributionFitter.PERSONA_COLS)}")
         md_lines.append("")
 
         md_lines.append("## Loop3 · 集成权重")
