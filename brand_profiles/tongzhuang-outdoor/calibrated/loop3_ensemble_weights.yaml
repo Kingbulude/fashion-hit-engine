@@ -1,21 +1,21 @@
 applied: false
 engine:
-  old_spearman: 0.9999999999999999
-  new_spearman: 0.9999999999999999
+  old_spearman: 0.5515151515151515
+  new_spearman: 0.5515151515151515
   rho:
-    persona_score: 0.9878787878787878
-    channel_score: 0.9999999999999999
-    price_value_score: 0.9999999999999999
+    persona_score: 0.5151515151515151
+    channel_score: 0.309090909090909
+    price_value_score: 0.6
   weights:
     persona_score: 0.3333333333333333
     channel_score: 0.3333333333333333
     price_value_score: 0.3333333333333333
 channel:
-  old_spearman: 0.9999999999999999
-  new_spearman: 0.9999999999999999
+  old_spearman: 0.309090909090909
+  new_spearman: 0.309090909090909
   rho:
-    natural_score: 0.9878787878787878
-    live_score: 0.9878044218151566
+    natural_score: 0.18787878787878787
+    live_score: -0.05454545454545454
   weights:
     natural_score: 0.5
     live_score: 0.5

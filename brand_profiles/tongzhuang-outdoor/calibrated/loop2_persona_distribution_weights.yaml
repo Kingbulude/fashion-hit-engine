@@ -1,6 +1,6 @@
 applied: false
-old_spearman: 0.9878787878787878
-new_spearman: 0.9878787878787878
+old_spearman: 0.5151515151515151
+new_spearman: 0.5151515151515151
 delta_spearman: 0.0
 lasso_raw_coef:
   P01: 0.0
