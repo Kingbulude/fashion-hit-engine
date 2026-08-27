@@ -311,11 +311,14 @@ def aggregate_votes(
     """按人设分布权重加权聚合（支持BrandConfig决策结构）
 
     - brand_cfg is None / single_layer：直接30人设加权投票（weight×individual_score / ∑w）
-    - brand_cfg.decision_structure.type == multi_layer：
+    - brand_cfg.decision_structure.type in (multi_layer, double_layer)：
         1) 先妈妈层(P01-P30)加权得到 mom_weighted
         2) 根据target_age匹配age_weight_rules取档
         3) 孩子层扫描child_identity_axes里该年龄段veto_when，
            若命中任意1条 → 妈妈分×0.70惩罚（孩子否决）
+
+    命名约定：spec §7.x 历史用 double_layer，代码实现用 multi_layer
+    （允许多于2层）。两者等价，参见 BrandDecisionStructure.type 注释。
     """
     style_id = ""
     weighted_total = 0.0
@@ -380,9 +383,12 @@ def aggregate_votes(
 
     if brand_cfg is not None:
         ds = brand_cfg.decision_structure
-        if ds.type == "single_layer":
+        # spec §7.x 历史命名：double_layer；代码实现用 multi_layer。
+        # 此处接受两者为别名，避免 spec-following YAML 静默落入 neither 分支
+        # （否则孩子否决层不生效，无报错）。
+        if ds.type in ("single_layer",):
             final_weighted = mom_weighted
-        elif ds.type == "multi_layer":
+        elif ds.type in ("multi_layer", "double_layer"):
             actual_age = target_age if target_age is not None else ds.default_target_age
             age_rule = _match_age_weight_rules(ds.age_weight_rules, actual_age)
             age_child_w = float(age_rule.get("child_weight", 0.30))

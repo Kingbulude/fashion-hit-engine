@@ -182,7 +182,10 @@ class DecisionLayer:
 
 @dataclass
 class BrandDecisionStructure:
-    type: Literal["single_layer", "multi_layer"]
+    # spec §7.x: 历史命名 double_layer；代码实现用 multi_layer。
+    # 两者等价（multi_layer 是 double_layer 的可扩展命名，允许未来 3+ 层）。
+    # 加载层与 persona_voting 均把 double_layer 当作 multi_layer 别名处理。
+    type: Literal["single_layer", "multi_layer", "double_layer"]
     layers: list[DecisionLayer]
     age_weight_rules: list[dict[str, Any]]
     default_target_age: int

@@ -948,7 +948,9 @@ w_mom : w_child 按孩子年龄分档：
   12-14岁→ 30:70（孩子主导，妈妈保留否决权，妈妈分<3直接否决）
 ```
 
-**注意**：孩子否决层是 `profile.yaml` 中 `decision_structure: double_layer` 的特有配置。女装/男装等品类使用 `single_layer`，不加载此扩展层。
+**注意**：孩子否决层是 `profile.yaml` 中 `decision_structure.type: multi_layer` 的特有配置。女装/男装等品类使用 `single_layer`，不加载此扩展层。
+
+**命名约定**：spec 早期版本用 `double_layer`，代码实现采用更通用的 `multi_layer`（允许未来 3+ 层扩展）。两者等价，加载层与 persona_voting 均把 `double_layer` 当作 `multi_layer` 别名处理，spec-following 的 `double_layer` YAML 不会静默失效。
 
 ### 7.4 人设权重的品牌特异性
 
@@ -1147,14 +1149,37 @@ ELSE:
 # profile.yaml
 brand_id: nvzhuang-tongqin         # 唯一ID，字母数字下划线
 brand_name: 女装通勤品牌X           # 展示名
-decision_structure: single_layer   # single_layer / double_layer
-                                    # single_layer: 通用单决策者
-                                    # double_layer: 童装双层（妈妈+孩子）
+# decision_structure 是对象，type 字段决定决策模式：
+#   - single_layer : 通用单决策者（女装/男装/快消）
+#   - multi_layer  : 童装双层（妈妈决策者层 + 孩子影响层）
+#   - double_layer : multi_layer 的历史别名（spec 早期命名，等价处理）
+# layers 数组显式声明每层结构（id/name/persona_axis_key/role/default_weight）；
+# single_layer 模式下 layers 仍可填 1 条 self_decision_layer 用于自描述。
+decision_structure:
+  type: single_layer
+  layers:
+    - id: self_decision_layer
+      name: 女性本人决策层
+      persona_axis_key: identity_axes
+      role: decider
+      default_weight: 1.00
 
-# single_layer模式下不需要以下字段
-# double_layer模式下必填：
-# child_age_groups: [6-8, 9-11, 12-14]
-# mom_child_weights: {6-8: [0.7, 0.3], 9-11: [0.5, 0.5], 12-14: [0.3, 0.7]}
+# single_layer 模式下不需要以下字段
+# multi_layer 模式下必填：
+# layers: [妈妈决策者层 (role=decider), 孩子影响层 (role=veto)]
+# age_weight_rules:
+#   - age_range: [6, 8]
+#     mom_weight: 0.70
+#     child_weight: 0.30
+#     label: 妈妈主导
+#   - age_range: [9, 11]
+#     mom_weight: 0.50
+#     child_weight: 0.50
+#     label: 共同决策
+#   - age_range: [12, 14]
+#     mom_weight: 0.30
+#     child_weight: 0.70
+#     label: 孩子主导
 # mom_veto_threshold: 3.0            # 妈妈分低于此直接否决
 ```
 
