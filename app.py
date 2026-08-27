@@ -28,12 +28,8 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
 from src.config import load_config, list_available_brands, load_brand_profile
-from src.pipeline import run_predict_batch, PredictionPipeline
-from src.calibration import run_backtest
-from src.report import (
-    render_single_report_markdown,
-    render_backtest_summary_markdown,
-)
+from src.pipeline import PredictionPipeline
+from src.report import render_single_report_markdown
 from src.types import StyleInfo, FullPrediction, GradeResult, BrandConfig
 from scripts.rename_images import batch_rename_from_folders  # 图片重命名脚本
 
@@ -92,7 +88,7 @@ with st.sidebar.expander(f"📌 {brand_cfg.brand_name}", expanded=True):
     if brand_cfg.decision_structure.type == "multi_layer":
         st.write(f"**层数：** {len(brand_cfg.decision_structure.layers)} 层（含童装孩子否决层）")
     st.write(f"**品类数：** {len(brand_cfg.category_registry.get('categories', []))}")
-    st.write(f"**人设数：** {len(getattr(brand_cfg, 'personas', {}).get('personas', []))} 个身份三轴线")
+    st.write(f"**人设数：** {len(brand_cfg.personas)} 个身份三轴线")
     st.write(f"**校准轮次：** {n_calibration or '0（冷启动）'}")
 
 st.sidebar.divider()
@@ -638,29 +634,11 @@ def render_page_calibration():
         except Exception as e:
             st.error(f"Excel读取失败：{e}")
 
-    # ---------- 按钮1：基础回测（沿用旧薄包装） ----------
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        do_backtest = st.button("🔬 基础回测（仅对比Spearman）",
-                                disabled=(not preds or not truth_map_ready))
-    with col_b2:
-        do_3loop = st.button("🤖 运行3Loop核心优化内核 + 残差分离",
-                             type="primary",
-                             disabled=(not preds or not truth_map_ready or len(preds) < 8),
-                             help="至少8款数据才能启动Lasso人设分布拟合")
-
-    if do_backtest and truth_map_ready and preds:
-        with st.spinner("跑基础回测中…"):
-            bt = run_backtest(preds, truth_map_ready, cfg)
-        st.markdown(render_backtest_summary_markdown(bt))
-        if getattr(bt, "calibrated_weights", None) is not None:
-            st.download_button(
-                "⬇️ 下载基础回测校准权重YAML（旧版稀疏回归）",
-                data=bt.calibrated_weights,
-                file_name="legacy_feature_weights.yaml",
-                mime="text/yaml",
-                use_container_width=True,
-            )
+    # ---------- 回测校准按钮（3Loop内核：Spearman对比+残差分离）----------
+    do_3loop = st.button("🤖 运行3Loop核心优化内核 + 残差分离",
+                         type="primary",
+                         disabled=(not preds or not truth_map_ready or len(preds) < 8),
+                         help="至少8款数据才能启动Lasso人设分布拟合")
 
     if do_3loop and truth_map_ready and preds:
         with st.spinner("3Loop校准运行中（Loop1→Loop2→Loop3→残差分离，20秒）…"):
