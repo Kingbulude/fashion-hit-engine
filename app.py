@@ -664,182 +664,149 @@ def render_page_calibration():
 
     if do_3loop and truth_map_ready and preds:
         with st.spinner("3Loop校准运行中（Loop1→Loop2→Loop3→残差分离，20秒）…"):
-            # 1) 构造 history_df：含 F01-F10 / P01-P30 / 三大引擎+双渠道 / 真实销量列
-            rows = []
-            persona_ids = [f"P{i:02d}" for i in range(1, 31)]
-            feature_cols = [f"F{i:02d}" for i in range(1, 11)]
-            for p in preds:
-                truth = truth_map_ready.get(p.info.style_id, None)
-                if truth is None:
-                    continue
-                # 10特征
-                feat_row = {}
-                for i, (k, f) in enumerate(p.features.features.items()):
-                    col = feature_cols[i] if i < len(feature_cols) else k
-                    feat_row[col] = f.score
-                # 30人设（取不到就用avg填）
-                votes = getattr(p.voting, "votes", None)
-                persona_row = {}
-                if votes:
-                    for pi, pv in enumerate(votes[:30]):
-                        persona_row[persona_ids[pi]] = getattr(pv, "final_score", p.voting.avg_score)
-                    for pi in range(len(votes), 30):
-                        persona_row[persona_ids[pi]] = p.voting.avg_score
+            # 调用 PredictionPipeline.run_backtest_calibration（spec §9）
+            # 内部封装：build_history_df + run_all_loops + 残差归一化
+            # 产物写 brand_cfg.calibrated_dir（下次评估自动加载，越用越准）
+            try:
+                pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend="mock")
+                loop_result = pl.run_backtest_calibration(
+                    predictions=preds,
+                    sales_lookup=truth_map_ready,
+                )
+            except RuntimeError as re:
+                st.error(f"依赖缺失：{re}")
+                loop_result = None
+            except Exception as ex:
+                st.error(f"3Loop运行失败：{ex}")
+                loop_result = None
+
+            if loop_result is None:
+                matched = sum(1 for p in preds if p.info.style_id in (truth_map_ready or {}))
+                if matched == 0:
+                    st.error("❌ 没有款能匹配到真实销量，请检查「款式编号」列是否一致。")
+                elif matched < 8:
+                    st.error(f"❌ 可匹配的款只有{matched}款，Loop2需要至少8款样本，请补充历史批次。")
                 else:
-                    for pid in persona_ids:
-                        persona_row[pid] = p.voting.avg_score
-                # 引擎分
-                eng_row = {
-                    "persona_score": p.voting.avg_score,
-                    "channel_score": (p.channels.natural_score + p.channels.live_score) / 2,
-                    "price_value_score": p.channels.perceived_value,
-                    "natural_score": p.channels.natural_score,
-                    "live_score": p.channels.live_score,
-                    "sales": truth,
-                }
-                rows.append({**feat_row, **persona_row, **eng_row, "style_id": p.info.style_id})
+                    st.info("ℹ️ 3Loop 跳过：可能销量全为0或信号不足，请检查真实销量数据。")
 
-            if len(rows) < 8:
-                st.error(f"可匹配的款只有{len(rows)}款，Loop2需要至少8款样本，请补充历史批次。")
-            else:
-                import pandas as _pd
-                history_df = _pd.DataFrame(rows)
+            if loop_result is not None:
+                # 3) 展示三色Spearman对比表
+                st.subheader("🎯 3Loop 校准前后 Spearman 对比")
+                def _flag(old, new, min_imp):
+                    delta = new - old
+                    if delta >= min_imp:
+                        return f"🟢 +{delta:+.3f}", "✅ 已应用"
+                    if delta >= 0:
+                        return f"⚪ {delta:+.3f}", "⏭️ 持平未应用"
+                    return f"🔴 {delta:+.3f}", "🛡️ 保护机制拦截"
 
-                # 2) 调用 run_all_loops
-                from src.core.optimization_kernel import run_all_loops
-                out_dir = ROOT / "output"
-                try:
-                    loop_result = run_all_loops(
-                        brand_cfg=brand_cfg,
-                        history_df=history_df,
-                        prediction_artifacts_dir=out_dir,
-                        sales_col="sales",
+                # Loop1
+                l1_delta_color, l1_status = _flag(
+                    loop_result.loop1.old_spearman_avg,
+                    loop_result.loop1.new_spearman_avg,
+                    0.0
+                )
+                # Loop2
+                l2_delta_color, l2_status = _flag(
+                    loop_result.loop2.old_spearman,
+                    loop_result.loop2.new_spearman,
+                    0.01
+                )
+                # Loop3 引擎侧
+                l3e_delta_color, l3e_status = _flag(
+                    loop_result.loop3.old_engine_spearman,
+                    loop_result.loop3.new_engine_spearman,
+                    0.01
+                )
+                # Loop3 渠道侧
+                l3c_delta_color, l3c_status = _flag(
+                    loop_result.loop3.old_channel_spearman,
+                    loop_result.loop3.new_channel_spearman,
+                    0.01
+                )
+
+                df_compare = pd.DataFrame([
+                    {"步骤": "Loop1 VLM特征校准",
+                     "指标": "10特征Spearman(ρ)均值",
+                     "校准前": f"{loop_result.loop1.old_spearman_avg:+.3f}",
+                     "校准后": f"{loop_result.loop1.new_spearman_avg:+.3f}",
+                     "Δ 提升": l1_delta_color, "状态": l1_status},
+                    {"步骤": "Loop2 人设分布拟合（Lasso）",
+                     "指标": "30人设投票 Spearman",
+                     "校准前": f"{loop_result.loop2.old_spearman:+.3f}",
+                     "校准后": f"{loop_result.loop2.new_spearman:+.3f}",
+                     "Δ 提升": l2_delta_color, "状态": l2_status},
+                    {"步骤": "Loop3 引擎权重调优",
+                     "指标": "三大引擎合成 Spearman",
+                     "校准前": f"{loop_result.loop3.old_engine_spearman:+.3f}",
+                     "校准后": f"{loop_result.loop3.new_engine_spearman:+.3f}",
+                     "Δ 提升": l3e_delta_color, "状态": l3e_status},
+                    {"步骤": "Loop3 渠道权重调优",
+                     "指标": "自然/直播 合成Spearman",
+                     "校准前": f"{loop_result.loop3.old_channel_spearman:+.3f}",
+                     "校准后": f"{loop_result.loop3.new_channel_spearman:+.3f}",
+                     "Δ 提升": l3c_delta_color, "状态": l3c_status},
+                ])
+                st.dataframe(df_compare, use_container_width=True, hide_index=True)
+
+                # 4) 残差分离结果
+                st.subheader("🔍 残差分离（不可预知因素识别）")
+                rd = loop_result.residual
+                st.info(f"残差均值 μ = {rd.residual_mean:+.3f}，残差标准差 σ = {rd.residual_std:.3f}")
+                col_over, col_under, col_flag = st.columns(3)
+                with col_over:
+                    st.metric("🟢 超预期款 (ε > μ+2σ)", f"{len(rd.overperformers)} 个")
+                    if rd.overperformers:
+                        with st.expander("查看详情（运营复盘机会）"):
+                            for o in rd.overperformers:
+                                st.write(f"- {o.get('style_id','?')}：真实销量 / 预测倍数 ≈ {o.get('ratio','?')}")
+                with col_under:
+                    st.metric("🔵 不及预期款 (ε < μ-2σ)", f"{len(rd.underperformers)} 个")
+                    if rd.underperformers:
+                        with st.expander("查看详情（复盘改进方向）"):
+                            for u in rd.underperformers:
+                                st.write(f"- {u.get('style_id','?')}：预测高估 ≈ {u.get('ratio','?')}")
+                with col_flag:
+                    flag_levels = {
+                        "NO_SIG": ("⚪ 无系统偏差", "#22c55e"),
+                        "MODERATE": ("🟡 轻度偏差（关注）", "#f59e0b"),
+                        "STRONG": ("🔴 强系统偏差（必须复盘）", "#ef4444"),
+                        "SIGMA_ZERO": ("⚪ 样本过少或全命中预测", "#6b7280"),
+                        "ERROR": ("⚫ 计算异常", "#111827"),
+                    }
+                    label, color = flag_levels.get(rd.system_bias_flag, ("未知", "#6b7280"))
+                    st.markdown(
+                        f"<div style='background:{color};color:white;padding:10px 14px;"
+                        f"border-radius:8px;text-align:center;font-weight:700;'>"
+                        f"{label}</div>",
+                        unsafe_allow_html=True,
                     )
-                except RuntimeError as re:
-                    st.error(f"依赖缺失：{re}")
-                    loop_result = None
-                except Exception as ex:
-                    st.error(f"3Loop运行失败：{ex}")
-                    loop_result = None
+                st.caption("⚠️ 以上残差款 **不参与3Loop学习**，避免将外部事件（KOL带货/竞品打折）的伪相关注入预测模型。")
 
-                if loop_result is not None:
-                    # 3) 展示三色Spearman对比表
-                    st.subheader("🎯 3Loop 校准前后 Spearman 对比")
-                    def _flag(old, new, min_imp):
-                        delta = new - old
-                        if delta >= min_imp:
-                            return f"🟢 +{delta:+.3f}", "✅ 已应用"
-                        if delta >= 0:
-                            return f"⚪ {delta:+.3f}", "⏭️ 持平未应用"
-                        return f"🔴 {delta:+.3f}", "🛡️ 保护机制拦截"
-
-                    # Loop1
-                    l1_delta_color, l1_status = _flag(
-                        loop_result.loop1.old_spearman_avg,
-                        loop_result.loop1.new_spearman_avg,
-                        0.0
-                    )
-                    # Loop2
-                    l2_delta_color, l2_status = _flag(
-                        loop_result.loop2.old_spearman,
-                        loop_result.loop2.new_spearman,
-                        0.01
-                    )
-                    # Loop3 引擎侧
-                    l3e_delta_color, l3e_status = _flag(
-                        loop_result.loop3.old_engine_spearman,
-                        loop_result.loop3.new_engine_spearman,
-                        0.01
-                    )
-                    # Loop3 渠道侧
-                    l3c_delta_color, l3c_status = _flag(
-                        loop_result.loop3.old_channel_spearman,
-                        loop_result.loop3.new_channel_spearman,
-                        0.01
-                    )
-
-                    df_compare = pd.DataFrame([
-                        {"步骤": "Loop1 VLM特征校准",
-                         "指标": "10特征Spearman(ρ)均值",
-                         "校准前": f"{loop_result.loop1.old_spearman_avg:+.3f}",
-                         "校准后": f"{loop_result.loop1.new_spearman_avg:+.3f}",
-                         "Δ 提升": l1_delta_color, "状态": l1_status},
-                        {"步骤": "Loop2 人设分布拟合（Lasso）",
-                         "指标": "30人设投票 Spearman",
-                         "校准前": f"{loop_result.loop2.old_spearman:+.3f}",
-                         "校准后": f"{loop_result.loop2.new_spearman:+.3f}",
-                         "Δ 提升": l2_delta_color, "状态": l2_status},
-                        {"步骤": "Loop3 引擎权重调优",
-                         "指标": "三大引擎合成 Spearman",
-                         "校准前": f"{loop_result.loop3.old_engine_spearman:+.3f}",
-                         "校准后": f"{loop_result.loop3.new_engine_spearman:+.3f}",
-                         "Δ 提升": l3e_delta_color, "状态": l3e_status},
-                        {"步骤": "Loop3 渠道权重调优",
-                         "指标": "自然/直播 合成Spearman",
-                         "校准前": f"{loop_result.loop3.old_channel_spearman:+.3f}",
-                         "校准后": f"{loop_result.loop3.new_channel_spearman:+.3f}",
-                         "Δ 提升": l3c_delta_color, "状态": l3c_status},
-                    ])
-                    st.dataframe(df_compare, use_container_width=True, hide_index=True)
-
-                    # 4) 残差分离结果
-                    st.subheader("🔍 残差分离（不可预知因素识别）")
-                    rd = loop_result.residual
-                    st.info(f"残差均值 μ = {rd.residual_mean:+.3f}，残差标准差 σ = {rd.residual_std:.3f}")
-                    col_over, col_under, col_flag = st.columns(3)
-                    with col_over:
-                        st.metric("🟢 超预期款 (ε > μ+2σ)", f"{len(rd.overperformers)} 个")
-                        if rd.overperformers:
-                            with st.expander("查看详情（运营复盘机会）"):
-                                for o in rd.overperformers:
-                                    st.write(f"- {o.get('style_id','?')}：真实销量 / 预测倍数 ≈ {o.get('ratio','?')}")
-                    with col_under:
-                        st.metric("🔵 不及预期款 (ε < μ-2σ)", f"{len(rd.underperformers)} 个")
-                        if rd.underperformers:
-                            with st.expander("查看详情（复盘改进方向）"):
-                                for u in rd.underperformers:
-                                    st.write(f"- {u.get('style_id','?')}：预测高估 ≈ {u.get('ratio','?')}")
-                    with col_flag:
-                        flag_levels = {
-                            "NO_SIG": ("⚪ 无系统偏差", "#22c55e"),
-                            "MODERATE": ("🟡 轻度偏差（关注）", "#f59e0b"),
-                            "STRONG": ("🔴 强系统偏差（必须复盘）", "#ef4444"),
-                            "SIGMA_ZERO": ("⚪ 样本过少或全命中预测", "#6b7280"),
-                            "ERROR": ("⚫ 计算异常", "#111827"),
-                        }
-                        label, color = flag_levels.get(rd.system_bias_flag, ("未知", "#6b7280"))
-                        st.markdown(
-                            f"<div style='background:{color};color:white;padding:10px 14px;"
-                            f"border-radius:8px;text-align:center;font-weight:700;'>"
-                            f"{label}</div>",
-                            unsafe_allow_html=True,
+                # 5) 产物下载
+                st.divider()
+                st.subheader("📥 校准产物")
+                for fpath in loop_result.output_files:
+                    fp = Path(fpath)
+                    if fp.suffix == ".yaml" and fp.exists():
+                        st.download_button(
+                            f"⬇️ {fp.name}",
+                            data=fp.read_text(encoding="utf-8"),
+                            file_name=fp.name,
+                            mime="text/yaml",
                         )
-                    st.caption("⚠️ 以上残差款 **不参与3Loop学习**，避免将外部事件（KOL带货/竞品打折）的伪相关注入预测模型。")
-
-                    # 5) 产物下载
-                    st.divider()
-                    st.subheader("📥 校准产物")
-                    for fpath in loop_result.output_files:
-                        fp = Path(fpath)
-                        if fp.suffix == ".yaml" and fp.exists():
-                            st.download_button(
-                                f"⬇️ {fp.name}",
-                                data=fp.read_text(encoding="utf-8"),
-                                file_name=fp.name,
-                                mime="text/yaml",
-                            )
-                        elif fp.suffix == ".md" and fp.exists():
-                            st.download_button(
-                                f"⬇️ {fp.name}（完整报告）",
-                                data=fp.read_text(encoding="utf-8"),
-                                file_name=fp.name,
-                                mime="text/markdown",
-                                use_container_width=True,
-                            )
-                    st.success(
-                        f"✅ 3Loop校准完成！产物已写入 `brand_profiles/{brand_cfg.brand_id}/calibrated/`，"
-                        "下次评估时会自动生效。"
-                    )
+                    elif fp.suffix == ".md" and fp.exists():
+                        st.download_button(
+                            f"⬇️ {fp.name}（完整报告）",
+                            data=fp.read_text(encoding="utf-8"),
+                            file_name=fp.name,
+                            mime="text/markdown",
+                            use_container_width=True,
+                        )
+                st.success(
+                    f"✅ 3Loop校准完成！产物已写入 `brand_profiles/{brand_cfg.brand_id}/calibrated/`，"
+                    "下次评估时会自动生效。"
+                )
 
 
 # ============================================================
