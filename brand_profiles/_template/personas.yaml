@@ -1,0 +1,335 @@
+schema_version: "2.0"
+identity_axes_definition:
+  axis_a_scene:
+    - id: workplace_commute
+      name: 职场通勤
+      weight_share: 0.30
+    - id: weekend_casual
+      name: 周末休闲
+      weight_share: 0.25
+    - id: dating_social
+      name: 约会社交
+      weight_share: 0.20
+    - id: girlfriends_tea
+      name: 闺蜜下午茶
+      weight_share: 0.15
+    - id: business_travel
+      name: 商务差旅
+      weight_share: 0.10
+  axis_b_aesthetic:
+    - id: french_minimal
+      name: 法式极简
+      weight_share: 0.35
+    - id: professional_elite
+      name: 职场精英
+      weight_share: 0.35
+    - id: korean_gentle
+      name: 韩系温柔
+      weight_share: 0.30
+  axis_c_price:
+    - id: fast_fashion_value
+      name: 快消性价比
+      weight_share: 0.60
+    - id: luxury_investment
+      name: 轻奢投资型
+      weight_share: 0.40
+personas:
+  - persona_id: P01
+    name: 法式极简性价比·职场通勤
+    axes:
+      scene: workplace_commute
+      aesthetic: french_minimal
+      price: fast_fashion_value
+    weight: 0.0630
+    fab_focus: ["基础百搭", "简约干净", "不起球", "面料垂感"]
+    color_preference: ["黑白灰", "米白", "藏青"]
+
+  - persona_id: P02
+    name: 法式极简轻奢·职场通勤
+    axes:
+      scene: workplace_commute
+      aesthetic: french_minimal
+      price: luxury_investment
+    weight: 0.0420
+    fab_focus: ["真丝质感", "剪裁高级", "设计感细节", "经典不过时"]
+    color_preference: ["燕麦色", "奶茶棕", "深海蓝"]
+
+  - persona_id: P03
+    name: 职场精英性价比·职场通勤
+    axes:
+      scene: workplace_commute
+      aesthetic: professional_elite
+      price: fast_fashion_value
+    weight: 0.0630
+    fab_focus: ["挺括有型", "不皱免烫", "专业感", "裤装友好"]
+    color_preference: ["黑", "藏青", "炭灰"]
+
+  - persona_id: P04
+    name: 职场精英轻奢·职场通勤
+    axes:
+      scene: workplace_commute
+      aesthetic: professional_elite
+      price: luxury_investment
+    weight: 0.0420
+    fab_focus: ["高定剪裁", "羊毛混纺", "品牌经典款", "气场全开"]
+    color_preference: ["高级灰", "藏青套装色", "象牙白"]
+
+  - persona_id: P05
+    name: 韩系温柔性价比·职场通勤
+    axes:
+      scene: workplace_commute
+      aesthetic: korean_gentle
+      price: fast_fashion_value
+    weight: 0.0540
+    fab_focus: ["温柔配色", "版型柔和", "针织亲肤", "不显凶"]
+    color_preference: ["浅粉", "雾霾蓝", "米白"]
+
+  - persona_id: P06
+    name: 韩系温柔轻奢·职场通勤
+    axes:
+      scene: workplace_commute
+      aesthetic: korean_gentle
+      price: luxury_investment
+    weight: 0.0360
+    fab_focus: ["高级针织", "设计师款", "配色温柔", "小姐姐感"]
+    color_preference: ["莫兰迪粉", "雾霾紫", "奶油色"]
+
+  - persona_id: P07
+    name: 法式极简性价比·周末休闲
+    axes:
+      scene: weekend_casual
+      aesthetic: french_minimal
+      price: fast_fashion_value
+    weight: 0.0525
+    fab_focus: ["舒适慵懒", "不费力时尚", "纯棉亲肤", "好搭"]
+    color_preference: ["条纹", "牛仔蓝", "白T"]
+
+  - persona_id: P08
+    name: 法式极简轻奢·周末休闲
+    axes:
+      scene: weekend_casual
+      aesthetic: french_minimal
+      price: luxury_investment
+    weight: 0.0350
+    fab_focus: ["亚麻质感", "慵懒高级", "文艺腔调", "旅行出片"]
+    color_preference: ["亚麻原色", "陶土色", "橄榄绿"]
+
+  - persona_id: P09
+    name: 职场精英性价比·周末休闲
+    axes:
+      scene: weekend_casual
+      aesthetic: professional_elite
+      price: fast_fashion_value
+    weight: 0.0525
+    fab_focus: ["休闲但不邋遢", "简约利落", "品牌基础款", "周末brunch"]
+    color_preference: ["polo衫色", "卡其", "深蓝"]
+
+  - persona_id: P10
+    name: 职场精英轻奢·周末休闲
+    axes:
+      scene: weekend_casual
+      aesthetic: professional_elite
+      price: luxury_investment
+    weight: 0.0350
+    fab_focus: ["高端休闲", "游艇俱乐部风", "低调logo", "品质感面料"]
+    color_preference: ["经典polo色", "帆船蓝", "米白高级"]
+
+  - persona_id: P11
+    name: 韩系温柔性价比·周末休闲
+    axes:
+      scene: weekend_casual
+      aesthetic: korean_gentle
+      price: fast_fashion_value
+    weight: 0.0450
+    fab_focus: ["软妹风", "针织开衫", "颜色治愈", "逛菜市场也好看"]
+    color_preference: ["奶油黄", "薄荷绿", "樱花粉"]
+
+  - persona_id: P12
+    name: 韩系温柔轻奢·周末休闲
+    axes:
+      scene: weekend_casual
+      aesthetic: korean_gentle
+      price: luxury_investment
+    weight: 0.0300
+    fab_focus: ["韩剧女主风", "设计师针织", "氛围感", "咖啡馆出片"]
+    color_preference: ["薰衣草紫", "豆绿", "蜜桃粉"]
+
+  - persona_id: P13
+    name: 法式极简性价比·约会社交
+    axes:
+      scene: dating_social
+      aesthetic: french_minimal
+      price: fast_fashion_value
+    weight: 0.0420
+    fab_focus: ["低调性感", "剪裁显瘦", "小黑裙感", "不费力赢很大"]
+    color_preference: ["小黑裙色", "酒红", "墨绿"]
+
+  - persona_id: P14
+    name: 法式极简轻奢·约会社交
+    axes:
+      scene: dating_social
+      aesthetic: french_minimal
+      price: luxury_investment
+    weight: 0.0280
+    fab_focus: ["真丝连衣裙", "高级露肤", "法式茶歇", "高级餐厅撑场面"]
+    color_preference: ["真丝香槟色", "深V酒红", "午夜蓝"]
+
+  - persona_id: P15
+    name: 职场精英性价比·约会社交
+    axes:
+      scene: dating_social
+      aesthetic: professional_elite
+      price: fast_fashion_value
+    weight: 0.0420
+    fab_focus: ["优雅知性", "恰到好处的性感", "不是太随便", "见家长也ok"]
+    color_preference: ["裸粉", "米白", "深灰"]
+
+  - persona_id: P16
+    name: 职场精英轻奢·约会社交
+    axes:
+      scene: dating_social
+      aesthetic: professional_elite
+      price: luxury_investment
+    weight: 0.0280
+    fab_focus: ["大小姐风", "名媛感", "高端面料", "高级酒会"]
+    color_preference: ["珍珠白", "香槟金", "皇室蓝"]
+
+  - persona_id: P17
+    name: 韩系温柔性价比·约会社交
+    axes:
+      scene: dating_social
+      aesthetic: korean_gentle
+      price: fast_fashion_value
+    weight: 0.0360
+    fab_focus: ["纯欲风", "针织连衣裙", "温柔姐姐", "初恋感"]
+    color_preference: ["浅粉", "白色", "天空蓝"]
+
+  - persona_id: P18
+    name: 韩系温柔轻奢·约会社交
+    axes:
+      scene: dating_social
+      aesthetic: korean_gentle
+      price: luxury_investment
+    weight: 0.0240
+    fab_focus: ["韩国欧尼风", "氛围感穿搭", "轻奢配饰感", "纪念日约会"]
+    color_preference: ["玫瑰粉", "奶油白", "薰衣草"]
+
+  - persona_id: P19
+    name: 法式极简性价比·闺蜜下午茶
+    axes:
+      scene: girlfriends_tea
+      aesthetic: french_minimal
+      price: fast_fashion_value
+    weight: 0.0315
+    fab_focus: ["拍照好看", "配色高级", "小细节有心机", "不撞款"]
+    color_preference: ["雾霾蓝", "陶土棕", "抹茶绿"]
+
+  - persona_id: P20
+    name: 法式极简轻奢·闺蜜下午茶
+    axes:
+      scene: girlfriends_tea
+      aesthetic: french_minimal
+      price: luxury_investment
+    weight: 0.0210
+    fab_focus: ["小众设计师款", "腔调感", "精致细节", "五星级酒店下午茶"]
+    color_preference: ["艺术品配色", "高级裸色", "古董感"]
+
+  - persona_id: P21
+    name: 职场精英性价比·闺蜜下午茶
+    axes:
+      scene: girlfriends_tea
+      aesthetic: professional_elite
+      price: fast_fashion_value
+    weight: 0.0315
+    fab_focus: ["小资感", "品牌基础款但会搭", "低调奢华", "姐妹间不输气场"]
+    color_preference: ["驼色", "米白", "深棕"]
+
+  - persona_id: P22
+    name: 职场精英轻奢·闺蜜下午茶
+    axes:
+      scene: girlfriends_tea
+      aesthetic: professional_elite
+      price: luxury_investment
+    weight: 0.0210
+    fab_focus: ["贵妇下午茶风", "经典奢侈品牌线", "高级质感", "名媛聚会"]
+    color_preference: ["经典驼", "黑金", "珍珠白"]
+
+  - persona_id: P23
+    name: 韩系温柔性价比·闺蜜下午茶
+    axes:
+      scene: girlfriends_tea
+      aesthetic: korean_gentle
+      price: fast_fashion_value
+    weight: 0.0270
+    fab_focus: ["ins风", "软fufu针织", "粉嫩少女", "甜品店出片"]
+    color_preference: ["草莓粉", "柠檬黄", "薄荷绿"]
+
+  - persona_id: P24
+    name: 韩系温柔轻奢·闺蜜下午茶
+    axes:
+      scene: girlfriends_tea
+      aesthetic: korean_gentle
+      price: luxury_investment
+    weight: 0.0180
+    fab_focus: ["韩国博主同款", "小众潮牌", "氛围感满分", "拍穿搭博主"]
+    color_preference: ["樱花粉", "马卡龙色", "奶油色"]
+
+  - persona_id: P25
+    name: 法式极简性价比·商务差旅
+    axes:
+      scene: business_travel
+      aesthetic: french_minimal
+      price: fast_fashion_value
+    weight: 0.0210
+    fab_focus: ["抗皱免烫", "多场景切换", "轻薄好打包", "不占行李箱"]
+    color_preference: ["深灰", "藏青", "黑"]
+
+  - persona_id: P26
+    name: 法式极简轻奢·商务差旅
+    axes:
+      scene: business_travel
+      aesthetic: french_minimal
+      price: luxury_investment
+    weight: 0.0140
+    fab_focus: ["高端商旅面料", "抗皱高级", "商务舱质感", "高端客户会议"]
+    color_preference: ["高端商旅灰", "意大利蓝", "经典藏青"]
+
+  - persona_id: P27
+    name: 职场精英性价比·商务差旅
+    axes:
+      scene: business_travel
+      aesthetic: professional_elite
+      price: fast_fashion_value
+    weight: 0.0210
+    fab_focus: ["套装百搭", "干练气场", "会议见客户", "下飞机直接开会"]
+    color_preference: ["藏青套装", "炭灰套装", "黑色套装"]
+
+  - persona_id: P28
+    name: 职场精英轻奢·商务差旅
+    axes:
+      scene: business_travel
+      aesthetic: professional_elite
+      price: luxury_investment
+    weight: 0.0140
+    fab_focus: ["高级定制套装", "奢侈品西装", "顶级商务面料", "上市公司董事会"]
+    color_preference: ["高级定制藏青", "炭灰高定", "燕尾服黑"]
+
+  - persona_id: P29
+    name: 韩系温柔性价比·商务差旅
+    axes:
+      scene: business_travel
+      aesthetic: korean_gentle
+      price: fast_fashion_value
+    weight: 0.0180
+    fab_focus: ["温柔但专业", "不强势", "好印象穿搭", "女性商务友好"]
+    color_preference: ["柔粉套装", "雾霾蓝", "米白西装"]
+
+  - persona_id: P30
+    name: 韩系温柔轻奢·商务差旅
+    axes:
+      scene: business_travel
+      aesthetic: korean_gentle
+      price: luxury_investment
+    weight: 0.0120
+    fab_focus: ["女总裁风", "高端韩系商务", "温柔一刀", "国际商务谈判"]
+    color_preference: ["莫兰迪套装色", "高级奶咖", "柔紫商务"]

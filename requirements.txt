@@ -1,0 +1,38 @@
+# 童装爆款预测AI工具 · 依赖清单（阶段一·Python 3.11 兼容优先）
+# 版本要求全部放宽，保证 Windows pip 能解析成功
+
+# ===== 核心依赖 =====
+dashscope            # 阿里云百炼SDK
+requests
+httpx
+
+# ===== 数据处理 =====
+pandas
+numpy<2              # scikit-learn 1.4.x 与 numpy 2 不兼容
+openpyxl
+
+# ===== 机器学习（校准层） =====
+scikit-learn
+scipy
+
+# ===== 统计（可选·轻量）=====
+# statsmodels    # 暂不安装，后续训练量>50款再启用
+
+# ===== 图片处理 =====
+Pillow
+
+# ===== 进度与日志 =====
+tqdm
+# rich          # 阶段一暂不使用，减少冲突
+
+# ===== 报告生成 =====
+# jinja2        # 阶段一只输出Markdown，暂不用
+# matplotlib    # 阶段一暂不使用
+
+# ===== 前端（Web UI） =====
+streamlit>=1.35
+plotly>=5.20        # Streamlit内画雷达图、饼图
+
+# ===== 配置管理 =====
+pyyaml
+python-dotenv

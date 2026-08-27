@@ -1,0 +1,36 @@
+categories:
+  - id: jacket
+    name: 夹克外套
+    price_band: [159, 359]
+  - id: tshirt
+    name: T恤
+    price_band: [79, 199]
+  - id: shorts
+    name: 短裤
+    price_band: [79, 159]
+  - id: pants
+    name: 长裤
+    price_band: [99, 199]
+  - id: vest
+    name: 背心
+    price_band: [55, 89]
+  - id: down_jacket
+    name: 羽绒服
+    price_band: [224, 519]
+  - id: sun_protection
+    name: 防晒衣
+    price_band: [159, 199]
+  - id: shirt
+    name: 衬衫
+    price_band: [109, 224]
+  - id: hoodie
+    name: 卫衣
+    price_band: [99, 179]
+  - id: vest_padded
+    name: 马甲
+    price_band: [179, 275]
+category_aliases:
+  "外套": jacket
+  "冲锋衣": jacket
+  "短袖": tshirt
+  "羽绒": down_jacket

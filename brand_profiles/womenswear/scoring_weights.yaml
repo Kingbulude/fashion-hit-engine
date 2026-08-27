@@ -1,0 +1,112 @@
+# ============ 双渠道评分 · 权重与公式 ============
+# 公式为规则引擎，不调LLM，纯数学计算，与人设投票错误独立
+
+scoring_formulas:
+
+  # ===== 自然流量评分器 =====
+  # 关注：妈妈"解决需求"型购买 — 实穿度高+搭配度高+色彩风险低
+  natural_channel:
+    name: "自然流量分"
+    description: "天猫/淘宝搜索、收藏加购、复购型购买"
+    formula:
+      F06_wearability:       0.40   # 实穿度（多场景能穿）
+      F07_pairing:           0.30   # 搭配度（能搭现有衣柜）
+      F03_color_risk_inv:    0.30   # 10-色彩风险（受众广）
+    # 计算方式: score = 0.40*F06 + 0.30*F07 + 0.30*(10-F03)
+    threshold_for_s: 7.5
+    threshold_for_a: 7.0
+    low_threshold:   5.0
+
+  # ===== 直播带货评分器 =====
+  # 关注："画面吸睛→有料可讲→记忆深刻"冲动转化
+  live_channel:
+    name: "直播带货分"
+    description: "抖音/快手直播、达人带货、短视频种草"
+    formula:
+      F05_photogenic:        0.35   # 上镜感（3秒停留）
+      F04_function_visibility: 0.35 # 功能可见性（话术钩子）
+      F10_uniqueness:        0.30   # 设计独特性（记忆点）
+    # 计算方式: score = 0.35*F05 + 0.35*F04 + 0.30*F10
+    threshold_for_s: 7.0
+    threshold_for_a: 6.5
+    low_threshold:   5.0
+
+# ===== 价格价值评分器 · 感知价值模型 =====
+price_value:
+  name: "价值匹配度"
+  description: "感知价值期望 vs 价格在品类中的百分位"
+
+  # 感知价值期望（第一阶段用经验权重，第一季后从数据回归）
+  perceived_value_weights:
+    F04_function_visibility: 0.35   # 功能质感
+    F08_fabric_perception:   0.30   # 面料感知
+    F10_uniqueness:          0.15   # 设计独特
+    F09_brand_tone:          0.10   # 品牌调性
+    F04_F08_interaction:     0.10   # 交互项：功能×面料联合感知
+
+  # 计算方式:
+  #   perceived_value = 0.35*F04 + 0.30*F08 + 0.15*F10 + 0.10*F09 + 0.10*(F04*F08/10)
+  #   price_percentile = 该价格在品类历史订单中的百分位（0-1）
+  #   value_match = (perceived_value / 10) - price_percentile    # 正值=物超所值，负值=价格偏高
+  #   价格风险等级: value_match > +0.15 → 低风险（物超所值）
+  #                 -0.15 ~ +0.15 → 中风险（价格匹配）
+  #                < -0.15 → 高风险（价格偏高）
+  thresholds:
+    low_risk:   0.15
+    high_risk: -0.15
+
+  # 第一阶段：品类历史价格百分位
+  # 来源：品牌运营确认的各品类实际定价带（最低价~最高价）
+  # 计算逻辑：给定价格在[min, max]区间内做线性插值 → 百分位0~1
+  #   pct = (price - min) / (max - min)，clamp到[0, 1]
+  category_price_bands:
+    "夹克外套": [159, 359]
+    "T恤":     [79,  199]
+    "短裤":     [79,  159]
+    "长裤":     [99,  199]
+    "背心":     [55,  89]
+    "羽绒服":   [224, 519]
+    "防晒衣":   [159, 199]
+    "衬衫":     [109, 224]
+    "卫衣":     [99,  179]
+    "马甲":     [179, 275]
+  # 兜底：未匹配到品类时用全局价格带
+  fallback_band: [79, 519]
+
+# ===== S/A+/A/P分级阈值 =====
+grading_thresholds:
+  s_grade:
+    natural_score_min: 7.5
+    live_score_min:    7.0
+    opposition_max:    0.15   # 反对率≤15%（投<4分的人设比例）
+    value_match_min:   0.0    # 价值匹配≥0（不扣分）
+
+  a_plus_grade:
+    # 单维度≥7.5，另一维度在6.0-7.0之间，短板可改款升S
+    single_high_min:   7.5
+    other_low_min:     6.0
+
+  a_grade:
+    single_high_min:   7.0    # 单维度≥7.0即可算A级
+
+  p_grade:
+    # 品牌调性贡献+设计独特性双高，不追求销量
+    brand_tone_min:    7.0
+    uniqueness_min:    7.5
+
+  risk_grade:
+    # 双渠道均弱 或 反对率>30%
+    natural_max:       5.0
+    live_max:          5.0
+    opposition_max:    0.30
+
+# ===== 校准层 · 稀疏回归参数 =====
+calibration:
+  # LASSO正则化强度（越大越稀疏，选越少特征）
+  lasso_alpha: 0.05
+  # 最大保留特征数
+  max_features: 5
+  # 权重漂移限制：新权重偏离上一季 ≤ ±30%
+  max_drift_pct: 0.30
+  # 时间衰减半衰期（多少个季度权重衰减50%）
+  decay_half_life_seasons: 2

@@ -1,0 +1,43 @@
+brand_id: tongzhuang-outdoor
+brand_name: 潮童户外子品牌（6-14岁）
+industry_segment: children_outdoor
+target_age_range: [6, 14]
+decision_structure:
+  type: multi_layer
+  layers:
+    - id: mom_decision_layer
+      name: 妈妈决策者层
+      persona_axis_key: identity_axes
+      role: decider
+      default_weight: 0.70
+    - id: child_influence_layer
+      name: 孩子影响层
+      persona_axis_key: child_identity_axes
+      role: veto
+      default_weight: 0.30
+  age_weight_rules:
+    - age_range: [6, 8]
+      mom_weight: 0.70
+      child_weight: 0.30
+      label: 妈妈主导
+    - age_range: [9, 11]
+      mom_weight: 0.50
+      child_weight: 0.50
+      label: 共同决策
+    - age_range: [12, 14]
+      mom_weight: 0.30
+      child_weight: 0.70
+      label: 孩子主导
+default_target_age: 10
+default_engine_weights:
+  persona_voting: 0.35
+  channel_scoring: 0.30
+  price_value: 0.35
+default_channel_split:
+  natural: 0.50
+  live_stream: 0.50
+grading_thresholds:
+  s: 7.6
+  a_plus: 6.6
+  a: 5.2
+  p: 0.0

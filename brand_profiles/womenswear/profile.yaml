@@ -1,0 +1,35 @@
+brand_id: _template_women_fashion
+brand_name: 女装通勤品牌模板（自定义品牌名）
+industry_segment: women_fashion
+target_age_range: [22, 40]
+decision_structure:
+  type: single_layer
+  layers:
+    - id: self_decision_layer
+      name: 女性本人决策层
+      persona_axis_key: identity_axes
+      role: decider
+      default_weight: 1.00
+  age_weight_rules:
+    - age_range: [22, 28]
+      weight: 0.35
+      label: 初入职场
+    - age_range: [29, 34]
+      weight: 0.40
+      label: 职场中坚
+    - age_range: [35, 40]
+      weight: 0.25
+      label: 资深管理
+default_target_age: 30
+default_engine_weights:
+  persona_voting: 0.35
+  channel_scoring: 0.30
+  price_value: 0.35
+default_channel_split:
+  natural: 0.50
+  live_stream: 0.50
+grading_thresholds:
+  s: 7.6
+  a_plus: 6.6
+  a: 5.2
+  p: 0.0

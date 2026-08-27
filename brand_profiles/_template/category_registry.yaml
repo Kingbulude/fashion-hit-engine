@@ -1,0 +1,40 @@
+categories:
+  - id: dress
+    name: 连衣裙
+    price_band: [99, 999]
+  - id: skirt
+    name: 半身裙
+    price_band: [99, 999]
+  - id: shirt
+    name: 衬衫
+    price_band: [99, 999]
+  - id: knitwear
+    name: 针织衫
+    price_band: [99, 999]
+  - id: blazer
+    name: 西装外套
+    price_band: [99, 999]
+  - id: trench
+    name: 风衣
+    price_band: [99, 999]
+  - id: coat
+    name: 大衣
+    price_band: [99, 999]
+  - id: tshirt
+    name: T恤
+    price_band: [99, 999]
+  - id: jeans
+    name: 牛仔裤
+    price_band: [99, 999]
+  - id: half_skirt
+    name: 半裙
+    price_band: [99, 999]
+category_aliases:
+  "连身裙": dress
+  "衬衣": shirt
+  "针织": knitwear
+  "西装": blazer
+  "外套": blazer
+  "风褛": trench
+  "毛呢大衣": coat
+  "牛仔": jeans
