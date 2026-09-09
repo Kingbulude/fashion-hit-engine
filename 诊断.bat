@@ -1,71 +1,70 @@
 @echo off
 REM ============================================================
-REM fashion-hit-engine Â· è¯Šæ–­è„šæœ¬
-REM åŒå‡»æ­¤æ–‡ä»¶æŸ¥çœ‹çŽ¯å¢ƒä¿¡æ¯ï¼Œæ–¹ä¾¿æŽ’æŸ¥å¯åŠ¨é—®é¢˜
+REM fashion-hit-engine ¡¤ Õï¶Ï½Å±¾
+REM Ë«»÷´ËÎÄ¼þ²é¿´»·¾³ÐÅÏ¢£¬·½±ãÅÅ²éÆô¶¯ÎÊÌâ
 REM ============================================================
 setlocal enabledelayedexpansion
-chcp 65001 >nul 2>&1
-title fashion-hit-engine è¯Šæ–­
+title fashion-hit-engine Õï¶Ï
 
 cd /d "%~dp0"
 
 echo ============================================================
-echo   fashion-hit-engine çŽ¯å¢ƒè¯Šæ–­
-echo   æŠŠä¸‹é¢ä¿¡æ¯å‘ç»™æˆ‘ï¼Œæˆ‘å¸®ä½ æŽ’æŸ¥é—®é¢˜
+echo   fashion-hit-engine »·¾³Õï¶Ï
+echo   °ÑÏÂÃæÐÅÏ¢·¢¸øÎÒ£¬ÎÒ°ïÄãÅÅ²éÎÊÌâ
 echo ============================================================
 echo.
 
-echo [1] Python ç‰ˆæœ¬ï¼š
+echo [1] Python °æ±¾£º
 where python 2>nul
 if errorlevel 1 (
-    echo   Ã— æœªæ‰¾åˆ° python å‘½ä»¤
-    echo   Ã— Python æœªå®‰è£…æˆ–æœªåŠ å…¥ PATH
+    echo   ¡Á Î´ÕÒµ½ python ÃüÁî
+    echo   ¡Á Python Î´°²×°»òÎ´¼ÓÈë PATH
 ) else (
     python --version 2>&1
-    echo   âˆš Python å¯ç”¨
+    echo   ¡Ì Python ¿ÉÓÃ
 )
 echo.
 
-echo [2] å½“å‰ç›®å½•ï¼š
+echo [2] µ±Ç°Ä¿Â¼£º
 echo   %CD%
 echo.
 
-echo [3] é¡¹ç›®æ–‡ä»¶æ£€æŸ¥ï¼š
-if exist "app.py" (echo   âˆš app.py å­˜åœ¨) else (echo   Ã— app.py ä¸å­˜åœ¨)
-if exist "requirements.txt" (echo   âˆš requirements.txt å­˜åœ¨) else (echo   Ã— requirements.txt ä¸å­˜åœ¨)
-if exist "src\pipeline.py" (echo   âˆš src\pipeline.py å­˜åœ¨) else (echo   Ã— src\pipeline.py ä¸å­˜åœ¨)
-if exist "brand_profiles\tongzhuang-outdoor\profile.yaml" (echo   âˆš å“ç‰Œé…ç½®å­˜åœ¨) else (echo   Ã— å“ç‰Œé…ç½®ç¼ºå¤±)
+echo [3] ÏîÄ¿ÎÄ¼þ¼ì²é£º
+if exist "app.py" (echo   ¡Ì app.py ´æÔÚ) else (echo   ¡Á app.py ²»´æÔÚ)
+if exist "requirements.txt" (echo   ¡Ì requirements.txt ´æÔÚ) else (echo   ¡Á requirements.txt ²»´æÔÚ)
+if exist "src\pipeline.py" (echo   ¡Ì src\pipeline.py ´æÔÚ) else (echo   ¡Á src\pipeline.py ²»´æÔÚ)
+if exist "brand_profiles\tongzhuang-outdoor\profile.yaml" (echo   ¡Ì Æ·ÅÆÅäÖÃ´æÔÚ) else (echo   ¡Á Æ·ÅÆÅäÖÃÈ±Ê§)
 echo.
 
-echo [4] è™šæ‹ŸçŽ¯å¢ƒï¼š
+echo [4] ÐéÄâ»·¾³£º
 if exist ".venv\Scripts\python.exe" (
-    echo   âˆš .venv å·²åˆ›å»º
+    echo   ¡Ì .venv ÒÑ´´½¨
     ".venv\Scripts\python.exe" --version 2>&1
 ) else (
-    echo   Ã— .venv æœªåˆ›å»ºï¼ˆé¦–æ¬¡å¯åŠ¨ä¼šè‡ªåŠ¨åˆ›å»ºï¼‰
+    echo   ¡Á .venv Î´´´½¨£¨Ê×´ÎÆô¶¯»á×Ô¶¯´´½¨£©
 )
 echo.
 
-echo [5] streamlit æ˜¯å¦å·²è£…ï¼ˆåœ¨ venv å†…ï¼‰ï¼š
+echo [5] streamlit ÊÇ·ñÒÑ×°£¨ÔÚ venv ÄÚ£©£º
 if exist ".venv\Scripts\streamlit.exe" (
-    echo   âˆš streamlit å·²è£…
+    echo   ¡Ì streamlit ÒÑ×°
     ".venv\Scripts\streamlit.exe" --version 2>&1
 ) else (
-    echo   Ã— streamlit æœªè£…ï¼ˆå¯åŠ¨å™¨ä¼šè‡ªåŠ¨è£…ï¼Œéœ€è”ç½‘ï¼‰
+    echo   ¡Á streamlit Î´×°£¨Æô¶¯Æ÷»á×Ô¶¯×°£¬ÐèÁªÍø£©
 )
 echo.
 
-echo [6] ç½‘ç»œè¿žé€šæ€§æµ‹è¯•ï¼ˆpypiï¼‰ï¼š
+echo [6] ÍøÂçÁ¬Í¨ÐÔ²âÊÔ£¨pypi£©£º
 ping -n 2 pypi.org >nul 2>&1
 if errorlevel 1 (
-    echo   Ã— æ— æ³•è¿žæŽ¥ pypi.orgï¼ˆç½‘ç»œé—®é¢˜ï¼Œå»ºè®®ç”¨é•œåƒæºï¼‰
+    echo   ¡Á ÎÞ·¨Á¬½Ó pypi.org£¨ÍøÂçÎÊÌâ£¬½¨ÒéÓÃ¾µÏñÔ´£©
 ) else (
-    echo   âˆš å¯è¿žæŽ¥ pypi.org
+    echo   ¡Ì ¿ÉÁ¬½Ó pypi.org
 )
 echo.
 
 echo ============================================================
-echo è¯Šæ–­å®Œæˆã€‚æŒ‰ä»»æ„é”®å…³é—­ã€‚
-echo å¦‚æœ‰é—®é¢˜ï¼Œæˆªå›¾æ­¤çª—å£å‘ç»™æˆ‘ã€‚
+echo Õï¶ÏÍê³É¡£°´ÈÎÒâ¼ü¹Ø±Õ¡£
+echo ÈçÓÐÎÊÌâ£¬½ØÍ¼´Ë´°¿Ú·¢¸øÎÒ¡£
 echo ============================================================
 pause >nul
