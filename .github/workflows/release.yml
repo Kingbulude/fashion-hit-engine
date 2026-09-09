@@ -1,0 +1,76 @@
+# ============================================================
+# GitHub Actions: 打 tag 时自动打包 Release zip
+# 用法：git tag v1.0.0 && git push origin v1.0.0
+# 产出：GitHub Release 页面出现 fashion-hit-engine-v1.0.0.zip
+# ============================================================
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # 匹配 v 开头的 tag
+
+permissions:
+  contents: write  # 需要写权限创建 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: 整理发布包（剔除开发文件）
+        run: |
+          mkdir -p dist/fashion-hit-engine
+          # 复制需要的文件，排除开发产物
+          rsync -av --progress \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='.pytest_cache' \
+            --exclude='__pycache__' \
+            --exclude='.venv' \
+            --exclude='output' \
+            --exclude='*.pyc' \
+            --exclude='tests/' \
+            ./ dist/fashion-hit-engine/
+          # 确保 calibrated 目录的 .gitkeep 保留
+          find dist/fashion-hit-engine/brand_profiles -name calibrated -type d -exec sh -c 'touch "$1/.gitkeep"' _ {} \;
+
+      - name: 打包 zip
+        run: |
+          cd dist
+          zip -r "fashion-hit-engine-${{ steps.version.outputs.tag }}.zip" fashion-hit-engine
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: fashion-hit-engine ${{ steps.version.outputs.tag }}
+          body: |
+            ## 下载使用
+
+            1. 下载下方 `fashion-hit-engine-${{ steps.version.outputs.tag }}.zip` 并解压
+            2. Windows 双击 `启动.bat` / Mac/Linux 终端运行 `./start.sh`
+            3. 首次启动自动建虚拟环境+装依赖（约2分钟），之后秒开
+            4. 浏览器自动打开 http://localhost:8501
+
+            ## 使用流程
+
+            - **页面1 上传批次**：填批次名 → 上传款式信息 Excel（款式编号/面料成分/版型描述/售价）→ 上传图片包（文件夹或zip）
+            - **页面2 批次总表**：查看分级分布、导出 Excel/单款报告
+            - **页面3 单款详情**：点款号看 BARS 评分/人设投票/双渠道评分
+            - **页面4 回测校准**：上传带真实销量的 Excel → 跑 3Loop 优化内核（越用越准）
+
+            ## 系统要求
+            - Python 3.10+（首次启动会自动检测，未安装会提示下载地址）
+            - 首次启动需联网（下载依赖）
+          files: |
+            dist/fashion-hit-engine-${{ steps.version.outputs.tag }}.zip
+          draft: false
+          prerelease: false

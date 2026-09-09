@@ -78,7 +78,19 @@ brand_profiles/
 
 ---
 
-## 快速启动（30秒）
+## 快速启动
+
+### 方式一：下载即用（推荐，非技术用户）
+
+1. 到 [Releases 页面](../../releases) 下载最新的 `fashion-hit-engine-vX.X.X.zip` 并解压
+2. **Windows**：双击 `启动.bat`
+   **Mac/Linux**：终端执行 `./start.sh`
+3. 首次启动自动建虚拟环境+装依赖（约2分钟，需联网），之后秒开
+4. 浏览器自动打开 http://localhost:8501
+
+**系统要求**：Python 3.10+（未安装会提示下载地址）
+
+### 方式二：开发者命令行启动
 
 ```bash
 # ① 装依赖（首次）
@@ -99,6 +111,8 @@ copy .env.example .env
 streamlit run app.py
 # 浏览器自动打开 http://localhost:8501
 ```
+
+> 想发布新版本？打 tag 即自动打包 Release：`git tag v1.1.0 && git push origin v1.1.0`
 
 ---
 
