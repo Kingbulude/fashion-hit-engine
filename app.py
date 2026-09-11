@@ -92,12 +92,36 @@ with st.sidebar.expander(f"📌 {brand_cfg.brand_name}", expanded=True):
     st.write(f"**校准轮次：** {n_calibration or '0（冷启动）'}")
 
 st.sidebar.divider()
+
+# --- 侧边栏：LLM 模式切换 ---
+llm_mode_label = st.sidebar.radio(
+    "🤖 预测引擎",
+    options=["演示模式（mock）", "真实 LLM（百炼API）"],
+    help="演示模式下用伪随机数据跑通全链路，不需要API也能体验。真实模式需要 .env 里配置 DASHSCOPE_API_KEY。",
+    index=0,
+)
+USE_REAL_LLM = (llm_mode_label == "真实 LLM（百炼API）")
+
+# 检查真实LLM可用性：有没有API Key？
+_llm_backend = "dashscope" if USE_REAL_LLM else "mock"
+if USE_REAL_LLM:
+    _api_key_present = bool(os.getenv("DASHSCOPE_API_KEY", "").strip())
+    if not _api_key_present:
+        st.sidebar.warning(
+            "⚠️ 没检测到 DASHSCOPE_API_KEY，将自动回退到 mock 模式。\n"
+            "请在项目根目录创建 .env 文件填入百炼 API Key。"
+        )
+        _llm_backend = "mock"
+
+# 暴露给全会话使用
+st.session_state.llm_backend = _llm_backend
+
 st.sidebar.title("🧭 导航")
 page = st.sidebar.radio("", PAGES, index=0)
 st.sidebar.caption(
-    "fashion-hit-engine v2.0\n"
-    "· 通用CORE引擎\n"
-    "· 品牌适配包 5YAML\n"
+    "fashion-hit-engine v2.1\n"
+    "· 通用CORE引擎 10特征30人设\n"
+    "· VLM特征提取 + 人设投票\n"
     "· 3Loop 越用越准"
 )
 
@@ -396,9 +420,11 @@ def render_page_summary():
             info = style_infos[current]
             try:
                 prog["stage"] = f"正在处理款 {info.style_id}"
-                # 品牌注入：通过 PredictionPipeline 统一入口（use_mock=True 走mock模式，避免需要LLM）
-                pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend="mock")
-                pred = pl.run_one(info, use_mock=True, image_paths_map=image_paths_map)
+                llm_backend = st.session_state.get("llm_backend", "mock")
+                pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend=llm_backend)
+                # run_one 会自动根据 llm_backend 决定走 mock 还是真实 LLM
+                # 真实模式下 image_paths_map 会注入到 info.images 供 VLM 读取图片
+                pred = pl.run_one(info, image_paths_map=image_paths_map)
                 st.session_state.preds.append(pred)
             except Exception as e:
                 st.warning(f"⚠️ {info.style_id} 处理失败：{e}")
@@ -646,7 +672,9 @@ def render_page_calibration():
             # 内部封装：build_history_df + run_all_loops + 残差归一化
             # 产物写 brand_cfg.calibrated_dir（下次评估自动加载，越用越准）
             try:
-                pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend="mock")
+                # 校准不需要调LLM，但要同一个品牌配置
+                _llm_backend = st.session_state.get("llm_backend", "mock")
+                pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend=_llm_backend)
                 loop_result = pl.run_backtest_calibration(
                     predictions=preds,
                     sales_lookup=truth_map_ready,

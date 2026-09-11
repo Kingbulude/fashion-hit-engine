@@ -383,6 +383,11 @@ class PredictionPipeline:
     ) -> FullPrediction:
         if use_mock is None:
             use_mock = (self.llm_backend == "mock")
+
+        # 把 image_paths_map 注入 info.images（真实VLM路径需要读取图片）
+        if image_paths_map and info.style_id in image_paths_map and not info.images:
+            from pathlib import Path
+            info.images = [Path(p) for p in image_paths_map[info.style_id]]
         if use_mock:
             feats = self.feature_engine.extract_mock(
                 info.style_id, fixed_feature_scores=fixed_feature_scores
