@@ -240,7 +240,7 @@ def _resolve_models_from_inputs(
         return cfg.api.feature_extraction_models
     if llm_backend == "mock":
         return ["mock"]
-    return ["qwen3-vl-plus", "qwen3.5-omni"]
+    return ["qwen-vl-plus"]
 
 
 # ========== 多模型交叉验证 ==========

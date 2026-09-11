@@ -25,8 +25,8 @@ class APIConfig:
     volc_api_key: str | None = None
     volc_endpoint: str | None = None
 
-    feature_extraction_models: list[str] = field(default_factory=lambda: ["qwen3-vl-plus", "qwen3.5-omni"])
-    persona_models: list[str] = field(default_factory=lambda: ["qwen3-max", "deepseek-v4-pro"])
+    feature_extraction_models: list[str] = field(default_factory=lambda: ["qwen-vl-plus"])
+    persona_models: list[str] = field(default_factory=lambda: ["qwen-max", "deepseek-v3"])
 
     qpm_limit: int = 45
     max_concurrent_personas: int = 8
@@ -245,10 +245,10 @@ def load_config(
         volc_api_key=os.getenv("VOLC_API_KEY"),
         volc_endpoint=os.getenv("VOLC_ENDPOINT"),
         feature_extraction_models=[
-            m.strip() for m in os.getenv("FEATURE_EXTRACTION_MODELS", "qwen3-vl-plus,qwen3.5-omni").split(",") if m.strip()
+            m.strip() for m in os.getenv("FEATURE_EXTRACTION_MODELS", "qwen-vl-plus").split(",") if m.strip()
         ],
         persona_models=[
-            m.strip() for m in os.getenv("PERSONA_MODELS", "qwen3-max,deepseek-v4-pro").split(",") if m.strip()
+            m.strip() for m in os.getenv("PERSONA_MODELS", "qwen-max,deepseek-v3").split(",") if m.strip()
         ],
         qpm_limit=int(os.getenv("QPM_LIMIT", "45")),
         max_concurrent_personas=int(os.getenv("MAX_CONCURRENT_PERSONAS", "8")),

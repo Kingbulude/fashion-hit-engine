@@ -98,7 +98,7 @@ class BailianClient:
         self,
         prompt: str,
         *,
-        model: str = "qwen3-max",
+        model: str = "qwen-max",
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
@@ -120,23 +120,21 @@ class BailianClient:
         text_prompt: str,
         image_paths: list[str | Path],
         *,
-        model: str = "qwen3-vl-plus",
+        model: str = "qwen-vl-plus",
         temperature: float = 0.2,
         max_tokens: int = 2048,
     ) -> LLMResponse:
-        # 构造内容 list：交替 text + image_url
+        # dashscope MultiModalConversation 要求格式：
+        # content = [{"image": "data:..."}, {"text": "..."}]
+        # key 是 "image"（不是 image_url），值是 data URL 字符串（不是嵌套 dict）
         content: list[dict[str, Any]] = []
 
-        # 先放图片，再放问题（百炼VL推荐顺序）
         for p in image_paths:
             img_b64 = encode_image(p)
             ext = Path(p).suffix.lower().lstrip(".") or "jpeg"
             mime = "image/png" if ext == "png" else "image/jpeg"
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{img_b64}"},
-            })
-        content.append({"type": "text", "text": text_prompt})
+            content.append({"image": f"data:{mime};base64,{img_b64}"})
+        content.append({"text": text_prompt})
 
         messages = [{"role": "user", "content": content}]
         return self._retry_loop(
@@ -189,11 +187,12 @@ class BailianClient:
         msg = choices[0].get("message", {})
         content = msg.get("content", "")
         # content可能是list of dict（多模态），取text字段
+        # dashscope MultiModalConversation 返回 [{"text": "..."}] 无 type 字段
         if isinstance(content, list):
             text_parts = []
             for c in content:
-                if isinstance(c, dict) and c.get("type") == "text":
-                    text_parts.append(c.get("text", ""))
+                if isinstance(c, dict) and "text" in c:
+                    text_parts.append(str(c["text"]))
                 elif isinstance(c, str):
                     text_parts.append(c)
             content = "\n".join(text_parts)
