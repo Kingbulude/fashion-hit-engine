@@ -194,4 +194,20 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        import traceback
+        print("\n" + "=" * 60)
+        print(f"  UNEXPECTED ERROR: {e}")
+        print("=" * 60)
+        traceback.print_exc()
+        print("\nPlease report this error.")
+        print("Press Enter to exit...")
+        try:
+            input()
+        except EOFError:
+            pass
+        sys.exit(1)
