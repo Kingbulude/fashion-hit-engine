@@ -43,7 +43,7 @@ def resolve_category(
 
     Args:
         raw_category_name: Excel 原始品类名（可能是别名，如"外套"、"短袖"等）
-        brand_cfg: 品牌配置（None时默认 tongzhuang-outdoor）
+        brand_cfg: 品牌配置（None时默认 mipo）
 
     Returns:
         category_id（标准化）或 "_unknown" 或 空字符串。
@@ -53,7 +53,7 @@ def resolve_category(
         return ""
 
     if brand_cfg is None:
-        brand_cfg = load_brand_profile("tongzhuang-outdoor")
+        brand_cfg = load_brand_profile("mipo")
     registry = brand_cfg.category_registry or {}
     aliases: dict[str, Any] = registry.get("category_aliases", {}) or {}
     categories: list[dict[str, Any]] = registry.get("categories", []) or []

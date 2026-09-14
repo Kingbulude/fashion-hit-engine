@@ -1,7 +1,7 @@
 """
 fashion-hit-engine · v2.0 冒烟测试（离线·零成本）
 流程：
-  阶段 A：PredictionPipeline('tongzhuang-outdoor') 跑10款模拟数据 → 验证品牌适配包注入 + 通用引擎跑通
+  阶段 A：PredictionPipeline('mipo') 跑10款模拟数据 → 验证品牌适配包注入 + 通用引擎跑通
   阶段 B：用10款预测分+mock真实销量跑 optimization_kernel 3Loop + 残差分离
   阶段 C：断言 Spearman(分级)≥0.80，Spearman(销量)≥0.92；Loop产物生成且保护机制工作
 """
@@ -79,9 +79,9 @@ def _spearman(a, b):
 # ========== 阶段 A：流水线 10 款 ==========
 def stage_a_run_pipeline() -> tuple[list[FullPrediction], PredictionPipeline]:
     print("=" * 100)
-    print("🚀 阶段 A：通用 PredictionPipeline(brand_id='tongzhuang-outdoor') + mock mode 跑10款")
+    print("🚀 阶段 A：通用 PredictionPipeline(brand_id='mipo') + mock mode 跑10款")
     print("=" * 100)
-    pl = PredictionPipeline(brand_id="tongzhuang-outdoor", llm_backend="mock")
+    pl = PredictionPipeline(brand_id="mipo", llm_backend="mock")
     print(f"  · 品牌：{pl.brand_cfg.brand_name} ({pl.brand_cfg.brand_id})")
     print(f"  · 决策结构：{pl.brand_cfg.decision_structure.type}，"
           f"{len(pl.brand_cfg.decision_structure.layers)}层")
@@ -252,7 +252,7 @@ if __name__ == "__main__":
             print(f"\n⚠️ 历史库写入失败（不影响冒烟结论）: {e}")
 
     # 清理测试期间生成的 calibrated yaml（避免下次冒烟自动加载"假权重"）
-    cal_dir = ROOT / "brand_profiles" / "tongzhuang-outdoor" / "calibrated"
+    cal_dir = ROOT / "brand_profiles" / "mipo" / "calibrated"
     removed = 0
     for yamlf in cal_dir.glob("loop_*.yaml"):
         try:

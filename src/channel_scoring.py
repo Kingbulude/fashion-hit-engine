@@ -32,7 +32,7 @@ def _resolve_scoring_cfg(
         return brand_cfg.scoring_weights
     if cfg is not None and cfg.scoring:
         return cfg.scoring
-    fallback = load_brand_profile("tongzhuang-outdoor")
+    fallback = load_brand_profile("mipo")
     return fallback.scoring_weights
 
 
@@ -42,7 +42,7 @@ def _resolve_category_registry(
     """优先从 brand_cfg.category_registry；否则默认品牌。"""
     if brand_cfg is not None and brand_cfg.category_registry:
         return brand_cfg.category_registry
-    fallback = load_brand_profile("tongzhuang-outdoor")
+    fallback = load_brand_profile("mipo")
     return fallback.category_registry
 
 
@@ -212,7 +212,7 @@ def calc_live_score(
     # 色彩吸睛奖励（双向调节保留）
     color_appeal_sensitivity = live_cfg.get("color_appeal_sensitivity")
     if color_appeal_sensitivity is None:
-        sw = load_brand_profile("tongzhuang-outdoor").scoring_weights
+        sw = load_brand_profile("mipo").scoring_weights
         formula_wrapper = _get_channel_formula_w(sw)
         color_appeal_sensitivity = formula_wrapper.get("live_channel", {}).get("color_appeal_sensitivity", 0.5)
     color_appeal_bonus = max(0.0, (color_risk - 5.0)) * float(color_appeal_sensitivity)
@@ -256,7 +256,7 @@ def calculate_price_value_score(
         price: 款式价格
         category_id: 品类ID（对应 category_registry.categories[].id）
         features_dict: 10特征字典，格式 {key: score} 或 {key: {score}}
-        brand_cfg: 品牌配置（可选，None 时默认 tongzhuang-outdoor）
+        brand_cfg: 品牌配置（可选，None 时默认 mipo）
 
     Returns:
         dict 含:
@@ -266,7 +266,7 @@ def calculate_price_value_score(
           - risk_level: {"level": "低风险"/"中风险"/"高风险", "low_threshold":..., "high_threshold":...}
     """
     if brand_cfg is None:
-        brand_cfg = load_brand_profile("tongzhuang-outdoor")
+        brand_cfg = load_brand_profile("mipo")
 
     score_cfg = brand_cfg.scoring_weights
     pv_cfg = _get_price_value_cfg(score_cfg)
@@ -370,7 +370,7 @@ def calculate_channel_scores(
     完全向后兼容：
     - 只传旧 cfg: AppConfig → 走旧 evaluate_channels 路径
     - 传 brand_cfg → 从 brand_cfg 取 channel_formula / price_value_model / category_registry
-    - 都不传 → 默认 load_brand_profile('tongzhuang-outdoor')
+    - 都不传 → 默认 load_brand_profile('mipo')
     """
     score_cfg = _resolve_scoring_cfg(brand_cfg, cfg)
     channel_formulas = _get_channel_formula_w(score_cfg)

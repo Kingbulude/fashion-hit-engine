@@ -29,12 +29,12 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_bars_cfg(brand_cfg: BrandConfig | None, cfg: AppConfig | None) -> dict[str, Any]:
-    """优先用 brand_cfg.features_bars；否则用旧 AppConfig.features；否则默认加载 tongzhuang-outdoor"""
+    """优先用 brand_cfg.features_bars；否则用旧 AppConfig.features；否则默认加载 mipo"""
     if brand_cfg is not None and brand_cfg.features_bars:
         return brand_cfg.features_bars
     if cfg is not None and cfg.features:
         return cfg.features
-    fallback = load_brand_profile("tongzhuang-outdoor")
+    fallback = load_brand_profile("mipo")
     return fallback.features_bars
 
 
@@ -99,7 +99,7 @@ def _get_bars_prompt(features_cfg: dict[str, Any]) -> str:
 class FeatureExtractionEngine:
     """基于 BrandConfig 的特征提取引擎
 
-    向后兼容：不传 brand_cfg 时默认使用 tongzhuang-outdoor 品牌配置。
+    向后兼容：不传 brand_cfg 时默认使用 mipo 品牌配置。
     """
 
     def __init__(
@@ -109,7 +109,7 @@ class FeatureExtractionEngine:
         llm_backend: str = "mock",
     ) -> None:
         if brand_cfg is None:
-            brand_cfg = load_brand_profile("tongzhuang-outdoor")
+            brand_cfg = load_brand_profile("mipo")
         self.brand_cfg = brand_cfg
         self.llm_backend = llm_backend
         self._bars_cfg = brand_cfg.features_bars
@@ -273,7 +273,7 @@ def extract_style_features(
 
     新接口建议：传 brand_cfg。
     旧兼容：不传 brand_cfg 时，若 cfg 提供则走旧 AppConfig 路径，
-            否则默认 load_brand_profile('tongzhuang-outdoor')。
+            否则默认 load_brand_profile('mipo')。
     """
     features_cfg = _resolve_bars_cfg(brand_cfg, cfg)
     val_cfg = features_cfg.get("feature_validation", {})
@@ -286,7 +286,7 @@ def extract_style_features(
     # mock mode 快速路径
     if llm_backend == "mock" or (models and models[0] == "mock"):
         if brand_cfg is None:
-            brand_cfg = load_brand_profile("tongzhuang-outdoor")
+            brand_cfg = load_brand_profile("mipo")
         engine = FeatureExtractionEngine(brand_cfg, llm_backend="mock")
         return engine.extract_mock(info.style_id)
 

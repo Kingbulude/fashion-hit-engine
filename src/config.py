@@ -228,9 +228,9 @@ def load_config(
     config_dir: Path = CONFIG_DIR,
     override_api_key: str | None = None,
 ) -> AppConfig:
-    """加载默认品牌配置（.env + tongzhuang-outdoor 品牌适配包）。
+    """加载默认品牌配置（.env + mipo 品牌适配包）。
 
-    通用入口：等价于 load_brand_profile("tongzhuang-outdoor") + 注入 .env 的 API 配置。
+    通用入口：等价于 load_brand_profile("mipo") + 注入 .env 的 API 配置。
     需要切换品牌时请直接用 load_brand_profile(brand_id)。
     config_dir 参数保留用于向后兼容（实际配置从 brand_profiles/ 加载）。
 
@@ -272,7 +272,7 @@ def load_config(
         p.mkdir(parents=True, exist_ok=True)
 
     # 调用新架构的品牌加载，然后转成兼容的features/personas/scoring字段
-    brand_cfg = load_brand_profile("tongzhuang-outdoor")
+    brand_cfg = load_brand_profile("mipo")
     features = brand_cfg.features_bars
     # 兼容旧格式：把personas列表包装成 {personas: [...], decision_mode_weights: {...}} 结构
     personas = {

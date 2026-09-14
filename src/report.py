@@ -33,9 +33,9 @@ def _count_calibrated_yamls(brand_cfg: BrandConfig | None) -> int:
 
 
 def _resolve_brand_info(brand_cfg: BrandConfig | None) -> tuple[str, str, int]:
-    """返回 (brand_name, brand_id, n_calibrated)。None 时用默认 tongzhuang-outdoor。"""
+    """返回 (brand_name, brand_id, n_calibrated)。None 时用默认 mipo。"""
     if brand_cfg is None:
-        brand_cfg = load_brand_profile("tongzhuang-outdoor")
+        brand_cfg = load_brand_profile("mipo")
     n = _count_calibrated_yamls(brand_cfg)
     return brand_cfg.brand_name, brand_cfg.brand_id, n
 

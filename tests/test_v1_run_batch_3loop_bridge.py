@@ -33,7 +33,7 @@ def test_v1_run_batch_produces_3loop_artifacts_in_calibrated_dir():
     """
     from src.config import load_brand_profile
 
-    brand_id = "tongzhuang-outdoor"
+    brand_id = "mipo"
     brand_cfg = load_brand_profile(brand_id)
     calibrated_dir = Path(brand_cfg.calibrated_dir)
 
@@ -102,7 +102,7 @@ def test_v1_and_v2_artifacts_are_physically_isolated(tmp_path):
     from src.config import load_brand_profile
     from src.pipeline import PredictionPipeline
 
-    brand_id = "tongzhuang-outdoor"
+    brand_id = "mipo"
     brand_cfg = load_brand_profile(brand_id)
     calibrated_dir = Path(brand_cfg.calibrated_dir)
 
@@ -134,7 +134,7 @@ def test_v1_run_batch_3loop_skips_when_no_sales():
     """
     from src.pipeline import PredictionPipeline
 
-    brand_id = "tongzhuang-outdoor"
+    brand_id = "mipo"
     pipe = PredictionPipeline(brand_id=brand_id, llm_backend="mock")
     preds = pipe.run_smoke_test_data(n=10)
 
@@ -155,7 +155,7 @@ def test_v1_run_batch_3loop_skips_when_no_sales():
 # 5. run_batch brand_id 参数默认值（向后兼容）
 # ============================================================
 def test_run_batch_has_brand_id_default():
-    """run_batch 新增 brand_id 参数应有默认值 'tongzhuang-outdoor'，
+    """run_batch 新增 brand_id 参数应有默认值 'mipo'，
     保证旧调用 run_batch(cfg, styles, images, mode, out) 不破坏。
     """
     import inspect
@@ -164,8 +164,8 @@ def test_run_batch_has_brand_id_default():
     sig = inspect.signature(run_batch)
     assert "brand_id" in sig.parameters, "run_batch 应有 brand_id 参数"
     brand_id_param = sig.parameters["brand_id"]
-    assert brand_id_param.default == "tongzhuang-outdoor", (
-        f"brand_id 默认值应为 'tongzhuang-outdoor', "
+    assert brand_id_param.default == "mipo", (
+        f"brand_id 默认值应为 'mipo', "
         f"got {brand_id_param.default!r}"
     )
 

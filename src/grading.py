@@ -208,7 +208,7 @@ def assign_grade(
         if brand_cfg is not None:
             scoring_cfg = brand_cfg.scoring_weights
         else:
-            scoring_cfg = load_brand_profile("tongzhuang-outdoor").scoring_weights
+            scoring_cfg = load_brand_profile("mipo").scoring_weights
 
     # —— 基础分档：优先 brand_cfg.grading_thresholds（0-10制×10） ——
     thr = _resolve_grade_thresholds_100(brand_cfg, scoring_cfg)
@@ -334,10 +334,10 @@ def decide_grade(
     单款综合 → 最终分 → 分级 → 改款建议 → 报告要素
 
     新接口建议：传 brand_cfg。
-    向后兼容：只传 cfg（AppConfig）或都不传（默认 tongzhuang-outdoor）。
+    向后兼容：只传 cfg（AppConfig）或都不传（默认 mipo）。
     """
     if brand_cfg is None and cfg is None:
-        fallback = load_brand_profile("tongzhuang-outdoor")
+        fallback = load_brand_profile("mipo")
         brand_cfg = fallback
     if brand_cfg is not None:
         scoring_cfg = brand_cfg.scoring_weights

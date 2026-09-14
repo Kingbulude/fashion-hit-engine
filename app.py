@@ -57,10 +57,10 @@ st.sidebar.title("🏷️ 选择品牌")
 available_brands = list_available_brands()
 if not available_brands:
     st.sidebar.error("❌ 没有可用的品牌适配包，请检查 brand_profiles/ 目录")
-    available_brands = ["tongzhuang-outdoor"]
+    available_brands = ["mipo"]
 # （_template 不展示，是模板）
 if "brand_id" not in st.session_state:
-    st.session_state.brand_id = available_brands[0] if available_brands else "tongzhuang-outdoor"
+    st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
 
 brand_id = st.sidebar.selectbox(
     "使用哪个品牌的适配包？",
@@ -166,7 +166,7 @@ st.sidebar.caption(
 )
 
 # ========== 兼容：保持 cfg 变量接口（AppConfig 薄兼容）==========
-cfg = load_config()  # deprecated薄包装，内部brand_id=tongzhuang-outdoor
+cfg = load_config()  # deprecated薄包装，内部brand_id=mipo
 
 # ========== 全局状态初始化 ==========
 if "batch_name" not in st.session_state:
@@ -1025,13 +1025,17 @@ def render_page_calibration():
                     if rd.overperformers:
                         with st.expander("查看详情（运营复盘机会）"):
                             for o in rd.overperformers:
-                                st.write(f"- {o.get('style_id','?')}：真实销量 / 预测倍数 ≈ {o.get('ratio','?')}")
+                                attr = o.get("attribution")
+                                attr_tag = f" · {attr}" if attr else ""
+                                st.write(f"- {o.get('style_id','?')}{attr_tag}")
                 with col_under:
                     st.metric("🔵 不及预期款 (ε < μ-2σ)", f"{len(rd.underperformers)} 个")
                     if rd.underperformers:
                         with st.expander("查看详情（复盘改进方向）"):
                             for u in rd.underperformers:
-                                st.write(f"- {u.get('style_id','?')}：预测高估 ≈ {u.get('ratio','?')}")
+                                attr = u.get("attribution")
+                                attr_tag = f" · {attr}" if attr else ""
+                                st.write(f"- {u.get('style_id','?')}{attr_tag}")
                 with col_flag:
                     flag_levels = {
                         "NO_SIG": ("⚪ 无系统偏差", "#22c55e"),
@@ -1048,6 +1052,29 @@ def render_page_calibration():
                         unsafe_allow_html=True,
                     )
                 st.caption("⚠️ 以上残差款 **不参与3Loop学习**，避免将外部事件（KOL带货/竞品打折）的伪相关注入预测模型。")
+
+                # 4.5) 资源错配归因（款式质量 × 投放强度，ADR-0001）
+                if rd.marketing_available:
+                    st.subheader("🎯 资源错配归因（款式质量 × 实际投放）")
+                    _as = rd.attribution_summary or {}
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("✅ 推对了", f"{_as.get('推对了：投放放大了款式潜力', 0)} 个",
+                              help="投放且超预期：系统预测与投放决策一致")
+                    c2.metric("💎 漏网爆款", f"{_as.get('漏网爆款：没推也超预期，应追加投放', 0)} 个",
+                              help="未投放却超预期：本季最大机会损失，下季应提前识别")
+                    c3.metric("💸 资源错配", f"{_as.get('资源错配：投放了仍不及预期', 0)} 个",
+                              help="投放了仍不及预期：预算被浪费，复盘选款信号")
+                    c4.metric("🩹 款式本身弱", f"{_as.get('款式本身弱：未投放且不及预期', 0)} 个",
+                              help="未投放且不及预期：不推是正确决策")
+                    st.caption(
+                        "依据：批次 Excel 的「是否主推 / 是否直播重点」列（实际投放口径）。"
+                        "漏网爆款 = 下一季最该提前识别并追加备货的款。"
+                    )
+                else:
+                    st.info(
+                        "ℹ️ 本批次未带营销投放列（是否主推/是否直播重点），"
+                        "暂无法做资源错配归因。上传批次时补充这两列即可解锁。"
+                    )
 
                 # 5) 产物下载
                 st.divider()

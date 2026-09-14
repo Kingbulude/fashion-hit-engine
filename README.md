@@ -59,7 +59,7 @@ fashion-hit-engine 是一款服装款式分级辅助工具。它的核心思路�
 
 ```
 brand_profiles/
-  ├─ tongzhuang-outdoor/     ← 现有：潮童户外6-14岁，双层决策结构
+  ├─ mipo/                   ← 当前主品牌：MIPO蜜扑·潮童户外6-14岁，双层决策结构
   │   ├─ profile.yaml              决策结构（single_layer / double_layer）
   │   ├─ features_bars.yaml        10特征BARS锚定量表
   │   ├─ personas.yaml             30人设 + 身份三轴线定义
@@ -67,7 +67,7 @@ brand_profiles/
   │   ├─ category_registry.yaml    品类 + 价格带 + 别名
   │   └─ calibrated/               3Loop校准产物（自动生成）
   │
-  └─ _template/              ← 女装通勤模板，single_layer，复制改名字即新品类
+  └─ _template/              ← 品牌模板（single_layer），复制改名字即新品牌
       ├─ profile.yaml
       ├─ features_bars.yaml
       ├─ personas.yaml
@@ -176,8 +176,8 @@ pack/
 │  ├─ pipeline.py / report.py / ...
 │
 └─ brand_profiles/
-   ├─ tongzhuang-outdoor/          ← 童装户外品牌包（现有）
-   └─ _template/                   ← 女装通勤模板（复制即用）
+   ├─ mipo/                         ← MIPO蜜扑·童装户外品牌包（当前主品牌）
+   └─ _template/                   ← 品牌模板（复制即用）
       ├─ profile.yaml              决策结构
       ├─ features_bars.yaml        BARS量表
       ├─ personas.yaml             30人设

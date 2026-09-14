@@ -118,7 +118,7 @@ def test_page4_call_signature_works():
     """
     from src.pipeline import PredictionPipeline
 
-    brand_id = "tongzhuang-outdoor"
+    brand_id = "mipo"
     pl = PredictionPipeline(brand_id=brand_id, llm_backend="mock")
     preds = pl.run_smoke_test_data(n=10)
 
@@ -156,7 +156,7 @@ def test_page4_no_sales_returns_none():
     """
     from src.pipeline import PredictionPipeline
 
-    brand_id = "tongzhuang-outdoor"
+    brand_id = "mipo"
     pl = PredictionPipeline(brand_id=brand_id, llm_backend="mock")
     preds = pl.run_smoke_test_data(n=10)
 

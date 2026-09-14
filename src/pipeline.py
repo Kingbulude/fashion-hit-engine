@@ -64,7 +64,7 @@ def run_single(client, info, cfg, all_style_prices, calibrated_weights=None, pro
     return FullPrediction(info=info, features=feats, voting=voting, channels=channels, grade=grade)
 
 
-def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="tongzhuang-outdoor"):
+def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="mipo"):
     styles = read_styles_excel(styles_path, images_dir)
     if not styles:
         log.error("没有读取到任何款式，请检查 %s", styles_path)
@@ -252,7 +252,7 @@ class PredictionPipeline:
     """爆款预测主流水线 v2.0 —— 基于 BrandConfig 全链路注入。
 
     Usage:
-        pipe = PredictionPipeline(brand_id="tongzhuang-outdoor", llm_backend="mock")
+        pipe = PredictionPipeline(brand_id="mipo", llm_backend="mock")
         results = pipe.run_smoke_test_data(n=10)
         for r in results:
             print(r.style_id, r.grade.grade, r.grade.final_score)
@@ -260,7 +260,7 @@ class PredictionPipeline:
 
     def __init__(
         self,
-        brand_id: str = "tongzhuang-outdoor",
+        brand_id: str = "mipo",
         llm_backend: str = "dashscope",
         api_key: str | None = None,
     ) -> None:
@@ -656,8 +656,8 @@ def main(argv=None):
     parser.add_argument("--images", default=None, help="图片目录，默认 data/images/")
     parser.add_argument("--output", default=None, help="输出目录，默认 output/")
     parser.add_argument("--env", default=None, help="自定义.env路径")
-    parser.add_argument("--brand", default="tongzhuang-outdoor",
-                        help="品牌ID（默认 tongzhuang-outdoor），将用 brand_profiles/<brand>/ 下配置")
+    parser.add_argument("--brand", default="mipo",
+                        help="品牌ID（默认 mipo），将用 brand_profiles/<brand>/ 下配置")
     parser.add_argument("-v", "--verbose", action="store_true", help="调试日志")
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)

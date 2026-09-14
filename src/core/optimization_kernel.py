@@ -531,6 +531,10 @@ class ResidualDecomposeResult:
     underperformers: list[dict[str, Any]]
     system_bias_flag: str
     residuals: list[float]
+    # 资源错配归因（ADR-0001：把「款式好」和「被推爆」分开）
+    # 仅当 meta_df 带 is_main_push / is_live_stream 列时才有意义
+    marketing_available: bool = False
+    attribution_summary: dict[str, int] = field(default_factory=dict)
 
 
 class ResidualDecomposer:
@@ -539,7 +543,14 @@ class ResidualDecomposer:
     - 超预期款（ε > +2σ）
     - 不及预期款（ε < -2σ）
     - 系统偏差flag（mean/std 的量级判断）
+    - 资源错配归因（若 meta_df 带营销投放列，ADR-0001）
     """
+
+    # 四象限归因：超额款(ε>+2σ) / 不及款(ε<-2σ) × 投放(主推/直播) / 未投放
+    ATTRIB_OVER_PUSHED = "推对了：投放放大了款式潜力"
+    ATTRIB_OVER_ORGANIC = "漏网爆款：没推也超预期，应追加投放"
+    ATTRIB_UNDER_PUSHED = "资源错配：投放了仍不及预期"
+    ATTRIB_UNDER_ORGANIC = "款式本身弱：未投放且不及预期"
 
     @classmethod
     def decompose(
@@ -575,6 +586,12 @@ class ResidualDecomposer:
             lower = mu - 2.0 * sigma if sigma > 0 else mu
 
             id_col = "style_id" if "style_id" in meta_df.columns else None
+            # 营销投放列（ADR-0001：实际投放，缺失时归因跳过）
+            mkt_cols = [
+                c for c in ("is_main_push", "is_live_stream")
+                if c in meta_df.columns
+            ]
+            marketing_available = len(mkt_cols) > 0
 
             over: list[dict[str, Any]] = []
             under: list[dict[str, Any]] = []
@@ -588,21 +605,36 @@ class ResidualDecomposer:
                     else f"row_{i}"
                 )
                 item: dict[str, Any] = {"style_id": sid, "residual": float(e), "index": i}
-                if e > upper:
+                # 营销投放标签（有列才带）
+                if marketing_available:
+                    pushed = any(
+                        float(meta_df.iloc[i][c]) > 0.5 for c in mkt_cols
+                    )
+                    item["was_pushed"] = pushed
+                is_over = e > upper
+                is_under = e < lower
+                if is_over or is_under:
                     try:
                         y_t = float(yt[i])
                         y_p = float(yp[i])
                     except Exception:
                         y_t = y_p = None
                     item.update({"y_true": y_t, "y_pred": y_p})
+                # 四象限归因
+                if marketing_available and (is_over or is_under):
+                    if is_over:
+                        item["attribution"] = (
+                            cls.ATTRIB_OVER_PUSHED if item["was_pushed"]
+                            else cls.ATTRIB_OVER_ORGANIC
+                        )
+                    else:
+                        item["attribution"] = (
+                            cls.ATTRIB_UNDER_PUSHED if item["was_pushed"]
+                            else cls.ATTRIB_UNDER_ORGANIC
+                        )
+                if is_over:
                     over.append(item)
-                elif e < lower:
-                    try:
-                        y_t = float(yt[i])
-                        y_p = float(yp[i])
-                    except Exception:
-                        y_t = y_p = None
-                    item.update({"y_true": y_t, "y_pred": y_p})
+                elif is_under:
                     under.append(item)
 
             # --- 系统偏差flag ---
@@ -620,6 +652,14 @@ class ResidualDecomposer:
             over.sort(key=lambda r: r["residual"], reverse=True)
             under.sort(key=lambda r: r["residual"])
 
+            # 归因汇总（四象限计数）
+            attribution_summary: dict[str, int] = {}
+            if marketing_available:
+                for item in over + under:
+                    k = item.get("attribution", "")
+                    if k:
+                        attribution_summary[k] = attribution_summary.get(k, 0) + 1
+
             return ResidualDecomposeResult(
                 residual_mean=float(mu),
                 residual_std=float(sigma),
@@ -627,6 +667,8 @@ class ResidualDecomposer:
                 underperformers=under,
                 system_bias_flag=flag,
                 residuals=eps,
+                marketing_available=marketing_available,
+                attribution_summary=attribution_summary,
             )
         except Exception as exc:
             log.exception("ResidualDecomposer 失败: %s", exc)
@@ -637,6 +679,8 @@ class ResidualDecomposer:
                 underperformers=[],
                 system_bias_flag="ERROR",
                 residuals=[],
+                marketing_available=False,
+                attribution_summary={},
             )
 
 
@@ -766,12 +810,17 @@ def build_history_df(
         natural = float(getattr(channels, "natural_score", 5.0))
         live = float(getattr(channels, "live_score", 5.0))
         perceived = float(getattr(channels, "perceived_value", 5.0))
+        # 营销投放标签（ADR-0001：实际投放，用于残差归因）
+        is_main_push = 1.0 if getattr(info, "is_main_push", False) else 0.0
+        is_live_stream = 1.0 if getattr(info, "is_live_stream", False) else 0.0
         eng_row = {
             "persona_score": weighted_score,
             "channel_score": (natural + live) / 2,
             "price_value_score": perceived,
             "natural_score": natural,
             "live_score": live,
+            "is_main_push": is_main_push,
+            "is_live_stream": is_live_stream,
             sales_col: sales,
         }
 
@@ -896,8 +945,16 @@ def run_all_loops(
             "residual_mean": r4.residual_mean,
             "residual_std": r4.residual_std,
             "system_bias_flag": r4.system_bias_flag,
-            "overperformers": r4.overperformers,
-            "underperformers": r4.underperformers,
+            "marketing_available": r4.marketing_available,
+            "attribution_summary": r4.attribution_summary,
+            "overperformers": [
+                {k: v for k, v in it.items() if k != "index"}
+                for it in r4.overperformers
+            ],
+            "underperformers": [
+                {k: v for k, v in it.items() if k != "index"}
+                for it in r4.underperformers
+            ],
         })
         output_files.append(residual_path)
 
@@ -1001,16 +1058,54 @@ def run_all_loops(
         md_lines.append(f"- 系统偏差Flag: **{r4.system_bias_flag}**")
         md_lines.append("")
 
+        # 资源错配归因（ADR-0001：款式质量 vs 投放强度分离）
+        if r4.marketing_available:
+            md_lines.append("### 🎯 资源错配归因（款式质量 × 投放强度）")
+            md_lines.append("")
+            md_lines.append("| 归因 | 款数 | 运营含义 |")
+            md_lines.append("|------|------|----------|")
+            for k in (ResidualDecomposer.ATTRIB_OVER_PUSHED,
+                      ResidualDecomposer.ATTRIB_OVER_ORGANIC,
+                      ResidualDecomposer.ATTRIB_UNDER_PUSHED,
+                      ResidualDecomposer.ATTRIB_UNDER_ORGANIC):
+                cnt = r4.attribution_summary.get(k, 0)
+                if k == ResidualDecomposer.ATTRIB_OVER_ORGANIC:
+                    hint = "下季应提前识别并追加投放/备货"
+                elif k == ResidualDecomposer.ATTRIB_UNDER_PUSHED:
+                    hint = "投放预算被浪费，复盘选款信号哪里漏了"
+                elif k == ResidualDecomposer.ATTRIB_OVER_PUSHED:
+                    hint = "系统预测与投放一致，权重可信"
+                else:
+                    hint = "系统识别正确，未推是合理决策"
+                md_lines.append(f"| {k} | {cnt} | {hint} |")
+            md_lines.append("")
+        else:
+            md_lines.append(
+                "> ℹ️ 本批次无营销投放列（是否主推/是否直播重点），"
+                "无法区分「款式好」和「被推爆」。补列后重跑可获得归因。"
+            )
+            md_lines.append("")
+
         md_lines.append(f"### 超预期款（ε > μ+2σ，共{len(r4.overperformers)}个）")
         md_lines.append("")
         if r4.overperformers:
-            md_lines.append("| style_id | 残差 | y_true | y_pred |")
-            md_lines.append("|----------|------|--------|--------|")
-            for item in r4.overperformers[:20]:
-                md_lines.append(
-                    f"| {item['style_id']} | {item['residual']:.4f} "
-                    f"| {item.get('y_true', '-')} | {item.get('y_pred', '-')} |"
-                )
+            if r4.marketing_available:
+                md_lines.append("| style_id | 残差 | y_true | y_pred | 归因 |")
+                md_lines.append("|----------|------|--------|--------|------|")
+                for item in r4.overperformers[:20]:
+                    md_lines.append(
+                        f"| {item['style_id']} | {item['residual']:.4f} "
+                        f"| {item.get('y_true', '-')} | {item.get('y_pred', '-')} "
+                        f"| {item.get('attribution', '-')} |"
+                    )
+            else:
+                md_lines.append("| style_id | 残差 | y_true | y_pred |")
+                md_lines.append("|----------|------|--------|--------|")
+                for item in r4.overperformers[:20]:
+                    md_lines.append(
+                        f"| {item['style_id']} | {item['residual']:.4f} "
+                        f"| {item.get('y_true', '-')} | {item.get('y_pred', '-')} |"
+                    )
         else:
             md_lines.append("（无）")
         md_lines.append("")
@@ -1018,13 +1113,23 @@ def run_all_loops(
         md_lines.append(f"### 不及预期款（ε < μ-2σ，共{len(r4.underperformers)}个）")
         md_lines.append("")
         if r4.underperformers:
-            md_lines.append("| style_id | 残差 | y_true | y_pred |")
-            md_lines.append("|----------|------|--------|--------|")
-            for item in r4.underperformers[:20]:
-                md_lines.append(
-                    f"| {item['style_id']} | {item['residual']:.4f} "
-                    f"| {item.get('y_true', '-')} | {item.get('y_pred', '-')} |"
-                )
+            if r4.marketing_available:
+                md_lines.append("| style_id | 残差 | y_true | y_pred | 归因 |")
+                md_lines.append("|----------|------|--------|--------|------|")
+                for item in r4.underperformers[:20]:
+                    md_lines.append(
+                        f"| {item['style_id']} | {item['residual']:.4f} "
+                        f"| {item.get('y_true', '-')} | {item.get('y_pred', '-')} "
+                        f"| {item.get('attribution', '-')} |"
+                    )
+            else:
+                md_lines.append("| style_id | 残差 | y_true | y_pred |")
+                md_lines.append("|----------|------|--------|--------|")
+                for item in r4.underperformers[:20]:
+                    md_lines.append(
+                        f"| {item['style_id']} | {item['residual']:.4f} "
+                        f"| {item.get('y_true', '-')} | {item.get('y_pred', '-')} |"
+                    )
         else:
             md_lines.append("（无）")
         md_lines.append("")
