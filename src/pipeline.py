@@ -261,9 +261,10 @@ class PredictionPipeline:
     def __init__(
         self,
         brand_id: str = "tongzhuang-outdoor",
-        llm_backend: str = "mock",
+        llm_backend: str = "dashscope",
     ) -> None:
         self.brand_id = brand_id
+        # llm_backend: "dashscope"(默认真实百炼) | "mock"(本地随机调试) | "volc"(火山)
         self.llm_backend = llm_backend
         self.brand_cfg: BrandConfig = load_brand_profile(brand_id)
         self.feature_engine = FeatureExtractionEngine(
@@ -285,8 +286,13 @@ class PredictionPipeline:
         # feature_biases 存起来，run_one 时乘到特征分上
         if self.calibration.feature_biases:
             self.brand_cfg._feature_biases = self.calibration.feature_biases
-        log.info("Pipeline init 完成: brand=%s, llm=%s, calibration=%s",
-                 brand_id, llm_backend, self.calibration)
+
+        # ===== 历史批次持久化：跨批次累积价格/特征/分数分布 =====
+        from .history_store import HistoryStore
+        self.history = HistoryStore()
+        self._history_prices: list[float] = self.history.load_prices(brand_id)
+        log.info("Pipeline init 完成: brand=%s, llm=%s, calibration=%s, history_prices=%d",
+                 brand_id, llm_backend, self.calibration, len(self._history_prices))
 
     @property
     def client(self) -> BailianClient:
@@ -402,9 +408,21 @@ class PredictionPipeline:
         use_mock: bool | None = None,
         fixed_feature_scores: list[float] | None = None,
         image_paths_map: dict[str, list[str]] | None = None,
+        all_style_prices: list[float] | None = None,
     ) -> FullPrediction:
         if use_mock is None:
             use_mock = (self.llm_backend == "mock")
+
+        # 跨批次累积价格分布：历史 + 当前批次
+        price_pool: list[float] = list(self._history_prices)
+        if all_style_prices:
+            price_pool.extend(all_style_prices)
+        # 去重后保持合理规模（最新 2000 条足够做百分位）
+        price_pool = sorted(set(p for p in price_pool if p > 0))[-2000:]
+        # 当前款自身价格必须在里面，否则后续 percentile 可能为空
+        if info.price > 0 and info.price not in price_pool:
+            price_pool.append(info.price)
+            price_pool.sort()
 
         # 把 image_paths_map 注入 info.images（真实VLM路径需要读取图片）
         if image_paths_map and info.style_id in image_paths_map and not info.images:
@@ -427,7 +445,7 @@ class PredictionPipeline:
             voting = self._mock_voting(info.style_id, feats)
             channels, _debug = calculate_channel_scores(
                 info, feats, voting,
-                cfg=None, brand_cfg=self.brand_cfg,
+                cfg=None, all_style_prices=price_pool, brand_cfg=self.brand_cfg,
                 category_id=info.category or None,
             )
             grade = decide_grade(
@@ -458,7 +476,7 @@ class PredictionPipeline:
         )
         voting = run_persona_voting(self.client, info, feats, None, brand_cfg=self.brand_cfg)
         channels, _ = calculate_channel_scores(
-            info, feats, voting, cfg=None, brand_cfg=self.brand_cfg,
+            info, feats, voting, cfg=None, all_style_prices=price_pool, brand_cfg=self.brand_cfg,
             category_id=info.category or None,
         )
         grade = decide_grade(
@@ -467,6 +485,22 @@ class PredictionPipeline:
         return FullPrediction(
             info=info, features=feats, voting=voting,
             channels=channels, grade=grade,
+        )
+
+    # ===== 历史批次持久化入口 =====
+    def save_to_history(
+        self,
+        predictions: list[FullPrediction],
+        notes: str = "",
+    ) -> str:
+        """把预测结果写入 SQLite + CSV，下次启动自动加载累积分布。"""
+        is_mock = (self.llm_backend == "mock")
+        return self.history.append(
+            predictions,
+            brand_id=self.brand_id,
+            llm_backend=self.llm_backend,
+            is_mock=is_mock,
+            notes=notes,
         )
 
     # ===== Smoke test：直接喂 N 款 mock 款式 =====

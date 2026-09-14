@@ -94,14 +94,21 @@ with st.sidebar.expander(f"📌 {brand_cfg.brand_name}", expanded=True):
     st.write(f"**品类数：** {len(brand_cfg.category_registry.get('categories', []))}")
     st.write(f"**人设数：** {len(brand_cfg.personas)} 个身份三轴线")
     st.write(f"**校准轮次：** {n_calibration or '0（冷启动）'}")
+    try:
+        from src.history_store import HistoryStore
+        h = HistoryStore()
+        summary = h.get_summary(brand_cfg.brand_id)
+        st.write(f"**历史批次：** {summary['batches']} 批 / {summary['styles']} 款")
+    except Exception:
+        pass
 
 st.sidebar.divider()
 
 # --- 侧边栏：LLM 模式切换 ---
 llm_mode_label = st.sidebar.radio(
     "🤖 预测引擎",
-    options=["演示模式（mock）", "真实 LLM（百炼API）"],
-    help="演示模式下用伪随机数据跑通全链路，不需要API也能体验。真实模式需要 .env 里配置 DASHSCOPE_API_KEY。",
+    options=["真实 LLM（百炼API）", "演示模式（mock）"],
+    help="真实模式调用阿里云百炼 VLM/LLM API 评估款式（需要 .env 里的 DASHSCOPE_API_KEY）。演示模式用伪随机数据跑通全链路，仅用于本地调试。",
     index=0,
 )
 USE_REAL_LLM = (llm_mode_label == "真实 LLM（百炼API）")
@@ -550,6 +557,17 @@ def render_page_summary():
     if not preds:
         st.error("❌ 没有任何款式成功处理，请检查输入数据或 LLM 配置")
         return
+
+    # 持久化到历史库：跨批次累积价格/特征/分数分布
+    try:
+        pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend=st.session_state.llm_backend)
+        batch_id = pl.save_to_history(
+            preds,
+            notes=f"Streamlit批次: {st.session_state.get('batch_name', 'untitled')}",
+        )
+        st.caption(f"💾 已存入历史库 batch `{batch_id}`，供后续批次累积分布")
+    except Exception as e:
+        st.warning(f"⚠️ 历史库写入失败（不影响当前结果）: {e}")
 
     rows = []
     for p in preds:

@@ -7,6 +7,7 @@ fashion-hit-engine · v2.0 冒烟测试（离线·零成本）
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 from statistics import mean
@@ -230,9 +231,25 @@ def stage_c_assertions(preds: list[FullPrediction]) -> dict[str, float]:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="fashion-hit-engine v2.0 冒烟测试")
+    parser.add_argument(
+        "--save-history", action=argparse.BooleanOptionalAction,
+        default=True,
+        help="跑完后把 mock 结果写入 history.db，验证持久化链路（默认开启）",
+    )
+    args = parser.parse_args()
+
     preds, pl = stage_a_run_pipeline()
     loop_result = stage_b_run_3loop(preds, pl)
     metrics = stage_c_assertions(preds)
+
+    # 持久化链路验证（mock 数据也保存，用于确认 history_store 工作正常）
+    if args.save_history:
+        try:
+            batch_id = pl.save_to_history(preds, notes="quick_smoke_test mock run")
+            print(f"\n💾 历史库已记录：batch {batch_id}，共 {len(preds)} 款 mock 数据")
+        except Exception as e:
+            print(f"\n⚠️ 历史库写入失败（不影响冒烟结论）: {e}")
 
     # 清理测试期间生成的 calibrated yaml（避免下次冒烟自动加载"假权重"）
     cal_dir = ROOT / "brand_profiles" / "tongzhuang-outdoor" / "calibrated"
