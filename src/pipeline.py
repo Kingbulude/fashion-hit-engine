@@ -29,7 +29,7 @@ from .feature_extraction import (
     extract_style_features,
 )
 from .grading import assign_relative_grades, decide_grade
-from .llm_client import BailianClient, is_fatal_quota_error
+from .llm_client import BailianClient, ZhipuClient, is_fatal_quota_error
 from .persona_voting import run_persona_voting
 from .report import generate_backtest_summary, generate_markdown_report, generate_report
 from .types import (
@@ -298,7 +298,7 @@ class PredictionPipeline:
         self.feature_engine = FeatureExtractionEngine(
             brand_cfg=self.brand_cfg, llm_backend=llm_backend,
         )
-        self._client: BailianClient | None = None
+        self._client: BailianClient | ZhipuClient | None = None
 
         # ===== 加载 3Loop 校准产物（让校准权重真正生效）=====
         from .calibration_loader import load_calibration
@@ -323,14 +323,19 @@ class PredictionPipeline:
                  brand_id, llm_backend, self.calibration, len(self._history_prices))
 
     @property
-    def client(self) -> BailianClient:
+    def client(self) -> BailianClient | ZhipuClient:
         if self._client is None:
             try:
                 api_cfg = load_config(override_api_key=self.api_key).api
             except Exception:
                 from .config import APIConfig
                 api_cfg = APIConfig(dashscope_api_key=self.api_key or "")
-            self._client = BailianClient(api_cfg)
+            if self.llm_backend == "zhipu":
+                # 智谱（免费）：self.api_key 优先（UI 粘贴），其次 .env 的 ZHIPU_API_KEY
+                api_cfg.zhipu_api_key = self.api_key or api_cfg.zhipu_api_key
+                self._client = ZhipuClient(api_cfg)
+            else:
+                self._client = BailianClient(api_cfg)
         return self._client
 
     # ===== 三大引擎合成（调用 ensemble_engine）=====

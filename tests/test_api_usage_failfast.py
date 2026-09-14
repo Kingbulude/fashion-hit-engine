@@ -152,7 +152,7 @@ def test_app_has_usage_panel_and_abort_and_estimate():
     """app.py：用量仪表（指标+按模型分解）+ 额度中止 + 提交前预估"""
     assert "API 调用次数" in APP_SRC           # 用量指标
     assert "按模型分解" in APP_SRC             # per-model 分解
-    assert "额度不足中止" in APP_SRC           # 批次止损中止
+    assert "批次因 API 鉴权/额度问题中止" in APP_SRC   # 批次止损中止
     assert "预估本批 API 调用" in APP_SRC       # 提交前成本预估
     assert "from src.llm_client import is_fatal_quota_error" in APP_SRC
 

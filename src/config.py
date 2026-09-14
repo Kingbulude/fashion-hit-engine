@@ -22,6 +22,7 @@ BRAND_PROFILES_DIR = PROJECT_ROOT / "brand_profiles"
 @dataclass
 class APIConfig:
     dashscope_api_key: str = ""
+    zhipu_api_key: str = ""
     volc_api_key: str | None = None
     volc_endpoint: str | None = None
 
@@ -258,6 +259,7 @@ def load_config(
 
     api = APIConfig(
         dashscope_api_key=(override_api_key if override_api_key is not None else os.getenv("DASHSCOPE_API_KEY", "")),
+        zhipu_api_key=os.getenv("ZHIPU_API_KEY", ""),
         volc_api_key=os.getenv("VOLC_API_KEY"),
         volc_endpoint=os.getenv("VOLC_ENDPOINT"),
         feature_extraction_models=[

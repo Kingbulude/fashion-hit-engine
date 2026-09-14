@@ -107,48 +107,82 @@ with st.sidebar.expander(f"📌 {brand_cfg.brand_name}", expanded=True):
 
 st.sidebar.divider()
 
-# --- 侧边栏：百炼 API Key 输入（方式二：UI 直接粘贴） ---
-st.sidebar.subheader("🔑 API Key")
-api_key_input = st.sidebar.text_input(
-    "输入/粘贴百炼 API Key",
-    type="password",
-    value=st.session_state.get("dashscope_api_key", ""),
-    help="从 https://bailian.console.aliyun.com 获取；仅保存在当前浏览器会话，不上传服务器",
-    key="dashscope_api_key_input",
-)
-if api_key_input:
-    st.session_state.dashscope_api_key = api_key_input
-
-_api_key_from_session = st.session_state.get("dashscope_api_key", "").strip()
-
-# --- 侧边栏：LLM 模式切换 ---
+# --- 侧边栏：LLM 模式切换（智谱免费为默认） ---
 llm_mode_label = st.sidebar.radio(
     "🤖 预测引擎",
-    options=["真实 LLM（百炼API）", "演示模式（mock）"],
-    help="真实模式调用阿里云百炼 VLM/LLM API 评估款式（需要百炼 API Key）。演示模式用伪随机数据跑通全链路，仅用于本地调试。",
+    options=["智谱 GLM（免费）", "百炼 API（阿里云·付费）", "演示模式（mock）"],
+    help=(
+        "智谱：GLM-4.6V-Flash 视觉 + GLM-4.7-Flash 文本，均永久免费，"
+        "到 open.bigmodel.cn 注册即得 Key（无需信用卡）。"
+        "百炼：阿里云付费 API（每批约 2-6 元，免费额度已耗尽时慎选）。"
+        "演示模式用伪随机数据跑通全链路，仅用于本地调试。"
+    ),
     index=0,
 )
-USE_REAL_LLM = (llm_mode_label == "真实 LLM（百炼API）")
 
-# 检查真实LLM可用性：有没有API Key？
-_llm_backend = "dashscope" if USE_REAL_LLM else "mock"
-_api_key_fallback_reason: str | None = None
-if USE_REAL_LLM:
-    _api_key_present = bool(
-        os.getenv("DASHSCOPE_API_KEY", "").strip()
-        or _api_key_from_session
+# --- 侧边栏：API Key 输入（按所选后端显示对应输入框） ---
+st.sidebar.subheader("🔑 API Key")
+_zhipu_key_input = st.sidebar.text_input(
+    "智谱 API Key（免费）",
+    type="password",
+    value=st.session_state.get("zhipu_api_key", ""),
+    help="从 https://open.bigmodel.cn/usercenter/apikeys 免费创建；仅保存在当前浏览器会话",
+    key="zhipu_api_key_input",
+)
+if _zhipu_key_input:
+    st.session_state.zhipu_api_key = _zhipu_key_input
+
+_dashscope_key_input = ""
+if llm_mode_label == "百炼 API（阿里云·付费）":
+    _dashscope_key_input = st.sidebar.text_input(
+        "百炼 API Key（付费）",
+        type="password",
+        value=st.session_state.get("dashscope_api_key", ""),
+        help="从 https://bailian.console.aliyun.com 获取；按量计费",
+        key="dashscope_api_key_input",
     )
-    if not _api_key_present:
-        _api_key_fallback_reason = (
-            "你选择了「真实 LLM（百炼API）」，但未检测到百炼 API Key，"
-            "已自动回退到 mock 模式。请在上方 🔑 API Key 输入框粘贴 Key 后重新运行。"
-        )
-        st.sidebar.error(_api_key_fallback_reason)
-        _llm_backend = "mock"
+    if _dashscope_key_input:
+        st.session_state.dashscope_api_key = _dashscope_key_input
 
-# 暴露给全会话使用
+_zhipu_key_from_session = st.session_state.get("zhipu_api_key", "").strip()
+_dashscope_key_from_session = st.session_state.get("dashscope_api_key", "").strip()
+
+# --- 后端路由 + Key 校验（缺 Key 自动回退 mock） ---
+if llm_mode_label == "智谱 GLM（免费）":
+    _llm_backend = "zhipu"
+    _key_for_backend = (
+        _zhipu_key_from_session
+        or os.getenv("ZHIPU_API_KEY", "").strip()
+    )
+    _key_missing_hint = (
+        "你选择了「智谱 GLM（免费）」，但未检测到智谱 API Key，已自动回退到 mock 模式。"
+        "请到 https://open.bigmodel.cn/usercenter/apikeys 免费创建 Key 后粘贴到上方输入框。"
+    )
+elif llm_mode_label == "百炼 API（阿里云·付费）":
+    _llm_backend = "dashscope"
+    _key_for_backend = (
+        _dashscope_key_from_session
+        or os.getenv("DASHSCOPE_API_KEY", "").strip()
+    )
+    _key_missing_hint = (
+        "你选择了「百炼 API（付费）」，但未检测到百炼 API Key，已自动回退到 mock 模式。"
+        "请在上方输入框粘贴 Key。"
+    )
+else:
+    _llm_backend = "mock"
+    _key_for_backend = ""
+
+_api_key_fallback_reason: str | None = None
+if _llm_backend != "mock" and not _key_for_backend:
+    _api_key_fallback_reason = _key_missing_hint
+    st.sidebar.error(_api_key_fallback_reason)
+    _llm_backend = "mock"
+    _key_for_backend = ""
+
+# 暴露给全会话使用（_api_key_for_backend 与所选后端匹配）
 st.session_state.llm_backend = _llm_backend
 st.session_state.api_key_fallback_reason = _api_key_fallback_reason
+st.session_state.api_key_for_backend = _key_for_backend
 
 st.sidebar.title("🧭 导航")
 page = st.sidebar.radio("", PAGES, index=0)
@@ -462,19 +496,27 @@ def render_page_upload():
     # 提交前成本预估：让「额度去哪了」在下单前就可见（真实模式才显示）
     if can_start and _llm_backend != "mock" and df is not None:
         _per_style = 1 + len(brand_cfg.personas) * 2  # 1 次 VLM 特征 + 人设数 × 2 模型
-        st.caption(
-            f"💰 预估本批 API 调用：{len(df)} 款 × {_per_style} 次/款 ≈ "
-            f"**{len(df) * _per_style:,} 次**（1 次特征提取 + "
-            f"{len(brand_cfg.personas)} 人设 × 2 模型投票，每款）。"
-            f"百万 token 级消耗，请注意额度余额；额度耗尽会自动中止并提示。"
-        )
+        if _llm_backend == "zhipu":
+            st.caption(
+                f"🆓 预估本批 API 调用：{len(df)} 款 × {_per_style} 次/款 ≈ "
+                f"**{len(df) * _per_style:,} 次**（1 次特征提取 + "
+                f"{len(brand_cfg.personas)} 人设 × 2 模型投票，每款）。"
+                f"智谱免费模型（GLM-4.6V-Flash / GLM-4.7-Flash）**0 元**，不消耗额度。"
+            )
+        else:
+            st.caption(
+                f"💰 预估本批 API 调用：{len(df)} 款 × {_per_style} 次/款 ≈ "
+                f"**{len(df) * _per_style:,} 次**（1 次特征提取 + "
+                f"{len(brand_cfg.personas)} 人设 × 2 模型投票，每款）。"
+                f"百万 token 级消耗，请注意额度余额；额度耗尽会自动中止并提示。"
+            )
 
     col1, col2, _ = st.columns([2, 2, 4])
     with col1:
         if not can_start:
             _help = "先填批次名、上传Excel和图片，并解决上面的警告"
             if _fallback_reason:
-                _help = "你选择了真实 LLM 模式，请先粘贴百炼 API Key"
+                _help = "你选择了真实 LLM 模式，请先在侧边栏粘贴对应平台的 API Key"
             st.button("🚀 开始评估", disabled=True, use_container_width=True, help=_help)
         else:
             if st.button("🚀 开始评估", type="primary", use_container_width=True):
@@ -635,7 +677,7 @@ def render_page_summary():
                 pl = PredictionPipeline(
                     brand_id=brand_cfg.brand_id,
                     llm_backend=llm_backend,
-                    api_key=_api_key_from_session or None,
+                    api_key=st.session_state.get("api_key_for_backend", "") or None,
                 )
                 # run_one 会自动根据 llm_backend 决定走 mock 还是真实 LLM
                 # 真实模式下 image_paths_map 会注入到 info.images 供 VLM 读取图片
@@ -650,14 +692,22 @@ def render_page_summary():
                 if is_fatal_quota_error(err_msg):
                     remaining = [s.style_id for s in style_infos[current + 1:]]
                     for sid in remaining:
-                        prog["failed"][sid] = "已跳过（批次因 API 额度不足中止）"
+                        prog["failed"][sid] = "已跳过（批次因 API 鉴权/额度问题中止）"
                     prog["current"] = total
-                    prog["stage"] = "⛔ 已中止：API 额度不足"
+                    prog["stage"] = "⛔ 已中止：API 鉴权/额度问题"
+                    _backend_is_zhipu = (llm_backend == "zhipu")
+                    _repair_hint = (
+                        "智谱免费模型无额度概念，此错误通常是 **API Key 无效**——"
+                        "请到 [智谱 API Keys 页](https://open.bigmodel.cn/usercenter/apikeys) "
+                        "重新生成并粘贴到侧边栏。"
+                        if _backend_is_zhipu else
+                        "请到 [百炼控制台](https://bailian.console.aliyun.com) 充值或领取资源包后，"
+                        "重新上传批次。"
+                    )
                     st.error(
-                        f"⛔ 款 {info.style_id} 触发 **API 额度不足/鉴权失败**，批次已中止"
+                        f"⛔ 款 {info.style_id} 触发 **API 鉴权失败/额度不足**，批次已中止"
                         f"（剩余 {len(remaining)} 款跳过）。\n\n"
-                        f"请到 [百炼控制台](https://bailian.console.aliyun.com) 充值或领取资源包后，"
-                        f"重新上传批次。错误详情：`{err_msg[:300]}`"
+                        f"{_repair_hint}错误详情：`{err_msg[:300]}`"
                     )
                     st.rerun()
                     return
@@ -697,10 +747,11 @@ def render_page_summary():
             _pers = _meta.get("persona_models", ["qwen-max", "deepseek-v3"])
             _elapsed = _meta.get("elapsed_s")
             _elapsed_str = f" · 单款耗时约 {_elapsed}s" if _elapsed else ""
+            _backend_label = "智谱 GLM（免费）" if _meta.get("llm_backend") == "zhipu" else "阿里云百炼"
             st.caption(
-                f"🤖 **真实 VLM 评估** · 特征提取：{' / '.join(_feats)} | "
+                f"🤖 **真实 VLM 评估（{_backend_label}）** · 特征提取：{' / '.join(_feats)} | "
                 f"人设投票：{' / '.join(_pers)}{_elapsed_str}。"
-                f"此批次分数来自百炼 API 对图片的实际分析。"
+                f"此批次分数来自 {_backend_label} API 对图片的实际分析。"
             )
 
             # ---- API 用量仪表：本批调用了多少次、花了多少 token ----
@@ -749,7 +800,7 @@ def render_page_summary():
             pl = PredictionPipeline(
                 brand_id=brand_cfg.brand_id,
                 llm_backend=st.session_state.llm_backend,
-                api_key=_api_key_from_session or None,
+                api_key=st.session_state.get("api_key_for_backend", "") or None,
             )
             batch_id = pl.save_to_history(
                 preds,
@@ -1193,7 +1244,7 @@ def render_page_calibration():
                 pl = PredictionPipeline(
                     brand_id=brand_cfg.brand_id,
                     llm_backend=_llm_backend,
-                    api_key=_api_key_from_session or None,
+                    api_key=st.session_state.get("api_key_for_backend", "") or None,
                 )
                 loop_result = pl.run_backtest_calibration(
                     predictions=preds,
