@@ -65,6 +65,7 @@ class StyleInfo:
     season: str = ""            # 季节（春夏/秋冬）
     is_main_push: bool = False  # 是否主推
     is_live_stream: bool = False  # 是否直播重点
+    is_blind: bool = False  # 盲测组标记（见 src/blind_set.py）
 
 
 @dataclass

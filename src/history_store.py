@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     season TEXT,
     is_main_push INTEGER,
     is_live_stream INTEGER,
+    is_blind INTEGER DEFAULT 0,
     manual_grade TEXT,
     sales_qty REAL,
     -- 评分结果
@@ -116,6 +117,12 @@ class HistoryStore:
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(_CREATE_SQL)
+            # 迁移：旧库补 is_blind 列（默认0=非盲测）
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+            if "is_blind" not in cols:
+                conn.execute(
+                    "ALTER TABLE predictions ADD COLUMN is_blind INTEGER DEFAULT 0"
+                )
 
     # ---------- 写入 ----------
     def append(
@@ -144,6 +151,7 @@ class HistoryStore:
                 info.season or "",
                 1 if info.is_main_push else 0,
                 1 if info.is_live_stream else 0,
+                1 if info.is_blind else 0,
                 info.manual_grade or "",
                 float(info.sales_qty or 0),
                 float(p.grade.final_score),
@@ -173,7 +181,8 @@ class HistoryStore:
 
         cols = [
             "batch_id", "brand_id", "style_id", "created_at", "category", "price",
-            "season", "is_main_push", "is_live_stream", "manual_grade", "sales_qty",
+            "season", "is_main_push", "is_live_stream", "is_blind",
+            "manual_grade", "sales_qty",
             "final_score", "final_grade", "confidence", "recommended_channel",
             "voting_weighted_score", "voting_support_rate", "voting_opposition_rate",
             "voting_score_std", "natural_score", "live_score", "perceived_value",
@@ -252,6 +261,28 @@ class HistoryStore:
             "natural_score": [float(x) for x in df["natural_score"].dropna()],
             "live_score": [float(x) for x in df["live_score"].dropna()],
         }
+
+    def load_blind_comparison(
+        self,
+        brand_id: str,
+        include_mock: bool = False,
+    ) -> pd.DataFrame:
+        """返回盲测对照分析所需列（盲测组 + 对照组合并）。
+
+        列：style_id / is_blind / final_score / final_grade / manual_grade /
+            sales_qty / batch_id / created_at
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            query = (
+                "SELECT style_id, is_blind, final_score, final_grade, "
+                "manual_grade, sales_qty, batch_id, created_at "
+                "FROM predictions WHERE brand_id = ?"
+            )
+            params: list[Any] = [brand_id]
+            if not include_mock:
+                query += " AND is_mock = 0"
+            query += " ORDER BY created_at DESC"
+            return pd.read_sql_query(query, conn, params=params)
 
     def get_summary(self, brand_id: str) -> dict[str, Any]:
         """返回某品牌历史统计摘要。"""

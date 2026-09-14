@@ -442,6 +442,21 @@ def render_page_upload():
                 st.warning(w)
 
     st.divider()
+
+    # --- 盲测组设置（对照机制：见 src/blind_set.py / CONTEXT.md）---
+    with st.expander("🔬 盲测组设置（可选，建议开启）", expanded=False):
+        st.caption(
+            "每批次按品类分层随机抽取部分款为「盲测款」：AI 照常预测并落盘，"
+            "但报告/导出对运营打码，内审决策不受 AI 干扰。"
+            "销量回填后自动解锁对照：验证 AI 纯净准确率 + AI vs 人工分歧裁决。"
+        )
+        blind_enabled = st.toggle("启用盲测组", value=True, key="blind_enabled")
+        blind_ratio = st.slider(
+            "盲测比例", min_value=0.05, max_value=0.30, value=0.15,
+            step=0.05, disabled=not blind_enabled, key="blind_ratio",
+            help="业界对照试验惯例 10-20%，比例越大对照越准，但内审可参考的 AI 结论越少",
+        )
+
     col1, col2, _ = st.columns([2, 2, 4])
     with col1:
         if not can_start:
@@ -526,6 +541,18 @@ def render_page_upload():
                     ))
                     imgs = style_to_images.get(sid, [])
                     image_paths_map[sid] = [str(p) for p in imgs]
+
+                # --- 盲测组抽样（分层随机，seed=批次名保证确定性可复现）---
+                blind_ids: set[str] = set()
+                if blind_enabled:
+                    from src.blind_set import select_blind_set
+                    blind_ids = select_blind_set(
+                        style_infos, ratio=blind_ratio, seed=batch_name,
+                    )
+                    for info in style_infos:
+                        info.is_blind = info.style_id in blind_ids
+                st.session_state.blind_ids = blind_ids
+
                 st.session_state.style_infos = style_infos
                 st.session_state.image_paths_map = image_paths_map
                 st.session_state.preds = []
@@ -533,12 +560,19 @@ def render_page_upload():
                     "current": 0, "total": len(style_infos),
                     "stage": "开始评估…", "failed": {},
                 }
-                st.success("✅ 批次已提交！请切换到「📋 批次总表」页面查看进度和结果。")
+                if blind_ids:
+                    st.success(
+                        f"✅ 批次已提交！盲测组已抽取 {len(blind_ids)}/{len(style_infos)} 款"
+                        f"（🔒 款号：{'、'.join(sorted(blind_ids))}）。\n\n"
+                        f"请切换到「📋 批次总表」页面查看进度和结果。"
+                    )
+                else:
+                    st.success("✅ 批次已提交！请切换到「📋 批次总表」页面查看进度和结果。")
 
     with col2:
         if st.button("🧹 清空本次输入", use_container_width=True):
             for key in ("preds", "df_input", "style_to_images", "progress_info",
-                        "style_infos", "image_paths_map"):
+                        "style_infos", "image_paths_map", "blind_ids"):
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
@@ -661,26 +695,41 @@ def render_page_summary():
 
     rows = []
     for p in preds:
-        rows.append({
-            "款号": p.info.style_id,
-            "分级": p.grade.grade,
-            "综合分": round(p.grade.final_score, 1),
-            "自然分": round(p.channels.natural_score, 1),
-            "直播分": round(p.channels.live_score, 1),
-            "感知价值": round(p.channels.perceived_value, 1),
-            "价值匹配": round(p.channels.value_match, 2),
-            "价格风险": p.channels.price_risk,
-            "主推渠道": p.grade.recommended_channel,
-            "售价": p.info.price,
-        })
+        if p.info.is_blind:
+            # 盲测款：结论列打码（运营不可见，销量回填后在回测页解锁对照）
+            rows.append({
+                "款号": p.info.style_id,
+                "分级": "🔒 盲测",
+                "综合分": "🔒",
+                "自然分": "🔒",
+                "直播分": "🔒",
+                "感知价值": "🔒",
+                "价值匹配": "🔒",
+                "价格风险": "🔒",
+                "主推渠道": "🔒",
+                "售价": p.info.price,
+            })
+        else:
+            rows.append({
+                "款号": p.info.style_id,
+                "分级": p.grade.grade,
+                "综合分": round(p.grade.final_score, 1),
+                "自然分": round(p.channels.natural_score, 1),
+                "直播分": round(p.channels.live_score, 1),
+                "感知价值": round(p.channels.perceived_value, 1),
+                "价值匹配": round(p.channels.value_match, 2),
+                "价格风险": p.channels.price_risk,
+                "主推渠道": p.grade.recommended_channel,
+                "售价": p.info.price,
+            })
     df = pd.DataFrame(rows)
 
     col1, col2, col3 = st.columns(3)
     with col1:
         grade_filter = st.multiselect(
             "只看分级",
-            options=["S", "A+", "A", "P", "风险"],
-            default=["S", "A+", "A", "P", "风险"])
+            options=["S", "A+", "A", "P", "风险", "🔒 盲测"],
+            default=["S", "A+", "A", "P", "风险", "🔒 盲测"])
     with col2:
         risk_filter = st.multiselect(
             "价格风险", options=["低风险", "中风险", "高风险"],
@@ -717,10 +766,16 @@ def render_page_summary():
             use_container_width=True,
         )
         zip_buf = io.BytesIO()
+        n_blind_hidden = 0
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for p in preds:
+                if p.info.is_blind:
+                    n_blind_hidden += 1
+                    continue  # 盲测款不进报告包（对运营不可见）
                 md = render_single_report_markdown(p)
                 zf.writestr(f"{p.info.style_id}_报告.md", md)
+        if n_blind_hidden:
+            st.caption(f"🔒 {n_blind_hidden} 个盲测款未包含在报告包中")
         st.download_button(
             "⬇️ 打包下载全部单款报告.zip", data=zip_buf.getvalue(),
             file_name=f"{brand_cfg.brand_id}_{st.session_state.batch_name}_单款报告.zip",
@@ -749,6 +804,21 @@ def render_page_detail():
     selected = st.selectbox("款号", options=style_ids,
                             index=style_ids.index(selected) if selected in style_ids else 0)
     p = next(x for x in preds if x.info.style_id == selected)
+
+    # 盲测款：结论锁定（销量回填后在「📉 回测校准」页解锁对照）
+    if p.info.is_blind:
+        st.markdown(
+            f"### {p.info.style_id}  <span style='background:#6b7280;color:white;"
+            f"padding:3px 12px;border-radius:6px;font-weight:700;'>🔒 盲测中</span>",
+            unsafe_allow_html=True,
+        )
+        st.info(
+            "该款被抽入本批盲测组：AI 已完成完整预测并存档，但结论在内审阶段对运营不可见，"
+            "以保证内审决策不受 AI 干扰。**销量回填后**，到「📉 回测校准」页"
+            "「盲测组对照」区域解锁查看，并参与 AI vs 人工分歧裁决。"
+        )
+        st.caption(f"基本信息：品类 {p.info.category or '未标注'} · 售价 {p.info.price} 元 · {p.info.season or '季节未标注'}")
+        return
 
     g: GradeResult = p.grade
     color_map = {"S": "#ef4444", "A+": "#f59e0b", "A": "#22c55e", "P": "#6b7280"}
@@ -915,6 +985,88 @@ def render_page_calibration():
                     st.warning("⚠️ 识别到的销量值全为 0 — 请检查列是否匹配正确")
         except Exception as e:
             st.error(f"Excel读取失败：{e}")
+
+    # ---------- 盲测组对照（销量回填即解锁，不依赖 3Loop）----------
+    _has_blind = any(p.info.is_blind for p in preds) if preds else False
+    if _has_blind and truth_map_ready:
+        st.divider()
+        st.subheader("🔬 盲测组对照（AI 纯净准确率验证）")
+        try:
+            from src.blind_set import compare_blind_vs_control
+            _rows_b = []
+            for p in preds:
+                _sid = p.info.style_id
+                if _sid in truth_map_ready:
+                    _rows_b.append({
+                        "style_id": _sid,
+                        "is_blind": 1 if p.info.is_blind else 0,
+                        "final_score": float(p.grade.final_score),
+                        "final_grade": p.grade.grade,
+                        "manual_grade": p.info.manual_grade or "",
+                        "sales_qty": float(truth_map_ready[_sid]),
+                        "batch_id": "current",
+                        "created_at": "",
+                    })
+            bcr = compare_blind_vs_control(pd.DataFrame(_rows_b))
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("盲测款（已回填销量）", f"{bcr.n_blind} 个")
+            m2.metric("🔒 盲测组 Spearman（纯净）",
+                      f"{bcr.blind_spearman:+.3f}" if bcr.blind_spearman is not None else "样本不足",
+                      help="盲测款内审时运营未看 AI 结论，其销量未被 AI 建议放大——"
+                           "这是 AI 预测能力的真实基线")
+            m3.metric("👁️ 对照组 Spearman",
+                      f"{bcr.control_spearman:+.3f}" if bcr.control_spearman is not None else "样本不足",
+                      help="非盲测款：运营内审时参考了 AI 结论 → 销量含投放放大效应")
+            if bcr.blind_spearman is not None and bcr.control_spearman is not None:
+                _gap = bcr.control_spearman - bcr.blind_spearman
+                st.caption(
+                    f"两组差值 {_gap:+.3f}：对照组高于盲测组的部分≈「AI 建议+运营执行」"
+                    f"带来的放大效应；盲测组偏低不代表系统不准，而是去掉了投放杠杆。"
+                )
+            else:
+                st.info(f"ℹ️ {bcr.note}：盲测组至少需 5 个已回填销量的款才能出纯净基线。")
+
+            # AI vs 人工分歧裁决表（盲测款专属：人工判断未被 AI 带偏）
+            if bcr.disputes:
+                st.markdown("**⚖️ AI vs 人工分歧裁决**（仅盲测款，按实际销量裁决谁对）")
+                st.dataframe(pd.DataFrame(bcr.disputes),
+                             use_container_width=True, hide_index=True)
+                d1, d2, d3 = st.columns(3)
+                d1.metric("🤖 AI 判断对", f"{bcr.ai_wins} 款",
+                          help="AI 分级更接近实际销量表现的分歧款")
+                d2.metric("👤 人工判断对", f"{bcr.human_wins} 款")
+                d3.metric("➖ 无法裁决（中段）", f"{bcr.tie} 款")
+                st.caption(
+                    "这是系统价值的直接证据：AI 对而人工错的款 = 下一季可放大的选款信号；"
+                    "人工对而 AI 错的款 = 喂给 3Loop 的校准样本。"
+                )
+            elif bcr.n_blind > 0:
+                st.caption("本批盲测款无 AI/人工分级分歧（或人工分级列缺失），无裁决项。")
+
+            # 解锁盲测款完整结论（销量已回填）
+            _blind_preds = [p for p in preds if p.info.is_blind]
+            if _blind_preds:
+                with st.expander(f"🔓 解锁查看本批 {len(_blind_preds)} 个盲测款完整 AI 结论"):
+                    _unlock_rows = []
+                    for p in _blind_preds:
+                        _unlock_rows.append({
+                            "款号": p.info.style_id,
+                            "AI分级": p.grade.grade,
+                            "AI综合分": round(p.grade.final_score, 1),
+                            "人工分级": p.info.manual_grade or "—",
+                            "实际销量": truth_map_ready.get(p.info.style_id, "—"),
+                        })
+                    st.dataframe(pd.DataFrame(_unlock_rows),
+                                 use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.warning(f"⚠️ 盲测组对照分析失败：{e}")
+    elif _has_blind and preds:
+        st.divider()
+        st.info(
+            "🔬 本批含盲测款：上传带真实销量的 Excel 后，"
+            "「盲测组对照」将自动解锁（AI 纯净准确率 + AI vs 人工分歧裁决）。"
+        )
 
     # ---------- 回测校准按钮（3Loop内核：Spearman对比+残差分离）----------
     do_3loop = st.button("🤖 运行3Loop核心优化内核 + 残差分离",
