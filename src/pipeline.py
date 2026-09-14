@@ -271,6 +271,19 @@ class PredictionPipeline:
         )
         self._client: BailianClient | None = None
 
+        # ===== 加载 3Loop 校准产物（让校准权重真正生效）=====
+        from .calibration_loader import load_calibration
+        self.calibration = load_calibration(self.brand_cfg.calibrated_dir)
+        # 把校准权重注入 brand_cfg（synthesise_final / _default_aggregate 会读）
+        if self.calibration.engine_weights:
+            self.brand_cfg.engine_weights = self.calibration.engine_weights
+        if self.calibration.channel_split:
+            self.brand_cfg.default_channel_split = self.calibration.channel_split
+        if self.calibration.persona_weights:
+            self.brand_cfg.personas_weights = self.calibration.persona_weights
+        log.info("Pipeline init 完成: brand=%s, llm=%s, calibration=%s",
+                 brand_id, llm_backend, self.calibration)
+
     @property
     def client(self) -> BailianClient:
         if self._client is None:
