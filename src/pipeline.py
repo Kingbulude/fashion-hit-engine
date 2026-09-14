@@ -18,6 +18,8 @@ import argparse
 import logging
 import sys
 import zlib
+
+import pandas as pd
 from pathlib import Path
 
 from .channel_scoring import calculate_channel_scores
@@ -29,6 +31,7 @@ from .batch_store import (
     append_batch,
     get_cumulative_sales_lookup,
     get_cumulative_predictions,
+    build_cumulative_history_df,
 )
 from .feature_extraction import (
     FeatureExtractionEngine,
@@ -544,7 +547,36 @@ class PredictionPipeline:
             predictions = self.run_smoke_test_data(n=10)
 
         from .core.optimization_kernel import build_history_df, run_all_loops
-        history_df = build_history_df(predictions, sales_lookup=sales_lookup)
+
+        # ===== 跨批次记忆：历史销量作为兜底 =====
+        # 优先级：显式 sales_lookup 参数 > info.sales_qty > batches.csv 历史销量
+        cumulative_sales = get_cumulative_sales_lookup(self.brand_cfg.calibrated_dir)
+        if cumulative_sales:
+            merged_lookup = {**cumulative_sales, **(sales_lookup or {})}
+            if sales_lookup is None:
+                merged_lookup = merged_lookup or None
+        else:
+            merged_lookup = sales_lookup
+        if cumulative_sales:
+            log.info("📚 合入历史销量 %d 款（batches.csv）", len(cumulative_sales))
+
+        history_df = build_history_df(predictions, sales_lookup=merged_lookup)
+
+        # ===== 跨批次记忆：合并历史批次的回归样本 =====
+        # 当前批次的款若与历史重复，当前为准（放在后面，drop_duplicates keep="last"）
+        hist_from_csv = build_cumulative_history_df(self.brand_cfg.calibrated_dir)
+        if not hist_from_csv.empty:
+            n_before = len(hist_from_csv)
+            # 如果显式传了 sales_lookup，用最新值覆盖历史行的销量
+            if merged_lookup:
+                hist_from_csv["sales"] = hist_from_csv.apply(
+                    lambda r: float(merged_lookup.get(r["style_id"], r["sales"])),
+                    axis=1,
+                )
+            history_df = pd.concat([hist_from_csv, history_df], ignore_index=True)
+            history_df = history_df.drop_duplicates(subset="style_id", keep="last")
+            log.info("📚 回归样本: 历史 %d 款 + 当前 %d 款 → 去重后 %d 款",
+                     n_before, len(predictions), len(history_df))
 
         # 销量全 0 → run_all_loops 无信号，提前拦截
         sales_col = "sales"

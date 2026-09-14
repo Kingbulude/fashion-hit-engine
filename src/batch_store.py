@@ -22,6 +22,10 @@ from .types import FullPrediction
 log = logging.getLogger(__name__)
 
 # CSV 列 schema（版本化）
+# v1.1 起追加 F01-F10 特征分 + P01-P30 人设分，
+# 使 batches.csv 可直接重建 3Loop 校准所需的完整回归样本（跨批次记忆）。
+_FEATURE_COLS = [f"F{i:02d}" for i in range(1, 11)]
+_PERSONA_COLS = [f"P{i:02d}" for i in range(1, 31)]
 _COLUMNS = [
     "batch_id",        # UUID，一批一组
     "batch_name",      # 用户给的批次名，例如 "2026春第一批"
@@ -47,6 +51,8 @@ _COLUMNS = [
     "manual_grade",    # 人工分级（如果有）
     "sell_through_pct",
     "llm_backend",     # mock / aliyun_dashscope
+    *_FEATURE_COLS,    # F01-F10 特征分（3Loop Loop1 回归特征）
+    *_PERSONA_COLS,    # P01-P30 人设分（Loop2 回归特征）
 ]
 
 
@@ -64,6 +70,10 @@ def load_batches(calibrated_dir: Path | str) -> pd.DataFrame:
         return pd.DataFrame(columns=_COLUMNS)
     try:
         df = pd.read_csv(path, dtype={"style_id": str})
+        # 旧版 CSV 缺 F/P 列 → 补空列，保证下游列访问不炸
+        for col in _COLUMNS:
+            if col not in df.columns:
+                df[col] = None
         log.info("📥 加载历史批次: %d 条预测, %d 款有销量",
                  len(df), int(df["sales_qty"].notna().sum()) if "sales_qty" in df.columns else 0)
         return df
@@ -87,6 +97,13 @@ def append_batch(
     ts = datetime.now().isoformat(timespec="seconds")
     rows = []
     for p in predictions:
+        # F01-F10：按 features 字典顺序取前 10 个；与 build_history_df 保持一致
+        feat_scores = [f.score for f in list(p.features.features.values())[:10]]
+        feat_scores += [None] * (10 - len(feat_scores))
+        # P01-P30：votes 的 final_score；不足留空
+        p_scores = [v.final_score for v in (p.voting.votes or [])[:30]]
+        p_scores += [None] * (30 - len(p_scores))
+
         rows.append({
             "batch_id": bid,
             "batch_name": batch_name,
@@ -112,6 +129,8 @@ def append_batch(
             "manual_grade": p.info.manual_grade or "",
             "sell_through_pct": p.info.sell_through_pct,
             "llm_backend": llm_backend,
+            **dict(zip(_FEATURE_COLS, feat_scores)),
+            **dict(zip(_PERSONA_COLS, p_scores)),
         })
 
     new_df = pd.DataFrame(rows, columns=_COLUMNS)
@@ -120,7 +139,13 @@ def append_batch(
     if path.exists():
         try:
             old_df = pd.read_csv(path, dtype={"style_id": str})
-            combined = pd.concat([old_df, new_df], ignore_index=True)
+            # 旧版缺列补齐，避免 concat 后列错位
+            for col in _COLUMNS:
+                if col not in old_df.columns:
+                    old_df[col] = None
+            combined = pd.concat(
+                [old_df[_COLUMNS], new_df], ignore_index=True
+            )
             combined = combined.drop_duplicates(
                 subset=["batch_id", "style_id"], keep="last"
             )
@@ -169,3 +194,69 @@ def get_cumulative_predictions(
     if llm_backend_filter and "llm_backend" in df.columns:
         df = df[df["llm_backend"] == llm_backend_filter]
     return df
+
+
+def build_cumulative_history_df(
+    calibrated_dir: Path | str,
+    sales_col: str = "sales",
+    min_sales: float = 0.0,
+) -> pd.DataFrame:
+    """从 batches.csv 重建 3Loop 校准所需的完整 history_df（跨批次记忆核心）。
+
+    输出列与 optimization_kernel.build_history_df 对齐：
+        style_id, F01-F10, P01-P30,
+        persona_score, channel_score, price_value_score,
+        natural_score, live_score, sales
+
+    规则：
+    - 只保留 F01 非空的行（v1.1 之后写入的完整行；旧版摘要行无法参与回归）
+    - 同一 style_id 跨批次只保留最新一条（时间戳排序后去重）
+    - sales 取 sales_qty；<= min_sales 的行保留但销量视为 0（由调用方决定是否过滤）
+
+    Returns:
+        DataFrame；无可用历史时返回空 DataFrame（只含列头）。
+    """
+    out_cols = (
+        ["style_id"] + _FEATURE_COLS + _PERSONA_COLS +
+        ["persona_score", "channel_score", "price_value_score",
+         "natural_score", "live_score", sales_col]
+    )
+    df = load_batches(calibrated_dir)
+    if df.empty:
+        return pd.DataFrame(columns=out_cols)
+
+    # 只用完整行（有 F01）参与回归；旧版摘要行只有引擎分，不够
+    if "F01" not in df.columns:
+        return pd.DataFrame(columns=out_cols)
+    df = df[df["F01"].notna()].copy()
+    if df.empty:
+        return pd.DataFrame(columns=out_cols)
+
+    # 同一 style_id 跨批次保留最新
+    df = df.sort_values("timestamp")
+    df = df.drop_duplicates(subset="style_id", keep="last")
+
+    out = pd.DataFrame()
+    out["style_id"] = df["style_id"].astype(str)
+    for c in _FEATURE_COLS + _PERSONA_COLS:
+        out[c] = pd.to_numeric(df[c], errors="coerce")
+    out["persona_score"] = pd.to_numeric(df["voting_weighted"], errors="coerce")
+    natural = pd.to_numeric(df["natural_score"], errors="coerce")
+    live = pd.to_numeric(df["live_score"], errors="coerce")
+    out["channel_score"] = (natural + live) / 2
+    out["price_value_score"] = pd.to_numeric(df["perceived_value"], errors="coerce")
+    out["natural_score"] = natural
+    out["live_score"] = live
+    out[sales_col] = pd.to_numeric(df["sales_qty"], errors="coerce").fillna(0.0)
+    out.loc[out[sales_col] <= min_sales, sales_col] = 0.0
+
+    # P 列缺失值用 persona_score 兜底（与 build_history_df 一致）
+    for c in _PERSONA_COLS:
+        out[c] = out[c].fillna(out["persona_score"])
+    # F 列缺失用 5.0 兜底（与 build_history_df 一致）
+    for c in _FEATURE_COLS:
+        out[c] = out[c].fillna(5.0)
+
+    log.info("📚 跨批次历史样本: %d 款（%d 款有销量）",
+             len(out), int((out[sales_col] > 0).sum()))
+    return out.reset_index(drop=True)
