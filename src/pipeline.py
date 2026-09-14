@@ -24,6 +24,12 @@ from .channel_scoring import calculate_channel_scores
 from .config import AppConfig, load_brand_profile, load_config
 from .core.ensemble_engine import synthesise_final_score
 from .data_io import load_styles_from_excel, read_styles_excel, save_predictions_xlsx
+from .batch_store import (
+    load_batches,
+    append_batch,
+    get_cumulative_sales_lookup,
+    get_cumulative_predictions,
+)
 from .feature_extraction import (
     FeatureExtractionEngine,
     extract_style_features,

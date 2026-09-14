@@ -527,6 +527,23 @@ def render_page_summary():
             prog["current"] = current + 1
             if prog["current"] >= total:
                 prog["stage"] = "全部完成 ✓"
+                # ===== 批次完成 → 自动持久化到 batches.csv =====
+                try:
+                    from src.batch_store import append_batch
+                    _llm_backend = st.session_state.get("llm_backend", "mock")
+                    _batch_name = st.session_state.get("batch_name", "")
+                    _brand_cfg = st.session_state.get("brand_cfg")
+                    if _brand_cfg and len(st.session_state.preds) > 0:
+                        append_batch(
+                            calibrated_dir=_brand_cfg.calibrated_dir,
+                            predictions=st.session_state.preds,
+                            batch_name=_batch_name,
+                            llm_backend=_llm_backend,
+                        )
+                        log.info("✅ 批次已持久化: %s (%d款, backend=%s)",
+                                 _batch_name, len(st.session_state.preds), _llm_backend)
+                except Exception as _e:
+                    log.warning("批次持久化失败（不影响预测结果）: %s", _e)
             time.sleep(0.1)
             st.rerun()
         return
