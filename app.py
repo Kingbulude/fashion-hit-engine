@@ -136,7 +136,7 @@ if "preds" not in st.session_state:         # list[FullPrediction]
 if "df_input" not in st.session_state:      # 原始输入Excel
     st.session_state.df_input = None
 if "progress_info" not in st.session_state:  # 进度显示用
-    st.session_state.progress_info = {"current": 0, "total": 0, "stage": "空闲"}
+    st.session_state.progress_info = {"current": 0, "total": 0, "stage": "空闲", "failed": {}}
 if "style_to_images" not in st.session_state:  # 款号 -> list[图片路径]
     st.session_state.style_to_images = {}
 
@@ -431,7 +431,8 @@ def render_page_upload():
                 st.session_state.image_paths_map = image_paths_map
                 st.session_state.preds = []
                 st.session_state.progress_info = {
-                    "current": 0, "total": len(style_infos), "stage": "开始评估…"
+                    "current": 0, "total": len(style_infos),
+                    "stage": "开始评估…", "failed": {},
                 }
                 st.success("✅ 批次已提交！请切换到「📋 批次总表」页面查看进度和结果。")
 
@@ -460,6 +461,9 @@ def render_page_summary():
     image_paths_map = st.session_state.image_paths_map
     prog = st.session_state.progress_info
 
+    # 确保 progress_info 有 failed 字典
+    prog.setdefault("failed", {})
+
     total = prog["total"] or len(style_infos)
     current = prog["current"]
     if current < total:
@@ -476,8 +480,12 @@ def render_page_summary():
                 # 真实模式下 image_paths_map 会注入到 info.images 供 VLM 读取图片
                 pred = pl.run_one(info, image_paths_map=image_paths_map)
                 st.session_state.preds.append(pred)
+                # 成功 → 如果之前有失败记录，清除
+                prog["failed"].pop(info.style_id, None)
             except Exception as e:
-                st.warning(f"⚠️ {info.style_id} 处理失败：{e}")
+                err_msg = f"{type(e).__name__}: {e}"
+                prog["failed"][info.style_id] = err_msg
+                st.warning(f"⚠️ 款 {info.style_id} 处理失败：{err_msg}")
             prog["current"] = current + 1
             if prog["current"] >= total:
                 prog["stage"] = "全部完成 ✓"
@@ -485,9 +493,24 @@ def render_page_summary():
             st.rerun()
         return
 
-    st.success(f"✅ 全部完成，共 {total} 款")
     preds: list[FullPrediction] = st.session_state.preds
+    failed = prog.get("failed", {})
+    n_success = len(preds)
+    n_failed = len(failed)
+
+    if n_failed > 0:
+        st.warning(
+            f"⚠️ 批次处理完成，但有 **{n_failed}/{total}** 款处理失败！"
+            f"成功 {n_success} 款，失败 {n_failed} 款。"
+        )
+        with st.expander(f"查看 {n_failed} 款失败详情"):
+            for sid, err in failed.items():
+                st.markdown(f"- **{sid}**：`{err}`")
+    else:
+        st.success(f"✅ 全部完成，共 {total} 款（成功 {n_success}，失败 0）")
+
     if not preds:
+        st.error("❌ 没有任何款式成功处理，请检查输入数据或 LLM 配置")
         return
 
     rows = []
@@ -509,7 +532,9 @@ def render_page_summary():
     col1, col2, col3 = st.columns(3)
     with col1:
         grade_filter = st.multiselect(
-            "只看分级", options=["S", "A+", "A", "P"], default=["S", "A+", "A", "P"])
+            "只看分级",
+            options=["S", "A+", "A", "P", "风险"],
+            default=["S", "A+", "A", "P", "风险"])
     with col2:
         risk_filter = st.multiselect(
             "价格风险", options=["低风险", "中风险", "高风险"],
@@ -517,8 +542,10 @@ def render_page_summary():
     with col3:
         channel_filter = st.multiselect(
             "主推渠道",
-            options=["自然优先", "直播优先", "双渠道均衡", "高风险不推"],
-            default=["自然优先", "直播优先", "双渠道均衡"])
+            options=["自然流量优先", "直播带货优先", "双渠道均衡",
+                     "设计调性款（不做主推）", "高风险不推"],
+            default=["自然流量优先", "直播带货优先", "双渠道均衡",
+                     "设计调性款（不做主推）", "高风险不推"])
     dff = df[
         df["分级"].isin(grade_filter)
         & df["价格风险"].isin(risk_filter)
@@ -583,7 +610,8 @@ def render_page_detail():
     st.markdown(
         f"### {p.info.style_id}"
         f"  <span style='color:gray;font-weight:normal'>综合评分</span>"
-        f"  **{g.final_score:.1f} / 10**"
+        f"  **{g.final_score:.1f} / 100**"
+        f"  <span style='color:gray;font-size:13px'>（置信度 {g.confidence:.0%}）</span>"
         f"  <span style='background:{c};color:white;padding:3px 10px;border-radius:6px;font-weight:700;'>{g.grade}级</span>"
         f"  <span style='color:#6366f1;'>主推：{g.recommended_channel}</span>",
         unsafe_allow_html=True,
@@ -603,10 +631,27 @@ def render_page_detail():
         else:
             st.caption("（无图片）")
 
+        # —— 优势 / 劣势（来自 GradeResult.strengths / weaknesses）——
+        st.subheader("🏆 优劣势速览")
+        strength_items = g.strengths or []
+        weakness_items = g.weaknesses or []
+        if strength_items:
+            with st.expander(f"✅ 优势（{len(strength_items)}）", expanded=True):
+                for s in strength_items[:5]:
+                    st.markdown(f"- {s}")
+        else:
+            st.caption("（暂无突出优势）")
+        if weakness_items:
+            with st.expander(f"⚠️ 劣势（{len(weakness_items)}）", expanded=True):
+                for w in weakness_items[:5]:
+                    st.markdown(f"- {w}")
+        else:
+            st.caption("（暂无明显劣势）")
+
     with right:
         with st.expander("📝 基本信息", expanded=False):
             st.write(f"品类：{p.info.category}   售价：¥{p.info.price:.0f}   季节：{p.info.season}")
-            st.write(f"FAB：{str(p.info.fab_text or p.info.fab_description)[:300]}…")
+            st.write(f"FAB：{str(p.info.fab_description or '（无FAB描述）')[:300]}…")
 
         st.subheader("🎯 10特征BARS评分")
         feat_rows = []
@@ -618,17 +663,18 @@ def render_page_detail():
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("👥 人设投票")
-            st.metric("平均评分", f"{p.voting.avg_score:.2f}")
-            st.metric("S率", f"{p.voting.s_rate:.0%}")
+            st.metric("加权总分", f"{p.voting.weighted_score:.2f}")
+            st.metric("支持率", f"{p.voting.support_rate:.0%}")
             st.metric("反对率", f"{p.voting.opposition_rate:.0%}")
+            st.metric("分数标准差", f"{p.voting.score_std:.2f}")
             with st.expander("支持/反对理由"):
-                if p.voting.reasons_support:
+                if p.voting.top_buy_reasons:
                     st.markdown("**支持理由 TOP：**")
-                    for r in p.voting.reasons_support[:3]:
+                    for r in p.voting.top_buy_reasons[:3]:
                         st.write(f"  ✓ {r}")
-                if p.voting.reasons_oppose:
+                if p.voting.top_oppose_reasons:
                     st.markdown("**反对理由 TOP：**")
-                    for r in p.voting.reasons_oppose[:3]:
+                    for r in p.voting.top_oppose_reasons[:3]:
                         st.write(f"  ✗ {r}")
         with col2:
             st.subheader("🛒 双渠道评分")
@@ -642,14 +688,21 @@ def render_page_detail():
         st.subheader("⚖️ 三大引擎综合")
         engine_df = pd.DataFrame({
             "引擎": ["人设投票", "双渠道评分(自然)", "双渠道评分(直播)", "价格价值"],
-            "得分": [p.voting.avg_score, p.channels.natural_score,
+            "得分": [p.voting.weighted_score, p.channels.natural_score,
                      p.channels.live_score, p.channels.perceived_value],
         })
         st.bar_chart(engine_df, x="引擎", y="得分", color="#a855f7", height=250, use_container_width=True)
 
-        st.subheader("💡 改款建议")
-        for i, s in enumerate(g.improvement_suggestions or [], 1):
-            st.write(f"{i}. {s}")
+        # —— 消费者洞察 + 改款建议（来自 GradeResult）——
+        st.subheader("💡 消费者洞察")
+        st.info(g.consumer_insights or "暂无人设洞察")
+
+        st.subheader("🔧 改款建议")
+        if g.improvements:
+            for i, s in enumerate(g.improvements, 1):
+                st.write(f"{i}. {s}")
+        else:
+            st.caption("（暂无改款建议）")
 
     st.divider()
     md_text = render_single_report_markdown(p)
