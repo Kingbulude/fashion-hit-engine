@@ -129,20 +129,23 @@ USE_REAL_LLM = (llm_mode_label == "真实 LLM（百炼API）")
 
 # 检查真实LLM可用性：有没有API Key？
 _llm_backend = "dashscope" if USE_REAL_LLM else "mock"
+_api_key_fallback_reason: str | None = None
 if USE_REAL_LLM:
     _api_key_present = bool(
         os.getenv("DASHSCOPE_API_KEY", "").strip()
         or _api_key_from_session
     )
     if not _api_key_present:
-        st.sidebar.warning(
-            "⚠️ 没检测到百炼 API Key，将自动回退到 mock 模式。\n"
-            "请在上方输入框粘贴 API Key，或在项目根目录 .env 文件设置 DASHSCOPE_API_KEY。"
+        _api_key_fallback_reason = (
+            "你选择了「真实 LLM（百炼API）」，但未检测到百炼 API Key，"
+            "已自动回退到 mock 模式。请在上方 🔑 API Key 输入框粘贴 Key 后重新运行。"
         )
+        st.sidebar.error(_api_key_fallback_reason)
         _llm_backend = "mock"
 
 # 暴露给全会话使用
 st.session_state.llm_backend = _llm_backend
+st.session_state.api_key_fallback_reason = _api_key_fallback_reason
 
 st.sidebar.title("🧭 导航")
 page = st.sidebar.radio("", PAGES, index=0)
@@ -415,10 +418,18 @@ def render_page_upload():
         except Exception as e:
             st.error(f"Excel读取失败：{e}")
 
+    # 真实模式必须配 API Key，否则禁止开始（避免用户以为在调真实 LLM）
+    _llm_backend = st.session_state.get("llm_backend", "mock")
+    _fallback_reason = st.session_state.get("api_key_fallback_reason")
+
     can_start = (
         bool(batch_name) and df is not None and df.shape[0] > 0
         and bool(style_ids_from_images) and not image_warnings
+        and (_llm_backend != "dashscope" or _fallback_reason is None)
     )
+
+    if _fallback_reason:
+        st.error(f"🚨 {_fallback_reason}")
 
     if df is not None and style_ids_from_images:
         warns = validate_inputs(df, style_ids_from_images, style_to_images)
@@ -433,8 +444,10 @@ def render_page_upload():
     col1, col2, _ = st.columns([2, 2, 4])
     with col1:
         if not can_start:
-            st.button("🚀 开始评估", disabled=True, use_container_width=True,
-                      help="先填批次名、上传Excel和图片，并解决上面的警告")
+            _help = "先填批次名、上传Excel和图片，并解决上面的警告"
+            if _fallback_reason:
+                _help = "你选择了真实 LLM 模式，请先粘贴百炼 API Key"
+            st.button("🚀 开始评估", disabled=True, use_container_width=True, help=_help)
         else:
             if st.button("🚀 开始评估", type="primary", use_container_width=True):
                 st.session_state.batch_name = batch_name
@@ -514,6 +527,16 @@ def render_page_summary():
     render_breadcrumb(suffix="📋 批次总表")
     st.title(f"📋 批次总表"
              f" {(' · ' + st.session_state.batch_name) if st.session_state.batch_name else ''}")
+
+    # 若真实模式因缺 Key 回退到 mock，必须在主区域醒目提示，避免用户误以为调了 API
+    _fallback_reason = st.session_state.get("api_key_fallback_reason")
+    if _fallback_reason:
+        st.error(f"🚨 {_fallback_reason}")
+        st.warning(
+            "在 mock 模式下，所有分数都是本地随机生成的，跟真实销量无关，"
+            "也就无法通过 3Loop 校准发现错误。请粘贴 API Key 后重新上传批次。"
+        )
+        # 不 return，允许用户查看已生成的假结果，但不再继续处理
 
     if "style_infos" not in st.session_state or not st.session_state.style_infos:
         st.info("还没有批次在运行。请到「📤 上传批次」提交评估。")
