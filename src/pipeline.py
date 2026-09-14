@@ -277,10 +277,14 @@ class PredictionPipeline:
         # 把校准权重注入 brand_cfg（synthesise_final / _default_aggregate 会读）
         if self.calibration.engine_weights:
             self.brand_cfg.engine_weights = self.calibration.engine_weights
+        # channel_split 用独立属性避免覆盖默认值
         if self.calibration.channel_split:
-            self.brand_cfg.default_channel_split = self.calibration.channel_split
+            self.brand_cfg._calibrated_channel_split = self.calibration.channel_split
         if self.calibration.persona_weights:
             self.brand_cfg.personas_weights = self.calibration.persona_weights
+        # feature_biases 存起来，run_one 时乘到特征分上
+        if self.calibration.feature_biases:
+            self.brand_cfg._feature_biases = self.calibration.feature_biases
         log.info("Pipeline init 完成: brand=%s, llm=%s, calibration=%s",
                  brand_id, llm_backend, self.calibration)
 
@@ -307,15 +311,20 @@ class PredictionPipeline:
             "live_stream": channels.live_score,
         }
         pv_norm = (channels.value_match + 1.0) * 5.0
-        engine_weights = self.brand_cfg.default_engine_weights
-        if self.brand_cfg.engine_weights:
+        # engine_weights: 默认 → 校准覆盖
+        engine_weights = dict(self.brand_cfg.default_engine_weights or {})
+        if getattr(self.brand_cfg, "engine_weights", None):
             engine_weights = {**engine_weights, **self.brand_cfg.engine_weights}
+        # channel_split: 默认 0.5/0.5 → 校准覆盖（Loop3 产物）
+        channel_split = dict(self.brand_cfg.default_channel_split or {"natural": 0.5, "live_stream": 0.5})
+        if getattr(self.brand_cfg, "_calibrated_channel_split", None):
+            channel_split = {**channel_split, **self.brand_cfg._calibrated_channel_split}
         return synthesise_final_score(
             persona_score,
             channel_scores,
             pv_norm,
             engine_weights=engine_weights,
-            channel_split=self.brand_cfg.default_channel_split,
+            channel_split=channel_split,
         )
 
     # ===== mock 人设投票（不依赖LLM，用于smoke test）=====
@@ -405,6 +414,16 @@ class PredictionPipeline:
             feats = self.feature_engine.extract_mock(
                 info.style_id, fixed_feature_scores=fixed_feature_scores
             )
+            # ===== 应用 Loop1 feature_biases（校准偏置）=====
+            biases = getattr(self.brand_cfg, "_feature_biases", None)
+            if biases:
+                # biases key 是短名 "F01"，feats key 是 "F01_silhouette" → 前缀匹配
+                for feat_id, feat in feats.features.items():
+                    bias = biases.get(feat_id) or biases.get(feat_id[:3], 1.0)
+                    if abs(bias - 1.0) > 0.001:
+                        feat.score = round(
+                            clamp(feat.score * bias, 0.0, 10.0), 3
+                        )
             voting = self._mock_voting(info.style_id, feats)
             channels, _debug = calculate_channel_scores(
                 info, feats, voting,
