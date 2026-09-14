@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .config import APIConfig
+
+log = logging.getLogger(__name__)
 
 
 # ========== 调用结果统一结构 ==========
@@ -67,6 +70,64 @@ class RateLimiter:
         self._last_refill = time.time()
 
 
+# ========== API 用量统计（钱花哪了，一眼可见）==========
+class UsageTracker:
+    """按模型累计 API 调用次数与 token 消耗（从响应 usage 字段取）。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.by_model: dict[str, dict[str, int]] = {}
+
+    def record(self, model: str, usage: dict | None) -> None:
+        u = usage or {}
+        self.calls += 1
+        it = int(u.get("input_tokens", 0) or 0)
+        ot = int(u.get("output_tokens", 0) or 0)
+        self.input_tokens += it
+        self.output_tokens += ot
+        m = self.by_model.setdefault(
+            model, {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+        )
+        m["calls"] += 1
+        m["input_tokens"] += it
+        m["output_tokens"] += ot
+
+    def take(self) -> dict[str, Any]:
+        """快照当前用量并清零（批次内按款切分用）。"""
+        snap = {
+            "calls": self.calls,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "by_model": {k: dict(v) for k, v in self.by_model.items()},
+        }
+        self.calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.by_model = {}
+        return snap
+
+
+# ========== 致命错误识别（额度耗尽/欠费/鉴权失效 → 不重试，快速失败）==========
+_FATAL_ERROR_PATTERNS = (
+    "arrearage", "arrears", "quota", "额度", "insufficient balance",
+    "invalid api key", "invalid_api_key", "unauthorized", "forbidden",
+)
+_RETRYABLE_HINTS = ("429", "throttling", "rate limit")
+
+
+def is_fatal_quota_error(msg: str | None) -> bool:
+    """额度耗尽/欠费/鉴权失效类错误：重试无意义，应立即止损并提示充值。"""
+    if not msg:
+        return False
+    low = msg.lower()
+    # 限流（429/Throttling）是可重试的，不算致命
+    if any(h in low for h in _RETRYABLE_HINTS):
+        return False
+    return any(p in low for p in _FATAL_ERROR_PATTERNS)
+
+
 # ========== 图片编码辅助 ==========
 def encode_image(path: str | Path) -> str:
     """本地图片 -> base64 字符串（百炼多模态接受）"""
@@ -92,6 +153,7 @@ class BailianClient:
         self._dashscope = dashscope
         dashscope.api_key = api_cfg.dashscope_api_key
         self._limiter = RateLimiter(api_cfg.qpm_limit)
+        self.usage_tracker = UsageTracker()
 
     # ---- 文本生成（人设投票用）----
     def generate_text(
@@ -157,7 +219,9 @@ class BailianClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return self._parse_response(resp, model)
+        parsed = self._parse_response(resp, model)
+        self.usage_tracker.record(model, parsed.usage)
+        return parsed
 
     def _call_multimodal(
         self, *, model: str, messages: list[dict],
@@ -171,7 +235,9 @@ class BailianClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return self._parse_response(resp, model)
+        parsed = self._parse_response(resp, model)
+        self.usage_tracker.record(model, parsed.usage)
+        return parsed
 
     def _parse_response(self, resp: Any, model: str) -> LLMResponse:
         # dashscope 响应结构：resp.status_code / resp.output / resp.usage
@@ -208,6 +274,10 @@ class BailianClient:
                 if result.ok:
                     return result
                 last_err = result
+                # 额度耗尽/欠费/鉴权失效：重试无意义，立即快速失败
+                if is_fatal_quota_error(result.error):
+                    log.error("致命 API 错误（不重试）: %s", result.error)
+                    return result
                 # 429/限流 -> 等待
                 if "429" in (result.error or "") or "rate" in (result.error or "").lower():
                     wait = 2 ** attempt + 3
@@ -216,7 +286,12 @@ class BailianClient:
                 # 其他错误，直接返回
                 return result
             except Exception as e:
-                last_err = LLMResponse(content="", model=kwargs.get("model", "?"), error=str(e))
+                err_msg = str(e)
+                # 额度耗尽等致命异常：立即返回，不做指数退避
+                if is_fatal_quota_error(err_msg):
+                    log.error("致命 API 异常（不重试）: %s", err_msg)
+                    return LLMResponse(content="", model=kwargs.get("model", "?"), error=err_msg)
+                last_err = LLMResponse(content="", model=kwargs.get("model", "?"), error=err_msg)
                 wait = 2 ** attempt + 1
                 time.sleep(wait)
         return last_err or LLMResponse(content="", model="?", error="max_retries exceeded")

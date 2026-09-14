@@ -29,6 +29,7 @@ os.chdir(ROOT)
 
 from src.config import load_config, list_available_brands, load_brand_profile
 from src.grading import assign_relative_grades
+from src.llm_client import is_fatal_quota_error
 from src.pipeline import PredictionPipeline
 from src.report import render_single_report_markdown
 from src.types import (
@@ -458,6 +459,16 @@ def render_page_upload():
             help="业界对照试验惯例 10-20%，比例越大对照越准，但内审可参考的 AI 结论越少",
         )
 
+    # 提交前成本预估：让「额度去哪了」在下单前就可见（真实模式才显示）
+    if can_start and _llm_backend != "mock" and df is not None:
+        _per_style = 1 + len(brand_cfg.personas) * 2  # 1 次 VLM 特征 + 人设数 × 2 模型
+        st.caption(
+            f"💰 预估本批 API 调用：{len(df)} 款 × {_per_style} 次/款 ≈ "
+            f"**{len(df) * _per_style:,} 次**（1 次特征提取 + "
+            f"{len(brand_cfg.personas)} 人设 × 2 模型投票，每款）。"
+            f"百万 token 级消耗，请注意额度余额；额度耗尽会自动中止并提示。"
+        )
+
     col1, col2, _ = st.columns([2, 2, 4])
     with col1:
         if not can_start:
@@ -635,6 +646,21 @@ def render_page_summary():
             except Exception as e:
                 err_msg = f"{type(e).__name__}: {e}"
                 prog["failed"][info.style_id] = err_msg
+                # 额度耗尽/鉴权失效：止损中止批次（剩余款每款还会白打 ~60 次失败调用）
+                if is_fatal_quota_error(err_msg):
+                    remaining = [s.style_id for s in style_infos[current + 1:]]
+                    for sid in remaining:
+                        prog["failed"][sid] = "已跳过（批次因 API 额度不足中止）"
+                    prog["current"] = total
+                    prog["stage"] = "⛔ 已中止：API 额度不足"
+                    st.error(
+                        f"⛔ 款 {info.style_id} 触发 **API 额度不足/鉴权失败**，批次已中止"
+                        f"（剩余 {len(remaining)} 款跳过）。\n\n"
+                        f"请到 [百炼控制台](https://bailian.console.aliyun.com) 充值或领取资源包后，"
+                        f"重新上传批次。错误详情：`{err_msg[:300]}`"
+                    )
+                    st.rerun()
+                    return
                 st.warning(f"⚠️ 款 {info.style_id} 处理失败：{err_msg}")
             prog["current"] = current + 1
             if prog["current"] >= total:
@@ -676,6 +702,37 @@ def render_page_summary():
                 f"人设投票：{' / '.join(_pers)}{_elapsed_str}。"
                 f"此批次分数来自百炼 API 对图片的实际分析。"
             )
+
+            # ---- API 用量仪表：本批调用了多少次、花了多少 token ----
+            _usage_calls = sum(
+                int((p.metadata.get("api_usage") or {}).get("calls", 0)) for p in preds
+            )
+            if _usage_calls > 0:
+                _u_in = sum(
+                    int((p.metadata.get("api_usage") or {}).get("input_tokens", 0)) for p in preds
+                )
+                _u_out = sum(
+                    int((p.metadata.get("api_usage") or {}).get("output_tokens", 0)) for p in preds
+                )
+                _by_model: dict[str, dict[str, int]] = {}
+                for p in preds:
+                    for m, stat in (p.metadata.get("api_usage") or {}).get("by_model", {}).items():
+                        agg = _by_model.setdefault(
+                            m, {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+                        )
+                        for k in agg:
+                            agg[k] += int(stat.get(k, 0))
+                c1, c2, c3 = st.columns(3)
+                c1.metric("API 调用次数", f"{_usage_calls:,}")
+                c2.metric("输入 tokens", f"{_u_in:,}")
+                c3.metric("输出 tokens", f"{_u_out:,}")
+                with st.expander("按模型分解（额度去哪了一眼可见）"):
+                    st.dataframe(
+                        pd.DataFrame(
+                            [{"模型": m, **stat} for m, stat in _by_model.items()]
+                        ).sort_values("calls", ascending=False),
+                        use_container_width=True, hide_index=True,
+                    )
 
     if not preds:
         st.error("❌ 没有任何款式成功处理，请检查输入数据或 LLM 配置")

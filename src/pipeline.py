@@ -29,7 +29,7 @@ from .feature_extraction import (
     extract_style_features,
 )
 from .grading import assign_relative_grades, decide_grade
-from .llm_client import BailianClient
+from .llm_client import BailianClient, is_fatal_quota_error
 from .persona_voting import run_persona_voting
 from .report import generate_backtest_summary, generate_markdown_report, generate_report
 from .types import (
@@ -104,9 +104,19 @@ def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="mipo"):
                 calibrated_weights=calibrated_weights,
                 progress=True,
             )
+            # 本款 API 用量快照（take 会清零，按款切分）
+            pred.metadata["api_usage"] = client.usage_tracker.take()
             predictions.append(pred)
         except Exception as e:
             log.exception("  ❌ 款%s处理失败: %s", s.style_id, e)
+            # 额度耗尽/鉴权失效：继续跑剩余款只会反复失败，立即止损
+            if is_fatal_quota_error(str(e)):
+                log.error(
+                    "⛔ 检测到 API 额度不足/鉴权失败，批次中止（剩余 %d 款跳过）。"
+                    "请到百炼控制台充值后重跑。",
+                    len(styles) - i,
+                )
+                break
 
     # 批次内相对分级：冷启动时绝对阈值失效（VLM 绝对分尺度未校准），
     # 但 VLM 的排序可靠 → 按批次内分位重定 S/A+/A/P，与人工内审语义对齐。
@@ -121,6 +131,14 @@ def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="mipo"):
             pred.grade.grade, pred.grade.final_score,
             pred.grade.confidence, report_path.name,
         )
+
+    # 本批 API 用量汇总（调用次数 / token，回答「钱花哪了」）
+    if predictions:
+        calls = sum(int(p.metadata.get("api_usage", {}).get("calls", 0)) for p in predictions)
+        in_tok = sum(int(p.metadata.get("api_usage", {}).get("input_tokens", 0)) for p in predictions)
+        out_tok = sum(int(p.metadata.get("api_usage", {}).get("output_tokens", 0)) for p in predictions)
+        log.info("💰 本批 API 用量：成功 %d 款 · %d 次调用 · 输入 %s tokens · 输出 %s tokens",
+                 len(predictions), calls, f"{in_tok:,}", f"{out_tok:,}")
 
     xlsx_path = save_predictions_xlsx(predictions, out_dir / f"{mode}_summary_{len(predictions)}款.xlsx")
     log.info("✅ 批量总表已导出 → %s", xlsx_path)
@@ -514,6 +532,9 @@ class PredictionPipeline:
             "persona_models": self.brand_cfg.personas.get("persona_models", ["qwen-max", "deepseek-v3"]),
             "elapsed_s": _elapsed,
             "brand_id": self.brand_cfg.brand_id,
+            # 本款 API 用量（调用次数/token，从上次快照后累计），
+            # 批次总表汇总展示「钱花哪了」
+            "api_usage": self.client.usage_tracker.take(),
         }
         return FullPrediction(
             info=info, features=feats, voting=voting,

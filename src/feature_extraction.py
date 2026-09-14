@@ -291,6 +291,7 @@ def extract_style_features(
         return engine.extract_mock(info.style_id)
 
     model_results: list[dict[str, dict[str, Any]]] = []
+    errors: list[str] = []
     pbar = tqdm(models, desc=f"特征提取[{info.style_id}]", leave=False, disable=not progress)
     for m in pbar:
         pbar.set_postfix_str(m)
@@ -302,9 +303,13 @@ def extract_style_features(
             model_results.append(res)
         except Exception as e:
             log.error("[%s] 模型%s特征提取失败: %s", info.style_id, m, e)
+            errors.append(f"{m}: {e}")
 
     if not model_results:
-        raise RuntimeError(f"[{info.style_id}] 所有模型特征提取均失败")
+        # 带上底层错误（额度耗尽/鉴权失败要能传到上层触发快速失败）
+        raise RuntimeError(
+            f"[{info.style_id}] 所有模型特征提取均失败: {'; '.join(errors) or '未知错误'}"
+        )
 
     feat_defs = features_cfg["features"]
     result = StyleFeatures(style_id=info.style_id)
