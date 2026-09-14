@@ -218,21 +218,67 @@ def validate_inputs(df: pd.DataFrame, image_style_ids: set[str]) -> list[str]:
     return warnings
 
 
-def unzip_to_temp_dir(zip_bytes: bytes, dest_dir: Path) -> dict[str, list[Path]]:
-    """解压图片zip，返回 款号->[图片路径列表]（按修改时间排序）"""
+def unzip_to_temp_dir(
+    zip_bytes: bytes, dest_dir: Path,
+    known_style_ids: set[str] | None = None,
+) -> dict[str, list[Path]]:
+    """解压图片zip，返回 款号->[图片路径列表]（按修改时间排序）
+    
+    支持三种zip结构：
+      1. 子文件夹结构：S01/img1.jpg, S02/img1.jpg  ← 推荐
+      2. 扁平结构：S01_front.jpg, S02_back.jpg  ← 自动从文件名提取
+      3. 混合结构
+    known_style_ids 可用于更精确地从文件名中匹配款号
+    """
+    import re as _re
     dest_dir.mkdir(parents=True, exist_ok=True)
     style_to_images: dict[str, list[Path]] = {}
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         zf.extractall(dest_dir)
+
+    def _extract_style_id_from_filename(name: str) -> str:
+        """从文件名中尝试提取款号"""
+        stem = Path(name).stem  # 去掉扩展名
+        # 1. 优先匹配已知款号
+        if known_style_ids:
+            for sid in sorted(known_style_ids, key=len, reverse=True):
+                if sid.lower() in stem.lower():
+                    return sid
+        # 2. 尝试 字母+数字 模式（如 S01, K001, JACKET_001）
+        m = _re.match(r"^([A-Za-z]*\d+[A-Za-z]*)", stem)
+        if m:
+            return m.group(1)
+        # 3. 尝试下划线/空格分隔的第一段
+        for sep in ["_", "-", " ", "."]:
+            parts = stem.split(sep)
+            if parts and _re.match(r"^[A-Za-z]*\d+", parts[0]):
+                return parts[0]
+        return ""
+
     for p in sorted(dest_dir.rglob("*")):
         if not p.is_file():
             continue
         if p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
             continue
-        style_id = p.parent.name if p.parent.name != dest_dir.name else ""
+
+        # 方式1：从父文件夹名取款号
+        style_id = ""
+        if p.parent != dest_dir and p.parent.name != dest_dir.name:
+            candidate = p.parent.name
+            # 如果父文件夹名在 known_style_ids 里，直接用
+            if known_style_ids and candidate in known_style_ids:
+                style_id = candidate
+            elif not known_style_ids:
+                style_id = candidate  # 无已知列表时，信任文件夹名
+
+        # 方式2：从文件名提取款号（扁平结构 fallback）
+        if not style_id:
+            style_id = _extract_style_id_from_filename(p.name)
+
         if not style_id:
             continue
         style_to_images.setdefault(style_id, []).append(p)
+
     for sid, paths in style_to_images.items():
         paths.sort(key=lambda x: x.stat().st_mtime)
     return style_to_images
@@ -372,8 +418,8 @@ def render_page_upload():
                         f"版型/设计：{row.get('版型/设计描述','')}\n颜色：{color}\n季节：{season}"
                     )
                     style_infos.append(StyleInfo(
-                        style_id=sid, name=sid, category=cat,
-                        price=price, season=season, fab_text=fab_text,
+                        style_id=sid, category=cat,
+                        price=price, season=season, fab_description=fab_text,
                     ))
                     imgs = style_to_images.get(sid, [])
                     image_paths_map[sid] = [str(p) for p in imgs]
