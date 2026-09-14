@@ -71,27 +71,33 @@ def list_available_brands() -> list[str]:
 
 
 def _build_default_decision_structure() -> BrandDecisionStructure:
-    """构造童装户外默认双层决策结构（兼容旧config目录模式）"""
+    """兜底双层决策结构（等价于 mipo 品牌包，用于兼容模式）。
+
+    层语义通用：决策者层 + 影响层（否决）。具体角色名称（如 mipo 的
+    妈妈/孩子）由品牌 YAML 声明，代码不预设。
+    age_weight_rules 的 mom_weight/child_weight 为 YAML 字段名，
+    语义 = 决策者层权重 / 影响层权重。
+    """
     layers = [
         DecisionLayer(
-            id="mom_decision_layer",
-            name="妈妈决策者层",
+            id="decider_layer",
+            name="决策者层",
             persona_axis_key="identity_axes",
             role="decider",
             default_weight=0.70,
         ),
         DecisionLayer(
-            id="child_influence_layer",
-            name="孩子影响层",
-            persona_axis_key="child_identity_axes",
+            id="influencer_layer",
+            name="影响层",
+            persona_axis_key="influencer_axes",
             role="veto",
             default_weight=0.30,
         ),
     ]
     age_weight_rules = [
-        {"age_range": [6, 8], "mom_weight": 0.70, "child_weight": 0.30, "label": "妈妈主导"},
+        {"age_range": [6, 8], "mom_weight": 0.70, "child_weight": 0.30, "label": "决策者主导"},
         {"age_range": [9, 11], "mom_weight": 0.50, "child_weight": 0.50, "label": "共同决策"},
-        {"age_range": [12, 14], "mom_weight": 0.30, "child_weight": 0.70, "label": "孩子主导"},
+        {"age_range": [12, 14], "mom_weight": 0.30, "child_weight": 0.70, "label": "影响层主导"},
     ]
     return BrandDecisionStructure(
         type="multi_layer",
@@ -161,7 +167,12 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         })
 
         personas_list = personas_raw.get("personas", [])
-        child_identity_axes = personas_raw.get("child_identity_axes", None)
+        # 轴数据按决策层声明收集：layer.persona_axis_key → personas.yaml 顶层同名列表
+        persona_axes = {
+            layer.persona_axis_key: personas_raw.get(layer.persona_axis_key)
+            for layer in decision_structure.layers
+            if personas_raw.get(layer.persona_axis_key) is not None
+        }
     else:
         warnings.warn(
             f"[load_brand_profile] brand_profiles/{brand_id}/ 不存在，回退到旧 config/ 目录兼容模式",
@@ -184,7 +195,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         grading_thresholds = {"s": 7.6, "a_plus": 6.6, "a": 5.2, "p": 0.0}
 
         personas_list = personas_raw.get("personas", [])
-        child_identity_axes = None
+        persona_axes = {}
 
     # 若 calibrated_dir 下存在校准文件，则自动覆盖
     calibrated_dir.mkdir(parents=True, exist_ok=True)
@@ -216,7 +227,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         default_channel_split=default_channel_split,
         grading_thresholds=grading_thresholds,
         calibrated_dir=str(calibrated_dir),
-        child_identity_axes=child_identity_axes,
+        persona_axes=persona_axes or None,
         personas_weights=personas_weights,
         features_biases=features_biases,
         engine_weights=engine_weights,
@@ -274,18 +285,10 @@ def load_config(
     # 调用新架构的品牌加载，然后转成兼容的features/personas/scoring字段
     brand_cfg = load_brand_profile("mipo")
     features = brand_cfg.features_bars
-    # 兼容旧格式：把personas列表包装成 {personas: [...], decision_mode_weights: {...}} 结构
-    personas = {
-        "personas": brand_cfg.personas,
-        "decision_mode_weights": {
-            "mom_dominant": {"mom": 0.70, "child": 0.30},
-            "joint_decision": {"mom": 0.50, "child": 0.50},
-            "child_dominant": {"mom": 0.30, "child": 0.70},
-        },
-        "mom_veto_threshold": 3.0,
-    }
-    if brand_cfg.child_identity_axes is not None:
-        personas["child_identity_axes"] = brand_cfg.child_identity_axes
+    # 兼容旧格式：personas 列表 + 决策层轴数据（按 layer.persona_axis_key 收集）
+    personas: dict[str, Any] = {"personas": brand_cfg.personas}
+    if brand_cfg.persona_axes:
+        personas.update(brand_cfg.persona_axes)
     scoring = brand_cfg.scoring_weights
 
     return AppConfig(api=api, paths=paths, features=features, personas=personas, scoring=scoring)

@@ -1,10 +1,13 @@
-"""人设投票引擎：30人设双重决策 + 多模型混合
+"""人设投票引擎：决策层通用投票 + 多模型混合
 
-每个人设走三步漏斗：
-  Step1 妈妈视角：穿搭需求判断 + 款式接受度 + 价值匹配 → mom_score
-  Step2 孩子视角：颜色/图案/款式喜好 → child_score（只评图片可见特征，不含穿着体验）
-  Step3 决策模式加权：综合分 = mom×W_mom + child×W_child
-        - 孩子主导型若 mom_score < veto_threshold → 直接否决
+每个品牌由 profile.yaml 声明购买决策结构（decision_structure.layers），
+人设投票按层进行：
+  - 每个决策层独立评分（输出 key = "<layer_id>_score" / "<layer_id>_reason"）
+  - 综合分 = Σ layer_score × layer_weight（权重按年龄档 age_weight_rules 取，
+    mom_weight/child_weight 为 YAML 字段名，语义=决策者层/影响层权重）
+  - 否决：①决策者层低分否决（< VETO_THRESHOLD）②影响层（role=veto）
+    轴数据 veto_when 关键词命中（聚合阶段惩罚）
+层语义（如 mipo 的妈妈决策者层/孩子影响层）由品牌 YAML 声明，代码不预设角色。
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ from .config import AppConfig
 from .llm_client import BailianClient
 from .types import (
     BrandConfig,
-    FeatureScore,
+    DecisionLayer,
     PersonaVote,
     StyleFeatures,
     StyleInfo,
@@ -31,6 +34,17 @@ from .types import (
 )
 
 log = logging.getLogger(__name__)
+
+# 引擎级参数（非品牌语义）：决策者层低分否决线 / 影响层否决惩罚系数
+VETO_SCORE_THRESHOLD = 3.0
+VETO_PENALTY_FACTOR = 0.70
+
+# cfg 缺省时的投票模型（brand_cfg 路径不依赖 AppConfig）
+_DEFAULT_PERSONA_MODELS = ["qwen-max", "deepseek-v3"]
+
+
+def _persona_key(p: dict[str, Any]) -> str:
+    return str(p.get("id", p.get("persona_id", "")))
 
 
 # ========== 特征值转自然语言（喂给人设LLM）==========
@@ -49,53 +63,160 @@ def _feat_summary(feats: StyleFeatures) -> str:
     return "\n".join(lines)
 
 
-# ========== 人设Prompt ==========
-PERSONA_VOTE_SYSTEM = """你是一个童装购买决策模拟器。你将扮演一位具体的妈妈，结合孩子的意见，对一件童装进行购买决策评估。
+# ========== 决策层权重（按年龄档）==========
+def _match_age_weight_rules(
+    age_weight_rules: list[dict[str, Any]],
+    target_age: int,
+) -> dict[str, Any]:
+    """根据target_age匹配age_weight_rules取档"""
+    for rule in age_weight_rules:
+        rng = rule.get("age_range", [0, 999])
+        if len(rng) == 2 and rng[0] <= target_age <= rng[1]:
+            return rule
+    return age_weight_rules[0] if age_weight_rules else {}
+
+
+def _layer_weights_for_age(
+    ds: Any,
+    target_age: int | None,
+) -> dict[str, float]:
+    """按年龄档解析各决策层权重（key=layer_id）。
+
+    YAML 字段映射（向后兼容 mipo 等既有适配包）：
+      - mom_weight   → role=decider 的层
+      - child_weight → 其余层（影响层）
+      - layer_weights: {layer_id: w} → 任意层数直配（新通用写法，优先级最高）
+    """
+    actual_age = target_age if target_age is not None else ds.default_target_age
+    rule = _match_age_weight_rules(ds.age_weight_rules, actual_age)
+    weights: dict[str, float] = {}
+    decider_w = rule.get("mom_weight", rule.get("decider_weight"))
+    influencer_w = rule.get("child_weight", rule.get("influencer_weight"))
+    for layer in ds.layers:
+        if layer.role == "decider" and decider_w is not None:
+            weights[layer.id] = float(decider_w)
+        elif layer.role != "decider" and influencer_w is not None and layer.id not in weights:
+            weights[layer.id] = float(influencer_w)
+        else:
+            weights[layer.id] = float(layer.default_weight)
+    lw = rule.get("layer_weights")
+    if isinstance(lw, dict):
+        weights.update({str(k): float(v) for k, v in lw.items()})
+    total = sum(weights.values())
+    if total > 0:
+        weights = {k: v / total for k, v in weights.items()}
+    return weights
+
+
+def _resolve_layers(
+    brand_cfg: BrandConfig | None,
+) -> list[DecisionLayer]:
+    """取决策层列表。无品牌结构时退化为单决策层。"""
+    if brand_cfg is not None:
+        return list(brand_cfg.decision_structure.layers)
+    return [DecisionLayer(id="decider_layer", name="决策者层",
+                          persona_axis_key="identity_axes", role="decider",
+                          default_weight=1.0)]
+
+
+# ========== 人设Prompt（按决策层动态渲染）==========
+def _render_persona_vote_system(layers: list[DecisionLayer], brand_name: str) -> str:
+    layer_names = "、".join(f"{l.name}（{l.id}）" for l in layers)
+    return f"""你是{brand_name}的购买决策模拟器。你将扮演一个具体的人设，联合相关决策层，对一件服装进行购买决策评估。
+
+决策结构（{len(layers)}层）：{layer_names}
 
 重要规则：
 1. 严格按照你所扮演的人设去思考和判断，不要站在"一般消费者"角度
-2. 妈妈和孩子是两个人，分开独立评分，不要混
+2. 每个决策层分开独立评分，不要混
 3. 评分使用1-10分，1=完全不买，10=立刻想买
 4. 输出纯JSON，不要任何额外解释文字"""
+
+
+def _render_influencer_profiles(
+    brand_cfg: BrandConfig | None,
+    layers: list[DecisionLayer],
+    age_rule: dict[str, Any],
+) -> str:
+    """渲染影响层（role=veto）轴画像：该年龄段下的否决条件。
+
+    轴数据按 layer.persona_axis_key 从品牌 personas.yaml 顶层收集（通用），
+    条目含 age / gender / veto_when 等字段（字段名由 YAML 约定）。
+    """
+    if brand_cfg is None or not brand_cfg.persona_axes:
+        return ""
+    rng = age_rule.get("age_range", [0, 999])
+    blocks: list[str] = []
+    for layer in layers:
+        if layer.role == "decider":
+            continue
+        axes = brand_cfg.persona_axes.get(layer.persona_axis_key) or []
+        lines = [f"【{layer.name}画像与否决线】"]
+        for entry in axes:
+            age = entry.get("age", 0)
+            if age < rng[0] or age > rng[1]:
+                continue
+            veto_when = "、".join(str(v) for v in entry.get("veto_when", []))
+            gender = entry.get("gender", "")
+            gender_desc = f"，{gender}孩" if gender else ""
+            lines.append(f"- {age}岁{gender_desc}：出现任一情形会否决 → {veto_when}")
+        if len(lines) > 1:
+            blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _render_persona_prompt(
     persona: dict[str, Any],
     info: StyleInfo,
     feats: StyleFeatures,
-    decision_weights: dict[str, dict[str, float]],
-    mom_veto_threshold: float,
+    layers: list[DecisionLayer],
+    layer_weights: dict[str, float],
+    brand_cfg: BrandConfig | None,
+    age_rule: dict[str, Any],
 ) -> tuple[str, str]:
-    """返回 (system, user) prompt"""
-    mom = persona["mom"]
-    child = persona["child"]
-    mode = persona["decision_mode"]
-    w = decision_weights[mode]
+    """返回 (system, user) prompt —— 决策层动态渲染"""
+    pid = _persona_key(persona)
+    brand_name = brand_cfg.brand_name if brand_cfg is not None else "品牌"
 
-    mode_desc = {
-        "mom_dominant": f"孩子{persona['child_age_group']}岁，由妈妈主导决策，妈妈权重{int(w['mom']*100)}%，孩子意见权重{int(w['child']*100)}%",
-        "joint_decision": f"孩子{persona['child_age_group']}岁，共同决策，妈妈权重{int(w['mom']*100)}%，孩子意见权重{int(w['child']*100)}%，孩子有否决权",
-        "child_dominant": f"孩子{persona['child_age_group']}岁进入青春期，孩子主导挑款，妈妈权重{int(w['mom']*100)}%，孩子意见权重{int(w['child']*100)}%；但如果妈妈分<{mom_veto_threshold}，妈妈有一票否决权",
-    }[mode]
+    # 层权重描述
+    weight_lines = [
+        f"- {l.name}（权重{int(layer_weights.get(l.id, 1.0) * 100)}%）"
+        for l in layers
+    ]
 
-    focus_feats_mom = ", ".join(persona.get("mom_focus_features", [])) or "全部"
-    focus_feats_child = ", ".join(persona.get("child_focus_features", [])) or "外观"
+    # 决策者画像（persona 通用字段，字段名由 personas.yaml 约定）
+    fab_focus = "、".join(str(x) for x in persona.get("fab_focus", [])) or "不限"
+    color_pref = "、".join(str(x) for x in persona.get("color_preference", [])) or "不限"
+
+    influencer_block = _render_influencer_profiles(brand_cfg, layers, age_rule)
+
+    # 输出 schema 动态生成
+    score_fields = "\n".join(
+        f'  "{l.id}_score": 数字1-10,\n  "{l.id}_reason": "一句话",'
+        for l in layers
+    )
+    score_tasks = "\n\n".join(
+        f"{i+1}) {l.name} 评分（{l.id}_score，1-10）\n"
+        f"   {l.name}按自己的关注点独立判断这款值不值得买。\n"
+        f"   {l.id}_reason：一句话说明{l.name}的核心判断理由"
+        for i, l in enumerate(layers)
+    )
+    veto_hint = (
+        f"   - 任一否决层明确命中其否决线，或决策者层分 < {VETO_SCORE_THRESHOLD}，"
+        f"输出 vetoed=true（即使其他层喜欢也不买）"
+        if any(l.role == "veto" for l in layers) else
+        f"   - 决策者层分 < {VETO_SCORE_THRESHOLD} 时输出 vetoed=true"
+    )
 
     user_msg = f"""
-【你扮演的妈妈形象】
-姓名：{persona['name']}（人设ID: {persona['id']}）
-所在城市：{mom['city_tier']}城市，家庭收入{mom['income_level']}
-购买习惯：{mom['purchase_frequency']}购买
-价值取向：{mom['value_orientation']}
-最关心的点：{', '.join(mom['concerns'])}
-对服装最在意的特征：{focus_feats_mom}
+【你扮演的人设】
+姓名：{persona.get('name', pid)}（人设ID: {pid}）
+购买关注点：{fab_focus}
+颜色偏好：{color_pref}
 
-【孩子画像（{child.get('age_range', persona['child_age_group'])}岁，{persona['child_gender']}孩）】
-颜色偏好：{child.get('color_preference', '不限')}
-图案偏好：{child.get('pattern_preference', '不限')}
-款式风格偏好：{child.get('style_preference', '不限')}
-
-【决策模式】{mode_desc}
+【决策结构】
+{chr(10).join(weight_lines)}
+{influencer_block}
 
 【款式信息】
 款号：{info.style_id}
@@ -108,39 +229,24 @@ FAB描述：
 【10个服装特征结构化评分（由视觉模型先行提取）】
 {_feat_summary(feats)}
 
-【任务】分三步输出：
+【任务】各决策层独立评分：
 
-1) mom_score（妈妈视角评分，1-10）：
-   Step1 穿搭需求判断：我家孩子当前缺不缺这种品类？（裤子/外套/T恤/羽绒服...）这个季节能穿吗？有没有类似的？
-         → 不缺/不能穿 = 低分
-   Step2 款式接受度：版型、颜色、风格，作为妈妈你能接受吗？最在意的那几个特征打分会拉低吗？
-         → 不接受 = 低分
-   Step3 价值匹配：这个价格配得上用料/功能/设计/品牌吗？会不会有更划算的？
-         → 不值 = 低分
-   mom_reason：一句话说明妈妈的核心判断理由
+{score_tasks}
 
-2) child_score（孩子视角评分，1-10）：
-   孩子只从"好不好看/喜不喜欢"角度判断，只看颜色/图案/款式风格这些图片可见的外观。
-   不考虑价格、面料质感、功能这些。价格孩子不管；功能如果是视觉上很酷（比如反光条/大口袋），孩子会喜欢，但如果是抽象的"防晒/防风"孩子不在意。
-   child_reason：一句话说明孩子喜欢/不喜欢的原因
-
-3) 综合判断：
-   - 如果妈妈分 < {mom_veto_threshold} 且决策模式是孩子主导型，输出 vetoed=true（妈妈否决，即使孩子喜欢也不买）
-   - 否则 final_score = mom_score × {w['mom']} + child_score × {w['child']}
-   - 如果出现否决，opposing_reason说明妈妈否决的原因
+【综合判断】
+{veto_hint}
+   - 否则 final_score = {" + ".join(f"{l.id}_score × {layer_weights.get(l.id, 1.0):.2f}" for l in layers)}
+   - 如果出现否决，opposing_reason说明否决的原因
 
 【输出格式】纯JSON：
 {{
-  "mom_score": 数字1-10,
-  "mom_reason": "一句话",
-  "child_score": 数字1-10,
-  "child_reason": "一句话",
+{score_fields}
   "final_score": 数字1-10,
   "vetoed": true或false,
   "opposing_reason": "如果反对或否决，说明原因，否则空字符串"
 }}
 """.strip()
-    return PERSONA_VOTE_SYSTEM, user_msg
+    return _render_persona_vote_system(layers, brand_name), user_msg
 
 
 # ========== 单人设投票 ==========
@@ -150,11 +256,15 @@ def _vote_one_persona_one_model(
     persona: dict[str, Any],
     info: StyleInfo,
     feats: StyleFeatures,
-    decision_weights: dict[str, dict[str, float]],
-    mom_veto_threshold: float,
+    layers: list[DecisionLayer],
+    layer_weights: dict[str, float],
+    brand_cfg: BrandConfig | None,
+    age_rule: dict[str, Any],
     model: str,
 ) -> dict[str, Any]:
-    sys_p, usr_p = _render_persona_prompt(persona, info, feats, decision_weights, mom_veto_threshold)
+    sys_p, usr_p = _render_persona_prompt(
+        persona, info, feats, layers, layer_weights, brand_cfg, age_rule,
+    )
     resp = client.generate_text(
         usr_p,
         model=model,
@@ -163,12 +273,12 @@ def _vote_one_persona_one_model(
         max_tokens=1500,
     )
     if not resp.ok:
-        raise RuntimeError(f"[人设投票] 人设{persona['id']}模型{model}失败: {resp.error}")
+        raise RuntimeError(f"[人设投票] 人设{_persona_key(persona)}模型{model}失败: {resp.error}")
     try:
         return extract_json(resp.content)
     except Exception as e:
         log.warning("[%s] 人设%s 模型%s JSON解析失败: %s, 原文=%s",
-                    info.style_id, persona['id'], model, e, resp.content[:300])
+                    info.style_id, _persona_key(persona), model, e, resp.content[:300])
         raise
 
 
@@ -177,13 +287,26 @@ def vote_persona(
     persona: dict[str, Any],
     info: StyleInfo,
     feats: StyleFeatures,
-    cfg: AppConfig,
+    cfg: AppConfig | None = None,
+    *,
+    brand_cfg: BrandConfig | None = None,
+    target_age: int | None = None,
 ) -> PersonaVote:
-    """单人设 + 多模型混合，中位数聚合"""
-    personas_cfg = cfg.personas
-    decision_weights = personas_cfg["decision_mode_weights"]
-    veto_thr = float(personas_cfg.get("mom_veto_threshold", 3.0))
-    models = cfg.api.persona_models
+    """单人设 + 多模型混合，均值聚合（决策层通用）"""
+    pid = _persona_key(persona)
+    models = cfg.api.persona_models if cfg is not None else _DEFAULT_PERSONA_MODELS
+
+    layers = _resolve_layers(brand_cfg)
+    if brand_cfg is not None:
+        ds = brand_cfg.decision_structure
+        age_rule = _match_age_weight_rules(
+            ds.age_weight_rules,
+            target_age if target_age is not None else ds.default_target_age,
+        )
+        layer_weights = _layer_weights_for_age(ds, target_age)
+    else:
+        age_rule = {}
+        layer_weights = {layers[0].id: 1.0}
 
     per_model: list[dict[str, Any]] = []
     per_model_scores: dict[str, float] = {}
@@ -191,43 +314,48 @@ def vote_persona(
         try:
             res = _vote_one_persona_one_model(
                 client, persona=persona, info=info, feats=feats,
-                decision_weights=decision_weights, mom_veto_threshold=veto_thr,
-                model=m,
+                layers=layers, layer_weights=layer_weights,
+                brand_cfg=brand_cfg, age_rule=age_rule, model=m,
             )
             per_model.append(res)
             per_model_scores[m] = clamp(safe_float(res.get("final_score"), 5.0), 1.0, 10.0)
         except Exception as e:
-            log.error("[%s] 人设%s 模型%s失败: %s", info.style_id, persona["id"], m, e)
+            log.error("[%s] 人设%s 模型%s失败: %s", info.style_id, pid, m, e)
 
     if not per_model:
-        # 全部失败，返回中位数安全分
+        # 全部失败，返回安全占位分
         return PersonaVote(
-            persona_id=persona["id"],
-            persona_name=persona.get("name", persona["id"]),
-            decision_mode=persona["decision_mode"],
-            mom_score=5.0, child_score=5.0, final_score=5.0,
+            persona_id=pid,
+            persona_name=str(persona.get("name", pid)),
+            layer_scores={l.id: 5.0 for l in layers},
+            final_score=5.0,
         )
 
-    mom_scores = [clamp(safe_float(r.get("mom_score"), 5.0)) for r in per_model]
-    child_scores = [clamp(safe_float(r.get("child_score"), 5.0)) for r in per_model]
+    # 各层分数跨模型均值
+    layer_scores: dict[str, float] = {}
+    for l in layers:
+        vals = [clamp(safe_float(r.get(f"{l.id}_score"), 5.0)) for r in per_model]
+        layer_scores[l.id] = float(mean(vals))
     final_scores = [clamp(safe_float(r.get("final_score"), 5.0)) for r in per_model]
 
     # 选首个成功模型的理由文本
     sample = per_model[0]
-    vetoed = bool(sample.get("vetoed", False)) or any(
-        clamp(safe_float(r.get("mom_score"), 5.0)) < veto_thr and persona["decision_mode"] == "child_dominant"
-        for r in per_model
+    layer_reasons: dict[str, str] = {
+        l.id: str(sample.get(f"{l.id}_reason", "")) for l in layers
+    }
+    # 否决：LLM 明确输出，或决策者层低分
+    decider_low = any(
+        layer_scores.get(l.id, 5.0) < VETO_SCORE_THRESHOLD
+        for l in layers if l.role == "decider"
     )
+    vetoed = bool(sample.get("vetoed", False)) or decider_low
 
     return PersonaVote(
-        persona_id=persona["id"],
-        persona_name=persona.get("name", persona["id"]),
-        decision_mode=persona["decision_mode"],
-        mom_score=float(sum(mom_scores) / len(mom_scores)),
-        child_score=float(sum(child_scores) / len(child_scores)),
-        final_score=float(sum(final_scores) / len(final_scores)),
-        mom_reason=str(sample.get("mom_reason", "")),
-        child_reason=str(sample.get("child_reason", "")),
+        persona_id=pid,
+        persona_name=str(persona.get("name", pid)),
+        layer_scores=layer_scores,
+        layer_reasons=layer_reasons,
+        final_score=float(mean(final_scores)),
         opposing_reason=str(sample.get("opposing_reason", "")),
         vetoed=vetoed,
         model_scores=per_model_scores,
@@ -248,20 +376,16 @@ def _cluster_reasons(reason_list: list[tuple[str, float]], top_n: int = 3) -> li
     return [item for item, _ in counter.most_common(top_n)]
 
 
-def _match_age_weight_rules(
-    age_weight_rules: list[dict[str, Any]],
-    target_age: int,
-) -> dict[str, Any]:
-    """根据target_age匹配age_weight_rules取档"""
-    for rule in age_weight_rules:
-        rng = rule.get("age_range", [0, 999])
-        if len(rng) == 2 and rng[0] <= target_age <= rng[1]:
-            return rule
-    return age_weight_rules[0] if age_weight_rules else {"mom_weight": 0.70, "child_weight": 0.30}
+def _primary_reason(v: PersonaVote) -> str:
+    """取投票的主要文本理由：首个非空的层理由"""
+    for reason in v.layer_reasons.values():
+        if reason:
+            return reason
+    return ""
 
 
 def _extract_style_keywords(feats: StyleFeatures, info: StyleInfo) -> list[str]:
-    """从features_bars分+FAB描述+颜色描述提取关键词，用于孩子否决匹配"""
+    """从features_bars分+FAB描述+颜色描述提取关键词，用于否决层匹配"""
     keywords: list[str] = []
     fab_text = (info.fab_description or "").lower()
     keywords.extend(re.findall(r"[\u4e00-\u9fa5a-zA-Z]+", fab_text))
@@ -271,31 +395,33 @@ def _extract_style_keywords(feats: StyleFeatures, info: StyleInfo) -> list[str]:
     return [k for k in keywords if len(k) >= 2]
 
 
-def _check_child_veto(
-    child_axes: list[dict[str, Any]] | None,
+def _check_axis_veto(
+    brand_cfg: BrandConfig | None,
+    layers: list[DecisionLayer],
     age_rule: dict[str, Any],
     style_keywords: list[str],
-    child_gender: str = "",
 ) -> tuple[bool, str]:
-    """扫描孩子层veto_when条件，与该款关键词匹配。
-    只要命中任意1个veto关键词就触发孩子否决。
-    返回 (是否否决, 否决原因)
+    """扫描否决层（role=veto）轴数据的 veto_when 条件，与该款关键词匹配。
+
+    轴数据按 layer.persona_axis_key 从品牌 persona_axes 取（通用）。
+    只要命中任意1个否决关键词就触发。返回 (是否否决, 否决原因)
     """
-    if not child_axes:
+    if brand_cfg is None or not brand_cfg.persona_axes:
         return False, ""
     rng = age_rule.get("age_range", [0, 999])
-    for child in child_axes:
-        child_age = int(child.get("age", 0))
-        if child_age < rng[0] or child_age > rng[1]:
+    for layer in layers:
+        if layer.role == "decider":
             continue
-        if child_gender and child.get("gender") and child.get("gender") != child_gender:
-            continue
-        veto_whens = child.get("veto_when", [])
-        for veto_kw in veto_whens:
-            veto_kw_lower = str(veto_kw).lower()
-            for style_kw in style_keywords:
-                if veto_kw_lower in style_kw.lower() or style_kw.lower() in veto_kw_lower:
-                    return True, f"孩子否决：{veto_kw}"
+        axes = brand_cfg.persona_axes.get(layer.persona_axis_key) or []
+        for entry in axes:
+            entry_age = int(entry.get("age", 0))
+            if entry_age < rng[0] or entry_age > rng[1]:
+                continue
+            for veto_kw in entry.get("veto_when", []):
+                veto_kw_lower = str(veto_kw).lower()
+                for style_kw in style_keywords:
+                    if veto_kw_lower in style_kw.lower() or style_kw.lower() in veto_kw_lower:
+                        return True, f"{layer.name}否决：{veto_kw}"
     return False, ""
 
 
@@ -308,14 +434,14 @@ def aggregate_votes(
     info: StyleInfo | None = None,
     target_age: int | None = None,
 ) -> VotingResult:
-    """按人设分布权重加权聚合（支持BrandConfig决策结构）
+    """按人设分布权重加权聚合（决策层通用）
 
-    - brand_cfg is None / single_layer：直接30人设加权投票（weight×individual_score / ∑w）
-    - brand_cfg.decision_structure.type in (multi_layer, double_layer)：
-        1) 先妈妈层(P01-P30)加权得到 mom_weighted
-        2) 根据target_age匹配age_weight_rules取档
-        3) 孩子层扫描child_identity_axes里该年龄段veto_when，
-           若命中任意1条 → 妈妈分×0.70惩罚（孩子否决）
+    - 无 brand_cfg / single_layer：人设加权投票（weight×individual_score / ∑w）
+    - multi_layer / double_layer：
+        1) 人设层加权得到基础分
+        2) 根据 target_age 匹配 age_weight_rules 取层权重
+        3) 否决层（role=veto）扫描 persona_axes 中该年龄段的 veto_when，
+           若命中任意1条 → 基础分 × VETO_PENALTY_FACTOR 惩罚
 
     命名约定：spec §7.x 历史用 double_layer，代码实现用 multi_layer
     （允许多于2层）。两者等价，参见 BrandDecisionStructure.type 注释。
@@ -338,16 +464,19 @@ def aggregate_votes(
         else:
             persona_list = brand_cfg.personas
             weight_map = {
-                p.get("id", p.get("persona_id", "")): float(p.get("weight", 1.0 / max(1, len(persona_list))))
+                _persona_key(p): float(p.get("weight", 1.0 / max(1, len(persona_list))))
                 for p in persona_list
             }
     elif personas_cfg is not None:
         persona_list = personas_cfg.get("personas", [])
-        weight_map = {p["id"]: float(p.get("weight", 1.0 / max(1, len(persona_list)))) for p in persona_list}
+        weight_map = {
+            _persona_key(p): float(p.get("weight", 1.0 / max(1, len(persona_list))))
+            for p in persona_list
+        }
 
     default_w = 1.0 / max(1, len(votes)) if weight_map else 1.0
 
-    # ========== 计算基础加权分（妈妈层/单一层）==========
+    # ========== 人设层基础加权分 ==========
     individual_scores: dict[str, float] = {}
     for v in votes:
         if not style_id:
@@ -357,16 +486,17 @@ def aggregate_votes(
         weighted_total += individual_scores[v.persona_id] * w
         weight_sum += w
         all_scores.append(individual_scores[v.persona_id])
+        primary = _primary_reason(v)
         if individual_scores[v.persona_id] < 4.0 or v.vetoed:
             oppose += 1
             if v.opposing_reason:
                 oppose_reasons_weighted.append((v.opposing_reason, w))
-            elif v.mom_reason:
-                oppose_reasons_weighted.append((v.mom_reason, w))
+            elif primary:
+                oppose_reasons_weighted.append((primary, w))
         if individual_scores[v.persona_id] >= 7.0:
             support += 1
-            if v.mom_reason:
-                buy_reasons_weighted.append((v.mom_reason, w))
+            if primary:
+                buy_reasons_weighted.append((primary, w))
         scores = list(v.model_scores.values())
         if len(scores) >= 2:
             div = max(scores) - min(scores)
@@ -374,54 +504,50 @@ def aggregate_votes(
                 high_div.append(v.persona_id)
 
     n = len(votes) or 1
-    mom_weighted = weighted_total / weight_sum if weight_sum > 0 else 5.0
+    base_weighted = weighted_total / weight_sum if weight_sum > 0 else 5.0
 
-    # ========== BrandConfig 决策结构分支 ==========
-    final_weighted = mom_weighted
-    child_veto_applied = False
-    child_veto_reason = ""
+    # ========== 决策结构分支（否决层轴扫描）==========
+    final_weighted = base_weighted
+    veto_applied = False
+    veto_reason = ""
 
     if brand_cfg is not None:
         ds = brand_cfg.decision_structure
         # spec §7.x 历史命名：double_layer；代码实现用 multi_layer。
         # 此处接受两者为别名，避免 spec-following YAML 静默落入 neither 分支
-        # （否则孩子否决层不生效，无报错）。
+        # （否则否决层不生效，无报错）。
         if ds.type in ("single_layer",):
-            final_weighted = mom_weighted
+            final_weighted = base_weighted
         elif ds.type in ("multi_layer", "double_layer"):
-            actual_age = target_age if target_age is not None else ds.default_target_age
-            age_rule = _match_age_weight_rules(ds.age_weight_rules, actual_age)
-            age_child_w = float(age_rule.get("child_weight", 0.30))
+            layers = list(ds.layers)
+            age_rule = _match_age_weight_rules(
+                ds.age_weight_rules,
+                target_age if target_age is not None else ds.default_target_age,
+            )
+            layer_weights = _layer_weights_for_age(ds, target_age)
+            veto_layer_ids = {l.id for l in layers if l.role != "decider"}
+            has_veto_layer = bool(veto_layer_ids)
+            veto_layer_weight = sum(
+                w for lid, w in layer_weights.items() if lid in veto_layer_ids
+            )
 
-            if feats is not None and info is not None and age_child_w > 0:
+            if feats is not None and info is not None and has_veto_layer and veto_layer_weight > 0:
                 style_keywords = _extract_style_keywords(feats, info)
-                # 尝试从persona列表推断孩子性别
-                child_gender = ""
-                if brand_cfg.personas:
-                    genders: Counter[str] = Counter()
-                    for p in brand_cfg.personas:
-                        g = p.get("child_gender", "")
-                        if g:
-                            genders[g] += 1
-                    if genders:
-                        child_gender = genders.most_common(1)[0][0]
-                vetoed, veto_reason = _check_child_veto(
-                    brand_cfg.child_identity_axes, age_rule, style_keywords, child_gender
-                )
+                vetoed, reason = _check_axis_veto(brand_cfg, layers, age_rule, style_keywords)
                 if vetoed:
-                    final_weighted = mom_weighted * 0.70
-                    child_veto_applied = True
-                    child_veto_reason = veto_reason
+                    final_weighted = base_weighted * VETO_PENALTY_FACTOR
+                    veto_applied = True
+                    veto_reason = reason
                     oppose += 1
-                    oppose_reasons_weighted.append((veto_reason, 0.30))
+                    oppose_reasons_weighted.append((reason, veto_layer_weight))
                 else:
-                    final_weighted = mom_weighted
+                    final_weighted = base_weighted
             else:
-                final_weighted = mom_weighted
+                final_weighted = base_weighted
 
-    if child_veto_applied and child_veto_reason:
-        if child_veto_reason not in [r[0] for r in oppose_reasons_weighted]:
-            oppose_reasons_weighted.append((child_veto_reason, 0.30))
+    if veto_applied and veto_reason:
+        if veto_reason not in [r[0] for r in oppose_reasons_weighted]:
+            oppose_reasons_weighted.append((veto_reason, veto_layer_weight if veto_layer_weight > 0 else 0.30))
 
     return VotingResult(
         style_id=style_id,
@@ -447,41 +573,34 @@ def run_persona_voting(
     brand_cfg: BrandConfig | None = None,
     target_age: int | None = None,
 ) -> VotingResult:
-    """批量人设投票
+    """批量人设投票（决策层通用）
 
-    函数签名保持兼容：优先使用 brand_cfg（新架构），否则回退 cfg（旧架构）。
+    函数签名保持兼容：优先使用 brand_cfg（新架构），否则退化为单决策层。
     """
     if brand_cfg is not None:
         persona_list = brand_cfg.personas
     elif cfg is not None:
-        personas_cfg = cfg.personas
-        persona_list = personas_cfg["personas"]
+        persona_list = cfg.personas.get("personas", [])
     else:
         raise ValueError("run_persona_voting: cfg 和 brand_cfg 不能同时为 None")
 
     votes: list[PersonaVote] = []
     pbar = tqdm(persona_list, desc=f"人设投票[{info.style_id}]", leave=False, disable=not progress)
     for p in pbar:
-        pbar.set_postfix_str(p.get("id", p.get("persona_id", "?")))
+        pid = _persona_key(p)
+        pbar.set_postfix_str(pid)
         try:
-            if cfg is not None:
-                v = vote_persona(client, p, info, feats, cfg)
-            else:
-                v = PersonaVote(
-                    persona_id=p.get("id", p.get("persona_id", "")),
-                    persona_name=p.get("name", ""),
-                    decision_mode=p.get("decision_mode", "mom_dominant"),
-                    mom_score=5.0, child_score=5.0, final_score=5.0,
-                    opposing_reason="无AppConfig兼容模式（新架构BrandConfig人设投票需LLM调用，此处占位5分）",
-                )
+            v = vote_persona(
+                client, p, info, feats, cfg,
+                brand_cfg=brand_cfg, target_age=target_age,
+            )
             votes.append(v)
         except Exception as e:
-            log.error("[%s] 人设%s 全部失败: %s", info.style_id, p.get("id", p.get("persona_id", "?")), e)
+            log.error("[%s] 人设%s 全部失败: %s", info.style_id, pid, e)
             votes.append(PersonaVote(
-                persona_id=p.get("id", p.get("persona_id", "?")),
-                persona_name=p.get("name", p.get("persona_id", "?")),
-                decision_mode=p.get("decision_mode", "mom_dominant"),
-                mom_score=5.0, child_score=5.0, final_score=5.0,
+                persona_id=pid,
+                persona_name=str(p.get("name", pid)),
+                final_score=5.0,
                 opposing_reason="LLM调用失败",
             ))
 

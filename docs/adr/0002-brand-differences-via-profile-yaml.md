@@ -26,6 +26,9 @@
 - 负面：① YAML 结构成为公共契约，改锚定 schema 会影响所有品牌，
   必须同步改所有适配包；② 历史默认 brand_id 的兜底调用点
   （已全部收敛为 mipo，后续应逐步清理为必传参数）。
-- 已知遗留：persona 投票数据结构仍硬编码「妈妈/孩子」两个角色字段，
-  与「决策层是通用多层」的模型冲突——对童装成立，对 womenswear
-  语义错位。见术语表「决策层」。
+- 遗留已解决（v1.3.0）：persona 投票数据结构硬编码「妈妈/孩子」的问题
+  已重构为通用决策层——`PersonaVote` 按 layer_id 存分数/理由
+  （layer_scores/layer_reasons），投票 prompt 按层动态渲染，否决层轴
+  扫描按 layer.persona_axis_key 取数，age_weight_rules 支持任意层数的
+  layer_weights 直配。见术语表「决策层」与
+  tests/test_generic_decision_layers.py（三层女装结构验证）。

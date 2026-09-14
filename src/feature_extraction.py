@@ -120,11 +120,11 @@ class FeatureExtractionEngine:
 
     def _resolve_brand_context(self) -> str:
         personas_cfg = {"personas": self.brand_cfg.personas}
-        if self.brand_cfg.child_identity_axes is not None:
-            personas_cfg["child_identity_axes"] = self.brand_cfg.child_identity_axes
+        if self.brand_cfg.persona_axes:
+            personas_cfg.update(self.brand_cfg.persona_axes)
         return personas_cfg.get(
             "brand_context",
-            "品牌定位：6-14岁功能性户外服饰，兼顾日常穿着与户外运动。",
+            f"品牌定位：{self.brand_cfg.brand_name}。",
         )
 
     def extract_mock(self, style_id: str, *, fixed_feature_scores: list[float] | None = None) -> StyleFeatures:
@@ -234,8 +234,8 @@ def _resolve_brand_context_from_inputs(
 ) -> str:
     if brand_cfg is not None:
         personas_wrapper = {"personas": brand_cfg.personas}
-        if brand_cfg.child_identity_axes is not None:
-            personas_wrapper["child_identity_axes"] = brand_cfg.child_identity_axes
+        if brand_cfg.persona_axes:
+            personas_wrapper.update(brand_cfg.persona_axes)
         return personas_wrapper.get(
             "brand_context",
             f"品牌定位：{brand_cfg.brand_name}，{brand_cfg.brand_id}。",
@@ -243,9 +243,9 @@ def _resolve_brand_context_from_inputs(
     if cfg is not None:
         return cfg.personas.get(
             "brand_context",
-            "品牌定位：6-14岁功能性户外服饰，兼顾日常穿着与户外运动。",
+            "品牌定位：未指定品牌。",
         )
-    return "品牌定位：6-14岁功能性户外服饰，兼顾日常穿着与户外运动。"
+    return "品牌定位：未指定品牌。"
 
 
 def _resolve_models_from_inputs(

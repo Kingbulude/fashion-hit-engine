@@ -69,20 +69,23 @@ class StyleInfo:
 
 @dataclass
 class PersonaVote:
-    """单个人设的投票结果"""
+    """单个人设的投票结果
+
+    决策层通用结构：分数/理由按 decision_structure.layers[].id 存储。
+    层的语义（如 mipo 的妈妈决策者层/孩子影响层）由品牌 YAML 定义，
+    代码不预设任何具体角色。
+    """
     persona_id: str
     persona_name: str
-    decision_mode: str
-    # 单独的分
-    mom_score: float
-    child_score: float
-    # 综合分
-    final_score: float
+    # 各决策层得分（key=layer_id，value=1-10）
+    layer_scores: dict[str, float] = field(default_factory=dict)
+    # 各决策层理由（key=layer_id）
+    layer_reasons: dict[str, str] = field(default_factory=dict)
+    # 综合分（按层权重加权）
+    final_score: float = 0.0
     # 文本理由
-    mom_reason: str = ""
-    child_reason: str = ""
     opposing_reason: str = ""
-    vetoed: bool = False  # 妈妈否决
+    vetoed: bool = False  # 任一否决层（role=veto）触发
     # 模型
     model_scores: dict[str, float] = field(default_factory=dict)
 
@@ -206,7 +209,10 @@ class BrandConfig:
     default_channel_split: dict[str, float]
     grading_thresholds: dict[str, float]
     calibrated_dir: str
-    child_identity_axes: Optional[list[dict[str, Any]]] = None
+    # 决策层轴数据（key=layer.persona_axis_key，value=personas.yaml 顶层对应列表）。
+    # 层语义由 YAML 声明（如 mipo 的 child_identity_axes=孩子影响层轴），
+    # 代码只按 layer 声明的 key 取数，不预设任何角色。
+    persona_axes: Optional[dict[str, list[dict[str, Any]]]] = None
     personas_weights: Optional[dict[str, float]] = None
     features_biases: Optional[dict[str, float]] = None
     engine_weights: Optional[dict[str, float]] = None

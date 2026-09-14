@@ -1165,22 +1165,21 @@ decision_structure:
       default_weight: 1.00
 
 # single_layer 模式下不需要以下字段
-# multi_layer 模式下必填：
-# layers: [妈妈决策者层 (role=decider), 孩子影响层 (role=veto)]
-# age_weight_rules:
+# multi_layer 模式下必填（层数任意，角色名称由品牌定义，如 mipo 为
+# 妈妈决策者层 + 孩子影响层）：
+# age_weight_rules 两种写法：
+# 写法A（双层兼容，mom_weight→决策者层 / child_weight→影响层）：
 #   - age_range: [6, 8]
 #     mom_weight: 0.70
 #     child_weight: 0.30
 #     label: 妈妈主导
-#   - age_range: [9, 11]
-#     mom_weight: 0.50
-#     child_weight: 0.50
-#     label: 共同决策
-#   - age_range: [12, 14]
-#     mom_weight: 0.30
-#     child_weight: 0.70
-#     label: 孩子主导
-# mom_veto_threshold: 3.0            # 妈妈分低于此直接否决
+# 写法B（通用，按 layer_id 直配任意层数）：
+#   - age_range: [20, 35]
+#     layer_weights:
+#       buyer_layer: 0.55
+#       partner_layer: 0.30
+#       bestie_layer: 0.15
+# 引擎级否决参数（非品牌字段）：决策者层分<3.0 否决 / 影响层否决惩罚×0.70
 ```
 
 ### YAML2 · features_bars.yaml — 10特征BARS锚定量表

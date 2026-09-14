@@ -368,8 +368,11 @@ class PredictionPipeline:
             base = random.uniform(4.0, 8.0)
             avg_feat = sum(f.score for f in feats.features.values()) / max(1, len(feats.features))
             s = clamp(base * 0.5 + avg_feat * 0.5, 1.0, 10.0)
-            mom = clamp(s + random.uniform(-0.8, 0.8), 1.0, 10.0)
-            child = clamp(s + random.uniform(-1.2, 1.2), 1.0, 10.0)
+            # 各决策层独立扰动：决策者层±0.8，影响层±1.2（与层语义无关的数值扰动）
+            layer_scores: dict[str, float] = {}
+            for layer in self.brand_cfg.decision_structure.layers:
+                jitter = 0.8 if layer.role == "decider" else 1.2
+                layer_scores[layer.id] = round(clamp(s + random.uniform(-jitter, jitter), 1.0, 10.0), 1)
             all_scores.append(s)
             if s >= 7.0:
                 support += 1
@@ -383,9 +386,7 @@ class PredictionPipeline:
             votes.append(PersonaVote(
                 persona_id=f"P{i+1:02d}",
                 persona_name=f"人设{i+1}",
-                decision_mode="joint_decision",
-                mom_score=round(mom, 1),
-                child_score=round(child, 1),
+                layer_scores=layer_scores,
                 final_score=round(s, 1),
             ))
         from statistics import pstdev

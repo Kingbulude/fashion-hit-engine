@@ -90,7 +90,8 @@ with st.sidebar.expander(f"📌 {brand_cfg.brand_name}", expanded=True):
     st.write(f"**品牌ID：** `{brand_cfg.brand_id}`")
     st.write(f"**决策结构：** {brand_cfg.decision_structure.type}")
     if brand_cfg.decision_structure.type == "multi_layer":
-        st.write(f"**层数：** {len(brand_cfg.decision_structure.layers)} 层（含童装孩子否决层）")
+        layer_names = "、".join(l.name for l in brand_cfg.decision_structure.layers)
+        st.write(f"**层数：** {len(brand_cfg.decision_structure.layers)} 层（{layer_names}）")
     st.write(f"**品类数：** {len(brand_cfg.category_registry.get('categories', []))}")
     st.write(f"**人设数：** {len(brand_cfg.personas)} 个身份三轴线")
     st.write(f"**校准轮次：** {n_calibration or '0（冷启动）'}")
