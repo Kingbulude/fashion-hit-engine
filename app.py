@@ -184,6 +184,40 @@ st.session_state.llm_backend = _llm_backend
 st.session_state.api_key_fallback_reason = _api_key_fallback_reason
 st.session_state.api_key_for_backend = _key_for_backend
 
+# --- 侧边栏：测试连接（1 次真实调用，一键验证 Key + 网络 + 后端路由）---
+if _llm_backend != "mock" and _key_for_backend:
+    if st.sidebar.button("🔌 测试连接", use_container_width=True,
+                         help="发 1 次真实 API 调用，立即验证 Key 有效性（不跑批次也能确认）"):
+        _backend_name = "智谱" if _llm_backend == "zhipu" else "百炼"
+        try:
+            from src.config import APIConfig as _AC
+            from src.llm_client import ZhipuClient as _ZC, BailianClient as _BC
+            _t_cfg = _AC(max_retries=1, qpm_limit=10000)
+            if _llm_backend == "zhipu":
+                _t_cfg.zhipu_api_key = _key_for_backend
+                _t_client = _ZC(_t_cfg, api_key=_key_for_backend)
+            else:
+                _t_cfg.dashscope_api_key = _key_for_backend
+                _t_client = _BC(_t_cfg)
+            with st.spinner(f"正在向{_backend_name}发送测试请求…"):
+                _t_resp = _t_client.generate_text(
+                    "回复：OK", model="qwen-max", max_tokens=8, temperature=0.0,
+                )
+            if _t_resp.ok:
+                _tok = _t_resp.usage.get("total_tokens", 0)
+                st.sidebar.success(
+                    f"✅ {_backend_name}连接成功（模型 {_t_resp.model}，"
+                    f"本次 {_tok} tokens）。Key 有效，可以开始评估。"
+                )
+            else:
+                st.sidebar.error(
+                    f"❌ {_backend_name}调用失败：{_t_resp.error}\n\n"
+                    f"请检查 Key 是否正确/有效（智谱："
+                    f"open.bigmodel.cn 控制台重新生成完整 Key）。"
+                )
+        except Exception as _t_e:
+            st.sidebar.error(f"❌ 连接异常：{_t_e}")
+
 st.sidebar.title("🧭 导航")
 page = st.sidebar.radio("", PAGES, index=0)
 

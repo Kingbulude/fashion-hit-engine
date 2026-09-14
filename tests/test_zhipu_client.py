@@ -182,6 +182,8 @@ def test_app_has_zhipu_mode_and_key_routing():
     assert "ZHIPU_API_KEY" in APP_SRC
     # 智谱模式缺 Key 的回退提示
     assert "智谱 GLM（免费）」，但未检测到智谱 API Key" in APP_SRC
+    # 侧边栏测试连接按钮（一键验证 Key）
+    assert "🔌 测试连接" in APP_SRC
 
 
 if __name__ == "__main__":

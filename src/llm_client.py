@@ -113,6 +113,10 @@ class UsageTracker:
 _FATAL_ERROR_PATTERNS = (
     "arrearage", "arrears", "quota", "额度", "insufficient balance",
     "invalid api key", "invalid_api_key", "unauthorized", "forbidden",
+    # HTTP 401/403（智谱/百炼错误消息格式均为 "API错误 code=401 ..."）
+    "code=401", "code=403",
+    # 智谱中文鉴权错误（实测："令牌已过期或验证不正确"）
+    "令牌已过期", "令牌不正确", "令牌无效", "api token",
 )
 _RETRYABLE_HINTS = ("429", "throttling", "rate limit")
 

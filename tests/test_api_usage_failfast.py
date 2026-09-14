@@ -62,6 +62,9 @@ def test_fatal_error_patterns():
         "当前API额度已用完，请充值",
         "Invalid API key provided",
         "Unauthorized (401): api key not valid",
+        # 智谱实测鉴权错误（中文 + HTTP 401）
+        "API错误 code=401 401 msg=令牌已过期或验证不正确",
+        "API错误 code=403 1113 msg=令牌不正确",
     ]
     for m in fatal_msgs:
         assert is_fatal_quota_error(m), f"应判致命: {m}"
