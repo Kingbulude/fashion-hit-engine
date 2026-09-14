@@ -938,7 +938,7 @@ Persona(i_A, i_B, i_C) = {
 
 ### 7.3 童装扩展层（非核心）
 
-童装品牌适配包（如 tongzhuang-outdoor）在三轴线30人设之外，额外叠加**孩子否决层**作为扩展决策维度：
+童装品牌适配包（如 mipo）在三轴线30人设之外，额外叠加**孩子否决层**作为扩展决策维度：
 
 ```
 童装综合分 = 妈妈决策者分 × w_mom + 孩子偏好分 × w_child
@@ -1141,7 +1141,7 @@ ELSE:
 
 ## 品牌适配包YAML规格
 
-> 本章定义 `brand_profiles/<brand_id>/` 目录下5个YAML文件的完整规格。每个新品类/新品牌 = 复制 `_template/` 目录，修改这5个YAML，Python代码一行不动。
+> 本章定义 `brand_profiles/<brand_id>/` 目录下5个YAML文件的完整规格。每个新品类/新品牌 = 复制 `mipo/` 目录为起点，修改这5个YAML，Python代码一行不动。
 
 ### YAML1 · profile.yaml — 决策结构定义
 

@@ -11,7 +11,8 @@
 ## 决策
 所有品牌差异收敛到 `brand_profiles/<brand_id>/` 下的 YAML 适配包
 （profile / personas / features_bars / category_registry / scoring_weights），
-核心引擎代码保持品牌无关。`_template/` 是新品牌的起手模板。
+核心引擎代码保持品牌无关。新品牌以 `mipo/` 适配包为起手模板复制改造
+（`_template/` 与 `tongzhuang-outdoor/` 已删除，系统当前只服务 mipo）。
 
 ## 备选方案
 - 每品牌一个代码分支：维护成本随品牌数线性爆炸，未选。
@@ -23,8 +24,8 @@
 - 正面：新品牌上线 = 复制模板 + 填 YAML，零代码改动；适配包可整体
   进 git 做版本评审；校准产物也落在适配包内，随品牌隔离。
 - 负面：① YAML 结构成为公共契约，改锚定 schema 会影响所有品牌，
-  必须同步改 _template；② 历史默认 brand_id 仍指向演示品牌
-  tongzhuang-outdoor 的残留调用点，需要逐步清理为必传参数。
+  必须同步改所有适配包；② 历史默认 brand_id 的兜底调用点
+  （已全部收敛为 mipo，后续应逐步清理为必传参数）。
 - 已知遗留：persona 投票数据结构仍硬编码「妈妈/孩子」两个角色字段，
   与「决策层是通用多层」的模型冲突——对童装成立，对 womenswear
   语义错位。见术语表「决策层」。

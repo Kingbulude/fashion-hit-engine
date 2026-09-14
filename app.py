@@ -58,7 +58,6 @@ available_brands = list_available_brands()
 if not available_brands:
     st.sidebar.error("❌ 没有可用的品牌适配包，请检查 brand_profiles/ 目录")
     available_brands = ["mipo"]
-# （_template 不展示，是模板）
 if "brand_id" not in st.session_state:
     st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
 

@@ -59,21 +59,13 @@ fashion-hit-engine 是一款服装款式分级辅助工具。它的核心思路�
 
 ```
 brand_profiles/
-  ├─ mipo/                   ← 当前主品牌：MIPO蜜扑·潮童户外6-14岁，双层决策结构
-  │   ├─ profile.yaml              决策结构（single_layer / double_layer）
-  │   ├─ features_bars.yaml        10特征BARS锚定量表
-  │   ├─ personas.yaml             30人设 + 身份三轴线定义
-  │   ├─ scoring_weights.yaml      评分公式 + 权重 + S/A/P阈值
-  │   ├─ category_registry.yaml    品类 + 价格带 + 别名
-  │   └─ calibrated/               3Loop校准产物（自动生成）
-  │
-  └─ _template/              ← 品牌模板（single_layer），复制改名字即新品牌
-      ├─ profile.yaml
-      ├─ features_bars.yaml
-      ├─ personas.yaml
-      ├─ scoring_weights.yaml
-      ├─ category_registry.yaml
-      └─ calibrated/
+  └─ mipo/                   ← 当前主品牌：MIPO蜜扑·潮童户外6-14岁，双层决策结构
+      ├─ profile.yaml              决策结构（single_layer / double_layer）
+      ├─ features_bars.yaml        10特征BARS锚定量表
+      ├─ personas.yaml             30人设 + 身份三轴线定义
+      ├─ scoring_weights.yaml      评分公式 + 权重 + S/A/P阈值
+      ├─ category_registry.yaml    品类 + 价格带 + 别名
+      └─ calibrated/               3Loop校准产物（自动生成）
 ```
 
 ---
@@ -176,8 +168,7 @@ pack/
 │  ├─ pipeline.py / report.py / ...
 │
 └─ brand_profiles/
-   ├─ mipo/                         ← MIPO蜜扑·童装户外品牌包（当前主品牌）
-   └─ _template/                   ← 品牌模板（复制即用）
+   └─ mipo/                         ← MIPO蜜扑·童装户外品牌包（当前唯一品牌）
       ├─ profile.yaml              决策结构
       ├─ features_bars.yaml        BARS量表
       ├─ personas.yaml             30人设
@@ -193,7 +184,7 @@ pack/
 **开源协议**：MIT License，商业使用需联系作者授权品牌适配包定制服务。
 
 **常见问题**：
-- **Q：换一个新品类需要改代码吗？** A：不用，复制 `brand_profiles/_template/` 改5个YAML即可，Python代码一行不动。
+- **Q：换一个新品类需要改代码吗？** A：不用，复制 `brand_profiles/mipo/` 为新品牌目录、改5个YAML即可，Python代码一行不动。
 - **Q：销售数据需要多细？** A：只要款号+真实销量（件数/排名都行），系统自动转品类内百分位标签。
 - **Q：会不会越调越差？** A：3Loop每步有Spearman提升保护，不达标就回滚，Spearman单调递增。
 - **Q：残差款为什么不喂回校准？** A：防止学到伪相关（KOL带火≠颜色特征好），残差是运营复盘素材。

@@ -1,15 +1,15 @@
 """decision_structure YAML schema 合规测试（spec §7.x / §10 YAML1）。
 
 验证：
-  1. mipo / tongzhuang-outdoor 两个 brand profile 的
-     decision_structure 都以对象形式加载（{type, layers, ...}）
+  1. mipo brand profile 的 decision_structure 以对象形式加载（{type, layers, ...}）
   2. type 字段值在 {single_layer, multi_layer, double_layer} 内
   3. layers 数组非空、每层有 id/name/persona_axis_key/role/default_weight
   4. multi_layer / double_layer 别名等价处理（spec-following YAML
      不再静默落入 neither 分支导致孩子否决层失效）
   5. spec 早期命名 double_layer 现在作为 multi_layer 别名
 
-注：womenswear 适配包已删除（当前系统只服务 mipo，新品牌走 _template）。
+注：womenswear / tongzhuang-outdoor / _template 适配包均已删除，
+当前系统只服务 mipo（新品牌复制 mipo/ 或按 spec.md §1144 从零写5个YAML）。
 single_layer 逻辑由 _parse_decision_structure 单元测试覆盖。
 """
 from __future__ import annotations
@@ -56,31 +56,6 @@ def test_mipo_profile_loads_multi_layer():
         f"got {len(ds.age_weight_rules)}"
     )
     print(f"✅ mipo: type={ds.type}, layers={len(ds.layers)}, "
-          f"age_rules={len(ds.age_weight_rules)}")
-
-
-def test_tongzhuang_profile_loads_multi_layer():
-    """tongzhuang-outdoor/profile.yaml 的 decision_structure 必须是对象形式，
-    type=multi_layer（spec §7.3: 童装双层 妈妈决策者层 + 孩子影响层）。
-    """
-    cfg = load_brand_profile("tongzhuang-outdoor")
-    ds = cfg.decision_structure
-    assert ds.type == "multi_layer", (
-        f"tongzhuang-outdoor 应为 multi_layer, got {ds.type!r}"
-    )
-    assert len(ds.layers) == 2, (
-        f"双层结构应有 2 条 layer (妈妈+孩子), got {len(ds.layers)}"
-    )
-    # 妈妈层 role=decider，孩子层 role=veto
-    roles = [l.role for l in ds.layers]
-    assert "decider" in roles, "应有妈妈决策者层 (role=decider)"
-    assert "veto" in roles, "应有孩子否决层 (role=veto)"
-    # age_weight_rules 非空（童装按年龄段调权重）
-    assert len(ds.age_weight_rules) >= 3, (
-        f"童装应有 ≥3 档 age_weight_rules (6-8/9-11/12-14), "
-        f"got {len(ds.age_weight_rules)}"
-    )
-    print(f"✅ tongzhuang-outdoor: type={ds.type}, layers={len(ds.layers)}, "
           f"age_rules={len(ds.age_weight_rules)}")
 
 
@@ -159,7 +134,7 @@ def test_persona_voting_treats_double_layer_as_multi_layer():
     孩子否决层静默失效（无报错），这是潜在 silent bug。
     """
     # 用 double_layer 构造童装 BrandConfig
-    cfg = load_brand_profile("tongzhuang-outdoor")
+    cfg = load_brand_profile("mipo")
     # 把 type 改成 double_layer（spec 历史命名）
     original_type = cfg.decision_structure.type
     # dataclass 实例字段可改（非 frozen）
@@ -196,12 +171,10 @@ def test_profile_yaml_files_use_object_form():
 
     早期 spec 文档写的是字符串形式 `decision_structure: single_layer`，
     但代码实现用对象形式（更表达力，layers 数组显式声明结构）。
-    两个 brand profile 的 YAML 必须是对象形式。
+    当前唯一的 brand profile（mipo）必须是对象形式。
     """
     profiles = [
         ROOT / "brand_profiles" / "mipo" / "profile.yaml",
-        ROOT / "brand_profiles" / "tongzhuang-outdoor" / "profile.yaml",
-        ROOT / "brand_profiles" / "_template" / "profile.yaml",
     ]
     for p in profiles:
         assert p.exists(), f"profile.yaml 不存在: {p}"
@@ -226,7 +199,6 @@ def test_profile_yaml_files_use_object_form():
 
 if __name__ == "__main__":
     test_mipo_profile_loads_multi_layer()
-    test_tongzhuang_profile_loads_multi_layer()
     test_parse_decision_structure_single_layer()
     test_parse_decision_structure_multi_layer()
     test_parse_decision_structure_double_layer_alias()
