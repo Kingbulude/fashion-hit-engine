@@ -118,8 +118,16 @@ st.session_state.llm_backend = _llm_backend
 
 st.sidebar.title("🧭 导航")
 page = st.sidebar.radio("", PAGES, index=0)
+
+# 从 VERSION 文件动态读版本号 —— 用户一眼确认自己跑的是哪个版本
+_VERSION_STR = "unknown"
+try:
+    _VERSION_STR = (ROOT / "VERSION").read_text().strip()
+except Exception:
+    pass
 st.sidebar.caption(
-    "fashion-hit-engine v2.1\n"
+    f"**当前版本：{_VERSION_STR}**  "
+    f"[⬆️ 更新](https://github.com/Kingbulude/fashion-hit-engine/releases/latest)\n"
     "· 通用CORE引擎 10特征30人设\n"
     "· VLM特征提取 + 人设投票\n"
     "· 3Loop 越用越准"
