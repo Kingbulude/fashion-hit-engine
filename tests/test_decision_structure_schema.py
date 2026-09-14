@@ -1,13 +1,16 @@
 """decision_structure YAML schema 合规测试（spec §7.x / §10 YAML1）。
 
 验证：
-  1. womenswear / tongzhuang-outdoor 两个 brand profile 的
+  1. mipo / tongzhuang-outdoor 两个 brand profile 的
      decision_structure 都以对象形式加载（{type, layers, ...}）
   2. type 字段值在 {single_layer, multi_layer, double_layer} 内
   3. layers 数组非空、每层有 id/name/persona_axis_key/role/default_weight
   4. multi_layer / double_layer 别名等价处理（spec-following YAML
      不再静默落入 neither 分支导致孩子否决层失效）
   5. spec 早期命名 double_layer 现在作为 multi_layer 别名
+
+注：womenswear 适配包已删除（当前系统只服务 mipo，新品牌走 _template）。
+single_layer 逻辑由 _parse_decision_structure 单元测试覆盖。
 """
 from __future__ import annotations
 
@@ -28,27 +31,32 @@ from src.types import BrandConfig, BrandDecisionStructure, DecisionLayer
 # ============================================================
 # 1. 真实品牌 profile 加载合规
 # ============================================================
-def test_womenswear_profile_loads_object_form():
-    """womenswear/profile.yaml 的 decision_structure 必须是对象形式，
-    type=single_layer（spec §7.3: 女装/男装/快消用 single_layer）。
+def test_mipo_profile_loads_multi_layer():
+    """mipo/profile.yaml 的 decision_structure 必须是对象形式，
+    type=multi_layer（spec §7.3: 童装双层 妈妈决策者层 + 孩子影响层）。
+    MIPO蜜扑是当前主用适配包，schema 必须长期合规。
     """
-    cfg = load_brand_profile("womenswear")
+    cfg = load_brand_profile("mipo")
     assert isinstance(cfg, BrandConfig)
     ds = cfg.decision_structure
     assert isinstance(ds, BrandDecisionStructure)
-    assert ds.type == "single_layer", (
-        f"womenswear 应为 single_layer, got {ds.type!r}"
+    assert ds.type in ("multi_layer", "double_layer"), (
+        f"mipo 应为 multi_layer, got {ds.type!r}"
     )
-    # single_layer 模式下 layers 至少 1 条（self_decision_layer 自描述）
-    assert len(ds.layers) >= 1, f"single_layer 也应有 ≥1 条 layer, got {len(ds.layers)}"
-    # 每层结构完整
-    for layer in ds.layers:
-        assert isinstance(layer, DecisionLayer)
-        assert layer.id, f"layer.id 不能为空"
-        assert layer.role in ("decider", "veto")
-        assert 0.0 <= layer.default_weight <= 1.0
-    print(f"✅ womenswear: type={ds.type}, layers={len(ds.layers)}, "
-          f"target_age={ds.default_target_age}")
+    assert len(ds.layers) == 2, (
+        f"双层结构应有 2 条 layer (妈妈+孩子), got {len(ds.layers)}"
+    )
+    # 妈妈层 role=decider，孩子层 role=veto
+    roles = [l.role for l in ds.layers]
+    assert "decider" in roles, "应有妈妈决策者层 (role=decider)"
+    assert "veto" in roles, "应有孩子否决层 (role=veto)"
+    # age_weight_rules 非空（童装按年龄段调权重）
+    assert len(ds.age_weight_rules) >= 3, (
+        f"童装应有 ≥3 档 age_weight_rules (6-8/9-11/12-14), "
+        f"got {len(ds.age_weight_rules)}"
+    )
+    print(f"✅ mipo: type={ds.type}, layers={len(ds.layers)}, "
+          f"age_rules={len(ds.age_weight_rules)}")
 
 
 def test_tongzhuang_profile_loads_multi_layer():
@@ -191,7 +199,7 @@ def test_profile_yaml_files_use_object_form():
     两个 brand profile 的 YAML 必须是对象形式。
     """
     profiles = [
-        ROOT / "brand_profiles" / "womenswear" / "profile.yaml",
+        ROOT / "brand_profiles" / "mipo" / "profile.yaml",
         ROOT / "brand_profiles" / "tongzhuang-outdoor" / "profile.yaml",
         ROOT / "brand_profiles" / "_template" / "profile.yaml",
     ]
@@ -217,7 +225,7 @@ def test_profile_yaml_files_use_object_form():
 
 
 if __name__ == "__main__":
-    test_womenswear_profile_loads_object_form()
+    test_mipo_profile_loads_multi_layer()
     test_tongzhuang_profile_loads_multi_layer()
     test_parse_decision_structure_single_layer()
     test_parse_decision_structure_multi_layer()

@@ -33,6 +33,7 @@ from src.report import render_single_report_markdown
 from src.types import (
     StyleInfo, FullPrediction, GradeResult, BrandConfig,
     SALES_QTY_COL_ALIASES, SELL_THROUGH_COL_ALIASES, MANUAL_GRADE_COL_ALIASES,
+    MAIN_PUSH_COL_ALIASES, LIVE_STREAM_COL_ALIASES, STYLE_ID_COL_ALIASES,
     find_aliased_column, parse_sales_value, safe_float,
 )
 from scripts.rename_images import batch_rename_from_folders  # 图片重命名脚本
@@ -455,19 +456,40 @@ def render_page_upload():
                 style_infos: list[StyleInfo] = []
                 image_paths_map: dict[str, list[str]] = {}
 
-                # --- 用别名匹配找到可选的"真实销量/人工分级/售罄率"列 ---
+                # --- 用别名匹配找到可选的"真实销量/人工分级/售罄率/营销投放"列 ---
                 sales_col = find_aliased_column(list(df.columns), SALES_QTY_COL_ALIASES)
                 grade_col = find_aliased_column(list(df.columns), MANUAL_GRADE_COL_ALIASES)
                 st_col = find_aliased_column(list(df.columns), SELL_THROUGH_COL_ALIASES)
+                push_col = find_aliased_column(list(df.columns), MAIN_PUSH_COL_ALIASES)
+                live_col = find_aliased_column(list(df.columns), LIVE_STREAM_COL_ALIASES)
+                sid_col = find_aliased_column(list(df.columns), STYLE_ID_COL_ALIASES) or "款式编号"
+                if sid_col not in df.columns:
+                    st.error(f"❌ 未找到款号列（支持：{' / '.join(STYLE_ID_COL_ALIASES)}），无法解析批次")
+                    st.stop()
                 if sales_col:
                     st.success(f"✅ 检测到销量列「{sales_col}」，将自动带入回测校准")
+                else:
+                    st.warning(
+                        f"⚠️ 未检测到销量列（支持别名：{' / '.join(SALES_QTY_COL_ALIASES[:4])}…）。"
+                        f"本批次只能跑预测，无法回测校准。"
+                    )
                 if grade_col:
-                    st.success(f"✅ 检测到人工分级列「{grade_col}」")
+                    st.success(f"✅ 检测到人工分级列「{grade_col}」（仅作对照展示，不进校准）")
                 if st_col:
                     st.success(f"✅ 检测到售罄率列「{st_col}」")
+                if push_col:
+                    st.success(f"✅ 检测到实际主推列「{push_col}」，将用于残差分离（款式 vs 投放）")
+                if live_col:
+                    st.success(f"✅ 检测到实际直播列「{live_col}」，将用于残差分离（款式 vs 投放）")
+                if not push_col and not live_col:
+                    st.info(
+                        "ℹ️ 未检测到营销投放列（是否主推/是否直播重点）。"
+                        "校准将无法区分「款式好」和「被推爆」，建议后续批次补上。"
+                    )
 
+                from src.types import _truthy_excel_value as _tv
                 for _, row in df.iterrows():
-                    sid = str(row["款式编号"])
+                    sid = str(row[sid_col])
                     cat_raw = row.get("品类")
                     if isinstance(cat_raw, str) and cat_raw.strip() and str(cat_raw) != "nan":
                         from src.data_io import resolve_category
@@ -499,6 +521,8 @@ def render_page_upload():
                         style_id=sid, category=cat,
                         price=price, season=season, fab_description=fab_text,
                         sales_qty=sales, manual_grade=m_grade, sell_through_pct=st_pct,
+                        is_main_push=_tv(row[push_col]) if push_col and pd.notna(row.get(push_col)) else False,
+                        is_live_stream=_tv(row[live_col]) if live_col and pd.notna(row.get(live_col)) else False,
                     ))
                     imgs = style_to_images.get(sid, [])
                     image_paths_map[sid] = [str(p) for p in imgs]

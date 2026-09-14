@@ -8,7 +8,23 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_brand_profile
-from .types import BrandConfig, StyleInfo, safe_float
+from .types import (
+    CATEGORY_COL_ALIASES,
+    FAB_COL_ALIASES,
+    LIVE_STREAM_COL_ALIASES,
+    MAIN_PUSH_COL_ALIASES,
+    MANUAL_GRADE_COL_ALIASES,
+    PRICE_COL_ALIASES,
+    SALES_QTY_COL_ALIASES,
+    SEASON_COL_ALIASES,
+    SELL_THROUGH_COL_ALIASES,
+    STYLE_ID_COL_ALIASES,
+    BrandConfig,
+    StyleInfo,
+    _truthy_excel_value,
+    find_aliased_column,
+    safe_float,
+)
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +123,9 @@ def read_styles_excel(
 ) -> list[StyleInfo]:
     """从 styles.xlsx 读取所有款式信息（v2.0 支持 BrandConfig 品类解析）
 
-    列名找不到时自动忽略该字段。category_col=None 表示没有品类列。
+    列名解析策略：参数显式指定且确实存在于表头 → 用参数；
+    否则用 src.types 里的别名组自动匹配（如「销量」→「真实销量结果」）。
+    列最终找不到时该字段自动忽略（保持旧行为）。
 
     新特性：若传 brand_cfg，则通过 resolve_category() 把原始品类名标准化为 category_id，
     同时保留原始名作为 category 字段的一部分（兼容旧代码）。
@@ -118,6 +136,30 @@ def read_styles_excel(
         raise FileNotFoundError(f"款式表不存在：{styles_xlsx}")
     df = pd.read_excel(styles_xlsx)
     df.columns = [str(c).strip() for c in df.columns]
+
+    # ---- 别名解析：显式参数优先，否则自动匹配别名组 ----
+    def _resolve_col(param: str | None, aliases: list[str]) -> str | None:
+        if param is not None and param in df.columns:
+            return param
+        return find_aliased_column(list(df.columns), aliases)
+
+    style_id_col = _resolve_col(style_id_col, STYLE_ID_COL_ALIASES)
+    category_col = _resolve_col(category_col, CATEGORY_COL_ALIASES)
+    price_col = _resolve_col(price_col, PRICE_COL_ALIASES)
+    fab_col = _resolve_col(fab_col, FAB_COL_ALIASES)
+    season_col = _resolve_col(season_col, SEASON_COL_ALIASES)
+    manual_grade_col = _resolve_col(manual_grade_col, MANUAL_GRADE_COL_ALIASES)
+    sales_col = _resolve_col(sales_col, SALES_QTY_COL_ALIASES)
+    sell_through_col = _resolve_col(sell_through_col, SELL_THROUGH_COL_ALIASES)
+    main_push_col = _resolve_col(main_push_col, MAIN_PUSH_COL_ALIASES)
+    live_col = _resolve_col(live_col, LIVE_STREAM_COL_ALIASES)
+
+    # 销量列缺失直接影响回测校准可用性，显式警告
+    if sales_col is None:
+        log.warning(
+            "未找到销量列（支持别名：%s）。本批次无法回测校准，只能预测。",
+            " / ".join(SALES_QTY_COL_ALIASES),
+        )
 
     styles: list[StyleInfo] = []
     for _, row in df.iterrows():
@@ -147,11 +189,6 @@ def read_styles_excel(
             grade = str(grade_val)
         else:
             grade = ""
-
-        def _bool(v: Any) -> bool:
-            if v is None: return False
-            s = str(v).strip().lower()
-            return s in {"1", "true", "yes", "是", "y", "t", "主推", "重点"}
 
         price = safe_float(_get(price_col), 0.0)
         sales = int(safe_float(_get(sales_col), 0.0))
@@ -184,8 +221,8 @@ def read_styles_excel(
             sales_qty=sales,
             sell_through_pct=sell_through,
             season=(_get(season_col) or "").strip(),
-            is_main_push=_bool(_get(main_push_col)),
-            is_live_stream=_bool(_get(live_col)),
+            is_main_push=_truthy_excel_value(_get(main_push_col)),
+            is_live_stream=_truthy_excel_value(_get(live_col)),
         ))
     return styles
 

@@ -272,14 +272,31 @@ def safe_float(v: Any, default: float = 5.0) -> float:
 
 
 # ========== Excel 列名别名常量（供多模块统一识别）==========
+# 语义约定：「是否主推/是否直播重点」记录的是【实际投放】（ADR-0001），
+# 即该款真实被主推/进过直播间，而非研发阶段的计划。
 SALES_QTY_COL_ALIASES = [
     "真实销量结果", "真实销售结果", "真实销量", "累计销量",
     "销量", "真实销量数", "销售数量", "销售结果",
 ]
 SELL_THROUGH_COL_ALIASES = ["售罄率", "售罄比例"]
 MANUAL_GRADE_COL_ALIASES = ["内审分级", "人工分级", "评级", "人工评级", "S/A/P"]
-PRICE_COL_ALIASES = ["售价", "成交价格", "成交价"]
-STYLE_ID_COL_ALIASES = ["款式编号", "款号", "style_id"]
+PRICE_COL_ALIASES = ["售价", "成交价格", "成交价", "吊牌价"]
+STYLE_ID_COL_ALIASES = ["款式编号", "款号", "style_id", "商品编号"]
+CATEGORY_COL_ALIASES = ["品类", "品类名称", "类别", "商品品类", "商品类别"]
+SEASON_COL_ALIASES = ["季节", "上架季节", "季节属性", "适用季节"]
+FAB_COL_ALIASES = ["FAB描述", "FAB", "fab", "款式描述", "版型/设计描述"]
+MAIN_PUSH_COL_ALIASES = ["是否主推", "主推", "是否主推款", "实际主推"]
+LIVE_STREAM_COL_ALIASES = ["是否直播重点", "直播重点", "直播款", "实际直播"]
+
+
+def _truthy_excel_value(v: Any) -> bool:
+    """Excel 单元格值 → 布尔（与 data_io/_bool 同口径）"""
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    return s in {"1", "true", "yes", "是", "y", "t", "主推", "重点", "已推", "已直播"}
 
 
 def find_aliased_column(df_cols: list[str], aliases: list[str]) -> str | None:
