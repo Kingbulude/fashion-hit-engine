@@ -28,7 +28,7 @@ from .feature_extraction import (
     FeatureExtractionEngine,
     extract_style_features,
 )
-from .grading import decide_grade
+from .grading import assign_relative_grades, decide_grade
 from .llm_client import BailianClient
 from .persona_voting import run_persona_voting
 from .report import generate_backtest_summary, generate_markdown_report, generate_report
@@ -105,14 +105,22 @@ def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="mipo"):
                 progress=True,
             )
             predictions.append(pred)
-            report_path = generate_report(pred, out_dir / "reports")
-            log.info(
-                "  ✅ 完成 → 分级=%s 最终分=%.1f 置信度=%.0%%  报告=%s",
-                pred.grade.grade, pred.grade.final_score,
-                pred.grade.confidence, report_path.name,
-            )
         except Exception as e:
             log.exception("  ❌ 款%s处理失败: %s", s.style_id, e)
+
+    # 批次内相对分级：冷启动时绝对阈值失效（VLM 绝对分尺度未校准），
+    # 但 VLM 的排序可靠 → 按批次内分位重定 S/A+/A/P，与人工内审语义对齐。
+    # 幂等：绝对档快照存 metadata['absolute_grade']，重复调用无副作用。
+    assign_relative_grades(predictions)
+
+    # 报告生成放在相对分级之后，确保单款报告展示的是最终相对档位
+    for pred in predictions:
+        report_path = generate_report(pred, out_dir / "reports")
+        log.info(
+            "  ✅ 完成 → 分级=%s 最终分=%.1f 置信度=%.0%%  报告=%s",
+            pred.grade.grade, pred.grade.final_score,
+            pred.grade.confidence, report_path.name,
+        )
 
     xlsx_path = save_predictions_xlsx(predictions, out_dir / f"{mode}_summary_{len(predictions)}款.xlsx")
     log.info("✅ 批量总表已导出 → %s", xlsx_path)

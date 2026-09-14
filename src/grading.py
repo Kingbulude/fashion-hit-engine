@@ -265,6 +265,78 @@ def assign_grade(
     return base
 
 
+# ========== 批次内相对分级（冷启动对齐人工内审语义）==========
+def assign_relative_grades(
+    preds: list[FullPrediction],
+    *,
+    s_pct: float = 0.20,
+    a_plus_pct: float = 0.20,
+    a_pct: float = 0.35,
+) -> dict[str, str]:
+    """批次内相对分级：S=Top20%，A+=20-40%，A=40-75%，P=后25%。
+
+    为什么需要（见 CONTEXT.md「相对分级」）：
+    人工内审的 S/A/P 是批次内**相对排序**（这批里最好的打 S），
+    而绝对阈值分级在冷启动时失效——VLM 绝对分尺度未校准
+    （常见所有款 6.5-7.5 分→100 制全是 A 档），但 VLM 的**排序可靠**。
+    相对分级直接消费排序信息，与人工语义对齐。
+
+    规则：
+    - 「风险」款保留绝对判定（反对率/双渠道规则），不参与分位
+    - 同分并列进同一档（分数边界而非排名边界）
+    - 幂等：绝对分档存 metadata['absolute_grade']，重复调用无副作用
+    - 至少 1 款时仍可分级（单款=S）
+
+    Returns: {style_id: 相对分级}，同时原地更新 p.grade.grade。
+    """
+    if not preds:
+        return {}
+
+    # 首次调用时快照绝对分档（幂等保护）
+    for p in preds:
+        md = p.metadata
+        if "absolute_grade" not in md:
+            md["absolute_grade"] = p.grade.grade
+
+    # 风险款不参与分位（绝对规则已判）
+    ranked = [p for p in preds if p.metadata.get("absolute_grade") != "风险"]
+    result: dict[str, str] = {}
+    for p in preds:
+        if p.metadata.get("absolute_grade") == "风险":
+            p.grade.grade = "风险"
+            result[p.info.style_id] = "风险"
+
+    if ranked:
+        scores_sorted = sorted(
+            (p.grade.final_score for p in ranked), reverse=True,
+        )
+        n = len(scores_sorted)
+        n_s = max(1, round(n * s_pct))
+        n_ap = max(1, round(n * a_plus_pct))
+        n_a = max(0, round(n * a_pct))
+        # 分数边界（同分并列自然进同档）
+        s_line = scores_sorted[min(n_s, n) - 1]
+        ap_line = scores_sorted[min(n_s + n_ap, n) - 1]
+        a_line = scores_sorted[min(n_s + n_ap + n_a, n) - 1]
+
+        for p in ranked:
+            sc = p.grade.final_score
+            if sc >= s_line:
+                g = "S"
+            elif sc >= ap_line:
+                g = "A+"
+            elif sc >= a_line:
+                g = "A"
+            else:
+                g = "P"
+            p.grade.grade = g
+            result[p.info.style_id] = g
+
+    log.info("相对分级完成：%s（绝对档快照存 metadata.absolute_grade）",
+             {g: list(k for k, v in result.items() if v == g) for g in ("S", "A+", "A", "P")})
+    return result
+
+
 # ========== 渠道推荐 ==========
 def _recommend_channel(channels: ChannelScores, info: StyleInfo) -> str:
     diff = channels.live_score - channels.natural_score

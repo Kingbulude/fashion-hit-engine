@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
 from src.config import load_config, list_available_brands, load_brand_profile
+from src.grading import assign_relative_grades
 from src.pipeline import PredictionPipeline
 from src.report import render_single_report_markdown
 from src.types import (
@@ -556,6 +557,7 @@ def render_page_upload():
                 st.session_state.style_infos = style_infos
                 st.session_state.image_paths_map = image_paths_map
                 st.session_state.preds = []
+                st.session_state.batch_finalized = False
                 st.session_state.progress_info = {
                     "current": 0, "total": len(style_infos),
                     "stage": "开始评估…", "failed": {},
@@ -572,7 +574,8 @@ def render_page_upload():
     with col2:
         if st.button("🧹 清空本次输入", use_container_width=True):
             for key in ("preds", "df_input", "style_to_images", "progress_info",
-                        "style_infos", "image_paths_map", "blind_ids"):
+                        "style_infos", "image_paths_map", "blind_ids",
+                        "batch_finalized", "history_batch_id"):
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
@@ -678,28 +681,75 @@ def render_page_summary():
         st.error("❌ 没有任何款式成功处理，请检查输入数据或 LLM 配置")
         return
 
-    # 持久化到历史库：跨批次累积价格/特征/分数分布
-    try:
-        pl = PredictionPipeline(
-            brand_id=brand_cfg.brand_id,
-            llm_backend=st.session_state.llm_backend,
-            api_key=_api_key_from_session or None,
+    # 批次收尾（只执行一次，防止页面 rerun 重复写历史库）：
+    # ① 批次内相对分级 ② 持久化到历史库
+    if not st.session_state.get("batch_finalized"):
+        st.session_state["batch_finalized"] = True
+        # ① 相对分级：冷启动绝对阈值失效时按批次内分位重定档（幂等）
+        assign_relative_grades(preds)
+        # ② 历史库持久化：跨批次累积价格/特征/分数分布
+        try:
+            pl = PredictionPipeline(
+                brand_id=brand_cfg.brand_id,
+                llm_backend=st.session_state.llm_backend,
+                api_key=_api_key_from_session or None,
+            )
+            batch_id = pl.save_to_history(
+                preds,
+                notes=f"Streamlit批次: {st.session_state.get('batch_name', 'untitled')}",
+            )
+            st.session_state["history_batch_id"] = batch_id
+            st.caption(f"💾 已存入历史库 batch `{batch_id}`（含相对分级结果），供后续批次累积分布")
+        except Exception as e:
+            st.warning(f"⚠️ 历史库写入失败（不影响当前结果）: {e}")
+
+    # ---- 分级逻辑诊断：分数分布 + 绝对档 vs 相对档对照 ----
+    _diag_preds = [p for p in preds if not p.info.is_blind]
+    if len(_diag_preds) >= 3:
+        _scores = [p.grade.final_score for p in _diag_preds]
+        _mean = sum(_scores) / len(_scores)
+        _std = (sum((x - _mean) ** 2 for x in _scores) / len(_scores)) ** 0.5
+        _n_shift = sum(
+            1 for p in _diag_preds
+            if p.metadata.get("absolute_grade", p.grade.grade) != p.grade.grade
         )
-        batch_id = pl.save_to_history(
-            preds,
-            notes=f"Streamlit批次: {st.session_state.get('batch_name', 'untitled')}",
-        )
-        st.caption(f"💾 已存入历史库 batch `{batch_id}`，供后续批次累积分布")
-    except Exception as e:
-        st.warning(f"⚠️ 历史库写入失败（不影响当前结果）: {e}")
+        _abs_counts = pd.Series(
+            [p.metadata.get("absolute_grade", p.grade.grade) for p in _diag_preds]
+        ).value_counts()
+        _rel_counts = pd.Series([p.grade.grade for p in _diag_preds]).value_counts()
+        with st.expander("🔬 分级逻辑诊断（批次内相对分级）", expanded=False):
+            st.markdown(
+                f"本批次已启用**批次内相对分级**（S=Top 20%，A+=20-40%，A=40-75%，P=后 25%）。"
+                f"冷启动时 VLM 绝对分尺度未校准（常见现象：全部款 65-75 分 → 绝对档全是 A），"
+                f"但**排序可靠**，相对分级直接消费排序信息，与人工内审「这批里最好的打 S」语义对齐。"
+            )
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("综合分均值", f"{_mean:.1f}")
+            c2.metric("标准差 σ", f"{_std:.1f}")
+            c3.metric("分数极差", f"{max(_scores) - min(_scores):.1f}")
+            c4.metric("档位调整数", f"{_n_shift}/{len(_diag_preds)}")
+            if _std < 4.0:
+                st.warning(
+                    f"⚠️ **分数扎堆告警**：本批次综合分 σ={_std:.1f}（<4），绝对阈值分档基本失效"
+                    f"（绝对档 {_abs_counts.to_dict()}）——这正是相对分级存在的意义。"
+                    f"待 3Loop 校准积累（≥10 款销量回填）后绝对档会逐步可用。"
+                )
+            else:
+                st.info(
+                    f"分数分布较分散（σ={_std:.1f}），绝对档与相对档分布对照："
+                    f"绝对 {_abs_counts.to_dict()} vs 相对 {_rel_counts.to_dict()}。"
+                )
 
     rows = []
     for p in preds:
+        # 绝对档对照列：绝对阈值分档（冷启动时尺度未校准，仅作参考）
+        abs_grade = p.metadata.get("absolute_grade", p.grade.grade)
         if p.info.is_blind:
             # 盲测款：结论列打码（运营不可见，销量回填后在回测页解锁对照）
             rows.append({
                 "款号": p.info.style_id,
                 "分级": "🔒 盲测",
+                "绝对档": "🔒",
                 "综合分": "🔒",
                 "自然分": "🔒",
                 "直播分": "🔒",
@@ -713,6 +763,7 @@ def render_page_summary():
             rows.append({
                 "款号": p.info.style_id,
                 "分级": p.grade.grade,
+                "绝对档": abs_grade,
                 "综合分": round(p.grade.final_score, 1),
                 "自然分": round(p.channels.natural_score, 1),
                 "直播分": round(p.channels.live_score, 1),
