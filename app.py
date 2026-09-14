@@ -598,6 +598,24 @@ def render_page_summary():
     else:
         st.success(f"✅ 全部完成，共 {total} 款（成功 {n_success}，失败 0）")
 
+    # 批次真实性标记：让用户一眼知道当前结果是真 VLM 还是 mock 跑的
+    if preds:
+        _meta = preds[0].metadata or {}
+        _is_mock = _meta.get("is_mock", st.session_state.get("llm_backend") == "mock")
+        if _is_mock:
+            st.caption("🧪 **Mock 演示模式** · 分数为本地确定性随机生成，跟真实销量无关。"
+                       "用于调试管线，不能评估预测准确率。")
+        else:
+            _feats = _meta.get("feature_models", ["qwen-vl-plus"])
+            _pers = _meta.get("persona_models", ["qwen-max", "deepseek-v3"])
+            _elapsed = _meta.get("elapsed_s")
+            _elapsed_str = f" · 单款耗时约 {_elapsed}s" if _elapsed else ""
+            st.caption(
+                f"🤖 **真实 VLM 评估** · 特征提取：{' / '.join(_feats)} | "
+                f"人设投票：{' / '.join(_pers)}{_elapsed_str}。"
+                f"此批次分数来自百炼 API 对图片的实际分析。"
+            )
+
     if not preds:
         st.error("❌ 没有任何款式成功处理，请检查输入数据或 LLM 配置")
         return

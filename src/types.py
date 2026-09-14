@@ -140,6 +140,8 @@ class FullPrediction:
     voting: VotingResult
     channels: ChannelScores
     grade: GradeResult
+    # 运行元数据：记录这个结果是怎么来的（真实 VLM / mock / 用了哪个模型）
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_flat_dict(self) -> dict[str, Any]:
         row: dict[str, Any] = {"style_id": self.info.style_id}

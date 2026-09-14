@@ -471,7 +471,15 @@ class PredictionPipeline:
             return FullPrediction(
                 info=info, features=feats, voting=voting,
                 channels=channels, grade=grade,
+                metadata={
+                    "llm_backend": "mock",
+                    "is_mock": True,
+                    "brand_id": self.brand_cfg.brand_id,
+                    "tier": "mock_deterministic",
+                },
             )
+        import time as _time
+        _t0 = _time.time()
         feats = extract_style_features(
             self.client, info, cfg=None,
             brand_cfg=self.brand_cfg, llm_backend=self.llm_backend,
@@ -484,9 +492,23 @@ class PredictionPipeline:
         grade = decide_grade(
             info, feats, voting, channels, cfg=None, brand_cfg=self.brand_cfg,
         )
+        _elapsed = round(_time.time() - _t0, 1)
+        # 从 features 里提取 VLM 实际用了哪些模型（model_scores 会有）
+        _feat_models: set[str] = set()
+        for f in feats.features.values():
+            for m in (f.model_scores or {}).keys():
+                _feat_models.add(m)
+        metadata = {
+            "llm_backend": self.llm_backend,
+            "is_mock": False,
+            "feature_models": sorted(_feat_models) or ["qwen-vl-plus"],
+            "persona_models": self.brand_cfg.personas.get("persona_models", ["qwen-max", "deepseek-v3"]),
+            "elapsed_s": _elapsed,
+            "brand_id": self.brand_cfg.brand_id,
+        }
         return FullPrediction(
             info=info, features=feats, voting=voting,
-            channels=channels, grade=grade,
+            channels=channels, grade=grade, metadata=metadata,
         )
 
     # ===== 历史批次持久化入口 =====
