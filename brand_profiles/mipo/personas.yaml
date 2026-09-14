@@ -1,0 +1,396 @@
+schema_version: "2.0"
+identity_axes_definition:
+  axis_a_scene:
+    - id: school_daily
+      name: 上学日常
+      weight_share: 0.30
+    - id: weekend_outing
+      name: 周末家庭出游
+      weight_share: 0.20
+    - id: camping_outdoor
+      name: 露营/户外课程
+      weight_share: 0.20
+    - id: live_stream_impulse
+      name: 抖音直播种草/抢购
+      weight_share: 0.15
+    - id: pe_sports
+      name: 体育课/运动训练
+      weight_share: 0.15
+  axis_b_aesthetic:
+    - id: practical_durable
+      name: 实用耐脏型
+      weight_share: 0.40
+    - id: mountain_bright
+      name: 山系多巴胺亮色
+      weight_share: 0.35
+    - id: japanese_tech
+      name: 日系机能潮酷
+      weight_share: 0.25
+  axis_c_price:
+    - id: value_budget
+      name: 刚需性价比
+      weight_share: 0.60
+    - id: quality_premium
+      name: 功能品质溢价
+      weight_share: 0.40
+personas:
+  - persona_id: P01
+    name: 实用性价比·上学娃妈
+    axes:
+      scene: school_daily
+      aesthetic: practical_durable
+      price: value_budget
+    weight: 0.0720
+    fab_focus: ["耐脏", "好洗", "机洗不发黄", "膝盖耐磨"]
+    color_preference: ["藏青", "深灰", "军绿", "卡其"]
+    child_veto_dimensions: ["卡通图案过多", "浅色不耐脏"]
+
+  - persona_id: P02
+    name: 实用品质·上学娃妈
+    axes:
+      scene: school_daily
+      aesthetic: practical_durable
+      price: quality_premium
+    weight: 0.0480
+    fab_focus: ["塔丝隆三防", "速干吸湿", "版型挺括", "papa集团背书"]
+    color_preference: ["炭灰", "墨绿", "深海蓝"]
+    child_veto_dimensions: ["廉价感面料", "过于花哨"]
+
+  - persona_id: P03
+    name: 山系亮色性价比·上学娃妈
+    axes:
+      scene: school_daily
+      aesthetic: mountain_bright
+      price: value_budget
+    weight: 0.0630
+    fab_focus: ["亮色好找娃", "耐脏暗纹", "日常可穿", "直播间破价值得囤"]
+    color_preference: ["晨曦黄", "橘色", "水蓝", "多巴胺绿"]
+    child_veto_dimensions: ["颜色太暗沉", "太像校服"]
+
+  - persona_id: P04
+    name: 山系亮色品质·上学娃妈
+    axes:
+      scene: school_daily
+      aesthetic: mountain_bright
+      price: quality_premium
+    weight: 0.0420
+    fab_focus: ["UPF50+防晒", "无logo亲子同穿", "亮色山系颜值", "拍照出片"]
+    color_preference: ["晨曦黄", "水蓝", "橘色拼色"]
+    child_veto_dimensions: ["设计土气", "logo太大"]
+
+  - persona_id: P05
+    name: 机能性价比·上学娃妈
+    axes:
+      scene: school_daily
+      aesthetic: japanese_tech
+      price: value_budget
+    weight: 0.0450
+    fab_focus: ["多口袋", "防风面料", "拼接设计", "活动方便"]
+    color_preference: ["黑", "军绿", "藏青拼色"]
+    child_veto_dimensions: ["太幼稚的图案", "紧身不舒服"]
+
+  - persona_id: P06
+    name: 机能品质·上学娃妈
+    axes:
+      scene: school_daily
+      aesthetic: japanese_tech
+      price: quality_premium
+    weight: 0.0300
+    fab_focus: ["专业机能面料", "科技感设计", "立体剪裁", "城市户外风"]
+    color_preference: ["黑灰拼接", "军绿机能", "都市藏青"]
+    child_veto_dimensions: ["不够酷", "面料软塌"]
+
+  - persona_id: P07
+    name: 实用性价比·周末出游妈
+    axes:
+      scene: weekend_outing
+      aesthetic: practical_durable
+      price: value_budget
+    weight: 0.0480
+    fab_focus: ["耐造", "多口袋", "好搭配", "不挑场合"]
+    color_preference: ["卡其", "深蓝", "深灰"]
+    child_veto_dimensions: ["容易脏的浅色", "尺码偏小"]
+
+  - persona_id: P08
+    name: 实用品质·周末出游妈
+    axes:
+      scene: weekend_outing
+      aesthetic: practical_durable
+      price: quality_premium
+    weight: 0.0320
+    fab_focus: ["品牌功能靠谱", "亲子装搭配", "物理防晒", "细节贴心"]
+    color_preference: ["大地色", "经典蓝", "高级灰"]
+    child_veto_dimensions: ["尺码不统一", "廉价感"]
+
+  - persona_id: P09
+    name: 山系亮色性价比·周末出游妈
+    axes:
+      scene: weekend_outing
+      aesthetic: mountain_bright
+      price: value_budget
+    weight: 0.0420
+    fab_focus: ["颜色好看", "拍照出片", "棉质亲肤", "全家出游亮眼"]
+    color_preference: ["晨曦黄", "水蓝", "橘色"]
+    child_veto_dimensions: ["太深太闷的颜色", "不够亮"]
+
+  - persona_id: P10
+    name: 山系亮色品质·周末出游妈
+    axes:
+      scene: weekend_outing
+      aesthetic: mountain_bright
+      price: quality_premium
+    weight: 0.0280
+    fab_focus: ["无logo亲子同穿", "亮色山系", "面料质感好", "朋友圈出片"]
+    color_preference: ["多巴胺黄", "水蓝", "柔橘"]
+    child_veto_dimensions: ["撞款烂大街", "妈妈辈审美"]
+
+  - persona_id: P11
+    name: 机能性价比·周末出游妈
+    axes:
+      scene: weekend_outing
+      aesthetic: japanese_tech
+      price: value_budget
+    weight: 0.0300
+    fab_focus: ["有口袋", "防泼水", "帽子可拆", "活动自由"]
+    color_preference: ["军绿", "黑", "藏青"]
+    child_veto_dimensions: ["粉嫩颜色", "不耐磨"]
+
+  - persona_id: P12
+    name: 机能品质·周末出游妈
+    axes:
+      scene: weekend_outing
+      aesthetic: japanese_tech
+      price: quality_premium
+    weight: 0.0200
+    fab_focus: ["户外机能风", "专业防晒防水", "硬核设计感", "城市露营风"]
+    color_preference: ["户外橙拼", "机能绿", "战术黑"]
+    child_veto_dimensions: ["不专业的样子货", "不够潮"]
+
+  - persona_id: P13
+    name: 实用性价比·露营户外妈
+    axes:
+      scene: camping_outdoor
+      aesthetic: practical_durable
+      price: value_budget
+    weight: 0.0480
+    fab_focus: ["防泼水", "多口袋装小物件", "耐造不心疼", "好洗快干"]
+    color_preference: ["军绿", "卡其", "深灰"]
+    child_veto_dimensions: ["浅色不耐脏", "不耐磨"]
+
+  - persona_id: P14
+    name: 实用品质·露营户外妈
+    axes:
+      scene: camping_outdoor
+      aesthetic: practical_durable
+      price: quality_premium
+    weight: 0.0320
+    fab_focus: ["轻功能面料", "UPF50+防晒", "可收纳", "品牌口碑款"]
+    color_preference: ["户外绿", "沙漠卡其", "深海蓝"]
+    child_veto_dimensions: ["功能不专业的样子货", "尺码偏小"]
+
+  - persona_id: P15
+    name: 山系亮色性价比·露营户外妈
+    axes:
+      scene: camping_outdoor
+      aesthetic: mountain_bright
+      price: value_budget
+    weight: 0.0420
+    fab_focus: ["露营拍照好看", "颜色温柔出片", "日常也能穿", "不夸张的户外风"]
+    color_preference: ["浅卡其", "奶油白", "柔橘"]
+    child_veto_dimensions: ["太硬核的军事风", "颜色太暗"]
+
+  - persona_id: P16
+    name: 山系亮色品质·露营户外妈
+    axes:
+      scene: camping_outdoor
+      aesthetic: mountain_bright
+      price: quality_premium
+    weight: 0.0280
+    fab_focus: ["精致露营风", "高端配色", "质感面料", "亲子露营同款"]
+    color_preference: ["奶茶棕", "雾霭蓝", "晨曦黄"]
+    child_veto_dimensions: ["太户外太爷们", "没有亮色"]
+
+  - persona_id: P17
+    name: 机能性价比·露营户外妈
+    axes:
+      scene: camping_outdoor
+      aesthetic: japanese_tech
+      price: value_budget
+    weight: 0.0300
+    fab_focus: ["口袋系统", "魔术贴调节", "拼接设计", "硬核感"]
+    color_preference: ["黑", "军绿", "炭灰拼接"]
+    child_veto_dimensions: ["太幼稚太可爱", "面料薄"]
+
+  - persona_id: P18
+    name: 机能品质·露营户外妈
+    axes:
+      scene: camping_outdoor
+      aesthetic: japanese_tech
+      price: quality_premium
+    weight: 0.0200
+    fab_focus: ["日系山系风", "专业机能细节", "科技面料", "户外潮人款"]
+    color_preference: ["山系绿", "都市黑", "机能橙"]
+    child_veto_dimensions: ["不专业的假户外", "不够酷"]
+
+  - persona_id: P19
+    name: 实用性价比·直播间宝妈
+    axes:
+      scene: live_stream_impulse
+      aesthetic: practical_durable
+      price: value_budget
+    weight: 0.0360
+    fab_focus: ["专柜价vs破价差", "耐脏好洗", "尺码做到180", "囤货不心疼"]
+    color_preference: ["藏青", "深灰", "军绿"]
+    child_veto_dimensions: ["太暴露太短", "不能机洗"]
+
+  - persona_id: P20
+    name: 实用品质·直播间宝妈
+    axes:
+      scene: live_stream_impulse
+      aesthetic: practical_durable
+      price: quality_premium
+    weight: 0.0240
+    fab_focus: ["专柜同款", "三防/速干功能", "京东自营背书", "库存有限先拍"]
+    color_preference: ["藏青格纹", "炭灰", "墨绿"]
+    child_veto_dimensions: ["显得廉价", "尺码不统一"]
+
+  - persona_id: P21
+    name: 山系亮色性价比·直播间宝妈
+    axes:
+      scene: live_stream_impulse
+      aesthetic: mountain_bright
+      price: value_budget
+    weight: 0.0315
+    fab_focus: ["多巴胺亮色", "直播间视觉冲击", "价格锚点强", "男女宝都能穿"]
+    color_preference: ["晨曦黄", "橘色", "水蓝"]
+    child_veto_dimensions: ["太土太普通", "颜色暗沉"]
+
+  - persona_id: P22
+    name: 山系亮色品质·直播间宝妈
+    axes:
+      scene: live_stream_impulse
+      aesthetic: mountain_bright
+      price: quality_premium
+    weight: 0.0210
+    fab_focus: ["商场同款", "亮色山系颜值", "无logo亲子", "限时破价"]
+    color_preference: ["多巴胺橘", "水蓝", "亮黄"]
+    child_veto_dimensions: ["撞款淘宝爆款", "logo太大"]
+
+  - persona_id: P23
+    name: 机能性价比·直播间宝妈
+    axes:
+      scene: live_stream_impulse
+      aesthetic: japanese_tech
+      price: value_budget
+    weight: 0.0225
+    fab_focus: ["帅酷机能风", "泼水实验可视化", "有个性", "男孩气场"]
+    color_preference: ["黑拼色", "深蓝机能", "军绿潮酷"]
+    child_veto_dimensions: ["太粉太可爱", "不够机能"]
+
+  - persona_id: P24
+    name: 机能品质·直播间宝妈
+    axes:
+      scene: live_stream_impulse
+      aesthetic: japanese_tech
+      price: quality_premium
+    weight: 0.0150
+    fab_focus: ["潮酷机能风", "专业面料话术", "街拍范儿", "专柜级"]
+    color_preference: ["暗黑机能", "潮牌拼接", "未来感设计"]
+    child_veto_dimensions: ["不够有个性", "面料没质感"]
+
+  - persona_id: P25
+    name: 实用性价比·体育课妈
+    axes:
+      scene: pe_sports
+      aesthetic: practical_durable
+      price: value_budget
+    weight: 0.0360
+    fab_focus: ["透气速干", "活动不受限", "耐洗", "膝盖加固"]
+    color_preference: ["深蓝", "黑", "深灰"]
+    child_veto_dimensions: ["紧身不舒服", "吸汗不透"]
+
+  - persona_id: P26
+    name: 实用品质·体育课妈
+    axes:
+      scene: pe_sports
+      aesthetic: practical_durable
+      price: quality_premium
+    weight: 0.0240
+    fab_focus: ["专业速干面料", "排汗透气", "耐磨抗造", "保护性好"]
+    color_preference: ["专业运动队色", "品牌经典色", "竞技感配色"]
+    child_veto_dimensions: ["不专业的休闲款冒充运动服"]
+
+  - persona_id: P27
+    name: 山系亮色性价比·体育课妈
+    axes:
+      scene: pe_sports
+      aesthetic: mountain_bright
+      price: value_budget
+    weight: 0.0315
+    fab_focus: ["运动也好看", "亮色好找娃", "不臃肿", "平时也能穿"]
+    color_preference: ["水蓝", "晨曦黄", "薄荷绿"]
+    child_veto_dimensions: ["太爷们的运动款", "颜色太暗"]
+
+  - persona_id: P28
+    name: 山系亮色品质·体育课妈
+    axes:
+      scene: pe_sports
+      aesthetic: mountain_bright
+      price: quality_premium
+    weight: 0.0210
+    fab_focus: ["设计师运动风", "配色高级", "修身不臃肿", "训练班也能穿"]
+    color_preference: ["莫兰迪运动色", "高级灰蓝", "山系黄"]
+    child_veto_dimensions: ["太笨重的传统运动服", "没有亮色"]
+
+  - persona_id: P29
+    name: 机能性价比·体育课妈
+    axes:
+      scene: pe_sports
+      aesthetic: japanese_tech
+      price: value_budget
+    weight: 0.0225
+    fab_focus: ["机能运动风", "多口袋设计", "拼接酷感", "男孩子超爱"]
+    color_preference: ["黑灰拼接", "军绿运动", "藏青机能"]
+    child_veto_dimensions: ["太可爱太粉", "不耐磨"]
+
+  - persona_id: P30
+    name: 机能品质·体育课妈
+    axes:
+      scene: pe_sports
+      aesthetic: japanese_tech
+      price: quality_premium
+    weight: 0.0150
+    fab_focus: ["专业机能运动", "科技感面料", "潮酷运动风", "篮球/足球训练也可"]
+    color_preference: ["机能运动黑", "潮牌联名色", "未来感拼接"]
+    child_veto_dimensions: ["不够潮不够酷", "面料软塌"]
+
+child_identity_axes:
+  - persona_id: C01_6_8_male
+    age: 7
+    gender: male
+    veto_when: ["颜色太粉", "裙子", "紧身剪裁", "幼稚小婴儿图案", "太多卡通"]
+
+  - persona_id: C02_6_8_female
+    age: 7
+    gender: female
+    veto_when: ["全黑色", "太男性化", "没有任何装饰", "军绿色从头到脚", "太深太闷"]
+
+  - persona_id: C03_9_11_male
+    age: 10
+    gender: male
+    veto_when: ["幼稚卡通", "太亮色太娘", "紧身款", "有小花边", "logo太大"]
+
+  - persona_id: C04_9_11_female
+    age: 10
+    gender: female
+    veto_when: ["太土", "不好看的粉色", "黑色太多", "太爷们的款式", "没有亮色"]
+
+  - persona_id: C05_12_14_male
+    age: 13
+    gender: male
+    veto_when: ["太小孩", "不酷", "卡通图案", "鲜艳的糖果色", "妈妈辈审美"]
+
+  - persona_id: C06_12_14_female
+    age: 13
+    gender: female
+    veto_when: ["不潮", "像小学生穿的", "太幼稚的卡通", "妈妈辈审美", "没有个性"]

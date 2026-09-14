@@ -1,0 +1,128 @@
+# ============ 10个结构化特征 · BARS行为锚定评分量表 ============
+# 量表：1-10分，每2分一档有具体视觉行为锚定描述
+# VLM执行"匹配"任务而非"打分"任务
+
+features:
+
+  # ===== 物理类特征（客观可测量，校准频率低）=====
+
+  F01_silhouette:
+    name: "廓形度"
+    category: physical
+    description: "宽松/修身/廓形的程度"
+    anchors:
+      1: {range: [1, 2], label: "超紧贴身", description: "运动压缩衣感，完全贴合身体轮廓，几乎无余量"}
+      2: {range: [3, 4], label: "修身", description: "修身版型，略有余量，活动不紧绷但不宽松"}
+      3: {range: [5, 6], label: "常规", description: "标准版型，无明显宽松或紧身特征"}
+      4: {range: [7, 8], label: "宽松oversize", description: "明显宽松，比正常大1-2个码，有垂坠感但廓形清晰"}
+      5: {range: [9, 10], label: "超宽廓形", description: "灯笼感/斗篷感/极度oversize，完全脱离身体轮廓"}
+
+  F02_clean_look:
+    name: "利落感"
+    category: physical
+    description: "视觉整洁度，堆积/褶皱/垂坠/零碎细节多=低分"
+    anchors:
+      1: {range: [1, 2], label: "视觉混乱", description: "大量堆积/垂坠/零碎装饰/多层次组合，整体拥挤无序"}
+      2: {range: [3, 4], label: "不够利落", description: "明显褶皱堆积/大oversize垮感/多口袋或零碎装饰显杂乱"}
+      3: {range: [5, 6], label: "常规", description: "普通版型，无明显利落或不利落特征"}
+      4: {range: [7, 8], label: "比较利落", description: "线条干净，少量装饰不拥挤，版型规整不垮"}
+      5: {range: [9, 10], label: "极利落", description: "极简结构，无多余细节，强线条感，专业剪裁感"}
+
+  F03_color_risk:
+    name: "色彩风险"
+    category: physical
+    description: "高饱和/撞色/荧光=高风险；基础色=低风险"
+    anchors:
+      1: {range: [1, 2], label: "安全基础色", description: "黑/灰/藏青/卡其/军绿等低饱和基础中性色"}
+      2: {range: [3, 4], label: "低饱和彩色", description: "莫兰迪色/大地色/低饱和粉蓝等柔和彩色系"}
+      3: {range: [5, 6], label: "中等饱和", description: "中等饱和度单色或简单双色拼接（色相差<60°）"}
+      4: {range: [7, 8], label: "高饱和撞色", description: "高饱和明亮色或多色拼接（色相差>120°），视觉较强"}
+      5: {range: [9, 10], label: "极强视觉冲击", description: "荧光色/大面积撞色/渐变炫彩，视觉极度吸引眼球，受众窄"}
+
+  F04_function_visibility:
+    name: "功能可见性"
+    category: physical
+    description: "户外功能（防水/防风/防晒/反光/口袋）的视觉显性程度"
+    anchors:
+      1: {range: [1, 2], label: "无功能元素", description: "完全无任何户外功能视觉元素，与普通休闲装无异"}
+      2: {range: [3, 4], label: "隐约功能感", description: "只有少量细节暗示功能（如接缝压胶/暗门襟等，不仔细看不易发现）"}
+      3: {range: [5, 6], label: "常规功能可见", description: "常规户外功能元素清晰可见（口袋/帽檐调节/松紧收边等）"}
+      4: {range: [7, 8], label: "明显功能设计", description: "功能设计突出（防水压胶条/反光条/多口袋系统/魔术贴调节等多处可见）"}
+      5: {range: [9, 10], label: "硬核功能外显", description: "全身功能细节外显（全身防水条/大量功能附件/战术扣件/硬核装备感）"}
+
+  # ===== 感知类特征（主观但可校准，季度校准）=====
+
+  F05_photogenic:
+    name: "上镜感"
+    category: perceptual
+    description: "镜头表现力，直播/短视频画面里是否吸睛、有记忆点"
+    anchors:
+      1: {range: [1, 2], label: "画面平淡", description: "无视觉记忆点，镜头里很普通，容易被划走"}
+      2: {range: [3, 4], label: "略有特色", description: "有一定设计但记忆点弱，展示几秒后容易被遗忘"}
+      3: {range: [5, 6], label: "常规表现", description: "中规中矩，没有特别吸睛也不丑"}
+      4: {range: [7, 8], label: "有视觉记忆点", description: "有明显视觉标识（亮眼配色/独特廓形/吸睛细节），镜头下能记住"}
+      5: {range: [9, 10], label: "极强镜头冲击", description: "一眼记住，画面冲击力极强，适合做封面和主推展示"}
+
+  F06_wearability:
+    name: "实穿度"
+    category: perceptual
+    description: "日常穿着场景覆盖度（上学/户外/日常多场景适配）"
+    anchors:
+      1: {range: [1, 2], label: "场景极窄", description: "仅特定户外活动能穿（如极硬核登山服），日常上学不便穿着"}
+      2: {range: [3, 4], label: "场景受限", description: "户外可穿但日常勉强（如过于夸张的廓形/功能造型影响上学穿着）"}
+      3: {range: [5, 6], label: "常规场景覆盖", description: "能覆盖日常上学或基础户外场景之一，但不是全部"}
+      4: {range: [7, 8], label: "多场景适配", description: "上学+户外+日常出行均可穿着，场景覆盖广"}
+      5: {range: [9, 10], label: "全场景百搭", description: "几乎任何场景都能穿，运动/上学/出游/社交均无违和感"}
+
+  F07_pairing:
+    name: "搭配度"
+    category: perceptual
+    description: "与现有衣橱搭配难度，独立性强=高分，挑搭配=低分"
+    anchors:
+      1: {range: [1, 2], label: "极挑搭配", description: "必须特定下装/内搭组合才能穿好，和普通单品搭不起来"}
+      2: {range: [3, 4], label: "搭配受限", description: "有一定搭配门槛，需要特定风格或颜色才能搭好"}
+      3: {range: [5, 6], label: "常规搭配度", description: "能与多数常见单品搭配，但需要稍费心思"}
+      4: {range: [7, 8], label: "易搭配", description: "与现有衣柜中大部分下装/内搭都能自然搭配"}
+      5: {range: [9, 10], label: "百搭", description: "几乎不挑搭配，任何风格/颜色的单品都能搭得和谐"}
+
+  F08_fabric_perception:
+    name: "面料感知"
+    category: perceptual
+    description: "从图片感知的「功能质感+穿着体验预期」"
+    anchors:
+      1: {range: [1, 2], label: "廉价无质感", description: "视觉无功能质感，显廉价普通，容易担心起球/透/易皱"}
+      2: {range: [3, 4], label: "普通面料感", description: "常规棉涤/化纤感，无明显功能或高级质感特征"}
+      3: {range: [5, 6], label: "常规质感适中", description: "标准面料质感，能看出基础做工但功能感不突出"}
+      4: {range: [7, 8], label: "明显功能质感", description: "能看出科技面料特征（防晒涂层光泽/防水面料肌理/速干织纹等），预期穿着舒适"}
+      5: {range: [9, 10], label: "高级功能质感", description: "视觉传递出高级面料/高端工艺（天鹅绒/顶级防水布/精织肌理），预期穿着体验极好"}
+
+  # ===== 品牌类特征（与品牌策略相关，每季人工参与校准）=====
+
+  F09_brand_tone:
+    name: "品牌调性贡献"
+    category: brand
+    description: "是否符合品牌「6-14岁功能性户外兼顾日常」定位的表达"
+    anchors:
+      1: {range: [1, 2], label: "偏离定位", description: "完全不符合品牌户外+日常定位（如纯时尚/纯商务/纯婴童风）"}
+      2: {range: [3, 4], label: "方向接近但弱", description: "方向沾边但表达弱（如只有基础版型无户外功能，或只有功能但不日常）"}
+      3: {range: [5, 6], label: "符合基础调性", description: "符合品牌基本定位，户外功能与日常穿着基本兼顾"}
+      4: {range: [7, 8], label: "强表达调性", description: "户外功能设计突出同时日常场景也能穿，是品牌方向的代表性款式"}
+      5: {range: [9, 10], label: "调性标杆款", description: "完美诠释品牌精神，能作为品牌调性代言款的标杆设计"}
+
+  F10_uniqueness:
+    name: "设计独特性"
+    category: brand
+    description: "市场同类款稀缺度，罕见设计语言/工艺/结构"
+    anchors:
+      1: {range: [1, 2], label: "完全跟款", description: "市场泛滥的基础款，各大品牌都在做，无任何差异化点"}
+      2: {range: [3, 4], label: "常见设计语言", description: "当季常见风格/工艺组合，差异化不大"}
+      3: {range: [5, 6], label: "有一定设计特色", description: "有细节设计差异化，但整体框架仍在常见范围内"}
+      4: {range: [7, 8], label: "明显独特设计", description: "罕见工艺/结构/细节组合（如特殊拼接/创新口袋系统/独特廓形处理）"}
+      5: {range: [9, 10], label: "极罕见设计语言", description: "市场独此一家的设计表达，有明确辨识度和设计专利潜力"}
+
+# ===== 多模型交叉验证参数 =====
+feature_validation:
+  # 三模型特征分歧 > 阈值 则标记需人工复核
+  divergence_threshold: 2.0
+  # VLM置信度 < 阈值 则触发第二模型复核
+  confidence_threshold: 0.60
