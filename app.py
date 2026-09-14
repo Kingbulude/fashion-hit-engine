@@ -195,7 +195,11 @@ def guess_category_from_text(text: str) -> str:
     return cats[0]["id"] if cats else "外套"
 
 
-def validate_inputs(df: pd.DataFrame, image_style_ids: set[str]) -> list[str]:
+def validate_inputs(
+    df: pd.DataFrame,
+    image_style_ids: set[str],
+    style_to_images: dict[str, list[Path]],
+) -> list[str]:
     """校验Excel必需列 + 款号图片文件夹匹配，返回警告列表"""
     warnings: list[str] = []
     required_cols = ["款式编号", "面料成分", "版型/设计描述", "售价"]
@@ -212,7 +216,7 @@ def validate_inputs(df: pd.DataFrame, image_style_ids: set[str]) -> list[str]:
             + ("…" if len(missing_folders) > 5 else "")
         )
     empty_folders = [s for s in style_ids if s in image_style_ids
-                     and len(st.session_state.style_to_images.get(s, [])) == 0]
+                     and len(style_to_images.get(s, [])) == 0]
     if empty_folders:
         warnings.append(f"⚠️ 图片文件夹是空的：{empty_folders[:3]}")
     return warnings
@@ -381,7 +385,7 @@ def render_page_upload():
     )
 
     if df is not None and style_ids_from_images:
-        warns = validate_inputs(df, style_ids_from_images)
+        warns = validate_inputs(df, style_ids_from_images, style_to_images)
         for w in warns:
             if w.startswith("❌"):
                 st.error(w)
