@@ -30,7 +30,11 @@ os.chdir(ROOT)
 from src.config import load_config, list_available_brands, load_brand_profile
 from src.pipeline import PredictionPipeline
 from src.report import render_single_report_markdown
-from src.types import StyleInfo, FullPrediction, GradeResult, BrandConfig
+from src.types import (
+    StyleInfo, FullPrediction, GradeResult, BrandConfig,
+    SALES_QTY_COL_ALIASES, SELL_THROUGH_COL_ALIASES, MANUAL_GRADE_COL_ALIASES,
+    find_aliased_column, parse_sales_value, safe_float,
+)
 from scripts.rename_images import batch_rename_from_folders  # 图片重命名脚本
 
 
@@ -413,6 +417,18 @@ def render_page_upload():
                 st.session_state.style_to_images = style_to_images
                 style_infos: list[StyleInfo] = []
                 image_paths_map: dict[str, list[str]] = {}
+
+                # --- 用别名匹配找到可选的"真实销量/人工分级/售罄率"列 ---
+                sales_col = find_aliased_column(list(df.columns), SALES_QTY_COL_ALIASES)
+                grade_col = find_aliased_column(list(df.columns), MANUAL_GRADE_COL_ALIASES)
+                st_col = find_aliased_column(list(df.columns), SELL_THROUGH_COL_ALIASES)
+                if sales_col:
+                    st.success(f"✅ 检测到销量列「{sales_col}」，将自动带入回测校准")
+                if grade_col:
+                    st.success(f"✅ 检测到人工分级列「{grade_col}」")
+                if st_col:
+                    st.success(f"✅ 检测到售罄率列「{st_col}」")
+
                 for _, row in df.iterrows():
                     sid = str(row["款式编号"])
                     cat_raw = row.get("品类")
@@ -429,9 +445,23 @@ def render_page_upload():
                         f"尺码：{size}\n面料：{row.get('面料成分','')}\n"
                         f"版型/设计：{row.get('版型/设计描述','')}\n颜色：{color}\n季节：{season}"
                     )
+                    # 可选的回测字段（如果 Excel 里存在就带上）
+                    sales = int(parse_sales_value(row[sales_col])) if sales_col else 0
+                    m_grade = str(row[grade_col]).strip() if grade_col and pd.notna(row.get(grade_col)) else ""
+                    if m_grade and m_grade not in ("S", "A+", "A", "P"):
+                        m_grade = ""  # 不是合法分级 → 丢弃
+                    st_pct = 0.0
+                    if st_col and pd.notna(row.get(st_col)):
+                        raw_st = str(row[st_col]).strip()
+                        if raw_st.endswith("%"):
+                            st_pct = safe_float(raw_st.rstrip("%"), 0.0) / 100.0
+                        else:
+                            st_pct = safe_float(raw_st, 0.0)
+
                     style_infos.append(StyleInfo(
                         style_id=sid, category=cat,
                         price=price, season=season, fab_description=fab_text,
+                        sales_qty=sales, manual_grade=m_grade, sell_through_pct=st_pct,
                     ))
                     imgs = style_to_images.get(sid, [])
                     image_paths_map[sid] = [str(p) for p in imgs]
@@ -751,23 +781,24 @@ def render_page_calibration():
                 df_truth = pd.read_csv(xlsx)
             else:
                 df_truth = pd.read_excel(xlsx)
-            if "真实销售结果" not in df_truth.columns and "真实销量" not in df_truth.columns:
-                st.error("❌ 缺少「真实销售结果」或「真实销量」列")
+
+            # 用统一别名匹配（支持 "真实销量结果" / "真实销售结果" / "真实销量" / ...）
+            col_truth = find_aliased_column(list(df_truth.columns), SALES_QTY_COL_ALIASES)
+            if not col_truth:
+                st.error(f"❌ 未找到销量列（支持的别名：{SALES_QTY_COL_ALIASES}）")
             else:
-                col_truth = "真实销售结果" if "真实销售结果" in df_truth.columns else "真实销量"
-                st.success(f"✅ 数据读取成功，共{len(df_truth)}行")
-                with st.expander("预览"):
+                st.success(f"✅ 识别到销量列「{col_truth}」，共{len(df_truth)}行")
+                with st.expander("预览（前5行）"):
                     st.dataframe(df_truth.head(5), use_container_width=True)
+
                 truth_map_ready = {}
                 for _, r in df_truth.iterrows():
                     sid = str(r["款式编号"])
-                    val = r[col_truth]
-                    if isinstance(val, str):
-                        digits = "".join(ch for ch in val if ch.isdigit())
-                        v = float(digits) if digits else 0.0
-                    else:
-                        v = float(val) if pd.notna(val) else 0.0
-                    truth_map_ready[sid] = v
+                    truth_map_ready[sid] = parse_sales_value(r[col_truth])
+
+                non_zero = sum(1 for v in truth_map_ready.values() if v > 0)
+                if non_zero == 0:
+                    st.warning("⚠️ 识别到的销量值全为 0 — 请检查列是否匹配正确")
         except Exception as e:
             st.error(f"Excel读取失败：{e}")
 

@@ -269,6 +269,60 @@ def safe_float(v: Any, default: float = 5.0) -> float:
         return default
 
 
+# ========== Excel 列名别名常量（供多模块统一识别）==========
+SALES_QTY_COL_ALIASES = [
+    "真实销量结果", "真实销售结果", "真实销量", "累计销量",
+    "销量", "真实销量数", "销售数量", "销售结果",
+]
+SELL_THROUGH_COL_ALIASES = ["售罄率", "售罄比例"]
+MANUAL_GRADE_COL_ALIASES = ["内审分级", "人工分级", "评级", "人工评级", "S/A/P"]
+PRICE_COL_ALIASES = ["售价", "成交价格", "成交价"]
+STYLE_ID_COL_ALIASES = ["款式编号", "款号", "style_id"]
+
+
+def find_aliased_column(df_cols: list[str], aliases: list[str]) -> str | None:
+    """在 DataFrame 列名列表里找匹配的别名（精确匹配优先，其次包含匹配）。"""
+    # 精确匹配
+    for alias in aliases:
+        if alias in df_cols:
+            return alias
+    # 包含匹配（兼容细微差异）
+    for alias in aliases:
+        for col in df_cols:
+            if alias in str(col).strip():
+                return col
+    return None
+
+
+def parse_sales_value(v: Any, default: float = 0.0) -> float:
+    """解析 Excel 里的销量值，支持 int/float/"9000+" / "9,000" / "约8000" 等。
+
+    策略：
+    - 已是数值 → 直接返回
+    - 文本 → 提取所有数字字符，拼成整数
+    - NaN/空 → 返回 default
+    """
+    if v is None:
+        return default
+    try:
+        if isinstance(v, (int, float)):
+            if v != v:  # NaN check
+                return default
+            return float(v)
+        if isinstance(v, str):
+            s = v.strip()
+            if not s or s.lower() in ("nan", "none", "-"):
+                return default
+            # 提取数字部分 (去掉 "约/+/+/~" 等前后缀和千分位逗号)
+            digits = "".join(ch for ch in s if ch.isdigit() or ch == ".")
+            if digits in ("", "."):
+                return default
+            return float(digits)
+    except Exception:
+        pass
+    return default
+
+
 def clamp(v: float, lo: float = 1.0, hi: float = 10.0) -> float:
     return max(lo, min(hi, v))
 
