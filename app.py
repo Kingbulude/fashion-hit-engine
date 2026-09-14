@@ -760,9 +760,15 @@ def render_page_detail():
         st.subheader("🎯 10特征BARS评分")
         feat_rows = []
         for key, f in p.features.features.items():
-            feat_rows.append({"特征": f.name, "分数": f.score})
+            feat_rows.append({"特征": f.name, "分数": f.score, "理由": f.reason or "（无）"})
         df_feat = pd.DataFrame(feat_rows).sort_values("分数")
         st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#6366f1", height=360)
+
+        with st.expander("🔍 查看每个特征的 VLM 判断理由", expanded=False):
+            for _, row in df_feat.iterrows():
+                st.markdown(f"**{row['特征']} · {row['分数']:.1f}/10**")
+                st.caption(row['理由'])
+                st.divider()
 
         col1, col2 = st.columns(2)
         with col1:
