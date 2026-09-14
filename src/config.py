@@ -226,12 +226,17 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
 def load_config(
     env_path: Path | None = None,
     config_dir: Path = CONFIG_DIR,
+    override_api_key: str | None = None,
 ) -> AppConfig:
     """加载默认品牌配置（.env + tongzhuang-outdoor 品牌适配包）。
 
     通用入口：等价于 load_brand_profile("tongzhuang-outdoor") + 注入 .env 的 API 配置。
     需要切换品牌时请直接用 load_brand_profile(brand_id)。
     config_dir 参数保留用于向后兼容（实际配置从 brand_profiles/ 加载）。
+
+    Args:
+        override_api_key: 若提供，则优先于 .env 中的 DASHSCOPE_API_KEY。
+                          用于 Streamlit 用户在 UI 粘贴的 API Key。
     """
     # .env 优先用户指定，其次项目根目录
     env_file = env_path or (PROJECT_ROOT / ".env")
@@ -241,7 +246,7 @@ def load_config(
         load_dotenv()
 
     api = APIConfig(
-        dashscope_api_key=os.getenv("DASHSCOPE_API_KEY", ""),
+        dashscope_api_key=(override_api_key if override_api_key is not None else os.getenv("DASHSCOPE_API_KEY", "")),
         volc_api_key=os.getenv("VOLC_API_KEY"),
         volc_endpoint=os.getenv("VOLC_ENDPOINT"),
         feature_extraction_models=[

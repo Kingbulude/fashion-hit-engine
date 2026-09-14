@@ -262,10 +262,12 @@ class PredictionPipeline:
         self,
         brand_id: str = "tongzhuang-outdoor",
         llm_backend: str = "dashscope",
+        api_key: str | None = None,
     ) -> None:
         self.brand_id = brand_id
         # llm_backend: "dashscope"(默认真实百炼) | "mock"(本地随机调试) | "volc"(火山)
         self.llm_backend = llm_backend
+        self.api_key = api_key
         self.brand_cfg: BrandConfig = load_brand_profile(brand_id)
         self.feature_engine = FeatureExtractionEngine(
             brand_cfg=self.brand_cfg, llm_backend=llm_backend,
@@ -298,10 +300,10 @@ class PredictionPipeline:
     def client(self) -> BailianClient:
         if self._client is None:
             try:
-                api_cfg = load_config().api
+                api_cfg = load_config(override_api_key=self.api_key).api
             except Exception:
                 from .config import APIConfig
-                api_cfg = APIConfig()
+                api_cfg = APIConfig(dashscope_api_key=self.api_key or "")
             self._client = BailianClient(api_cfg)
         return self._client
 

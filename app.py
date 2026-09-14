@@ -104,11 +104,25 @@ with st.sidebar.expander(f"📌 {brand_cfg.brand_name}", expanded=True):
 
 st.sidebar.divider()
 
+# --- 侧边栏：百炼 API Key 输入（方式二：UI 直接粘贴） ---
+st.sidebar.subheader("🔑 API Key")
+api_key_input = st.sidebar.text_input(
+    "输入/粘贴百炼 API Key",
+    type="password",
+    value=st.session_state.get("dashscope_api_key", ""),
+    help="从 https://bailian.console.aliyun.com 获取；仅保存在当前浏览器会话，不上传服务器",
+    key="dashscope_api_key_input",
+)
+if api_key_input:
+    st.session_state.dashscope_api_key = api_key_input
+
+_api_key_from_session = st.session_state.get("dashscope_api_key", "").strip()
+
 # --- 侧边栏：LLM 模式切换 ---
 llm_mode_label = st.sidebar.radio(
     "🤖 预测引擎",
     options=["真实 LLM（百炼API）", "演示模式（mock）"],
-    help="真实模式调用阿里云百炼 VLM/LLM API 评估款式（需要 .env 里的 DASHSCOPE_API_KEY）。演示模式用伪随机数据跑通全链路，仅用于本地调试。",
+    help="真实模式调用阿里云百炼 VLM/LLM API 评估款式（需要百炼 API Key）。演示模式用伪随机数据跑通全链路，仅用于本地调试。",
     index=0,
 )
 USE_REAL_LLM = (llm_mode_label == "真实 LLM（百炼API）")
@@ -116,11 +130,14 @@ USE_REAL_LLM = (llm_mode_label == "真实 LLM（百炼API）")
 # 检查真实LLM可用性：有没有API Key？
 _llm_backend = "dashscope" if USE_REAL_LLM else "mock"
 if USE_REAL_LLM:
-    _api_key_present = bool(os.getenv("DASHSCOPE_API_KEY", "").strip())
+    _api_key_present = bool(
+        os.getenv("DASHSCOPE_API_KEY", "").strip()
+        or _api_key_from_session
+    )
     if not _api_key_present:
         st.sidebar.warning(
-            "⚠️ 没检测到 DASHSCOPE_API_KEY，将自动回退到 mock 模式。\n"
-            "请在项目根目录创建 .env 文件填入百炼 API Key。"
+            "⚠️ 没检测到百炼 API Key，将自动回退到 mock 模式。\n"
+            "请在上方输入框粘贴 API Key，或在项目根目录 .env 文件设置 DASHSCOPE_API_KEY。"
         )
         _llm_backend = "mock"
 
@@ -520,7 +537,11 @@ def render_page_summary():
             try:
                 prog["stage"] = f"正在处理款 {info.style_id}"
                 llm_backend = st.session_state.get("llm_backend", "mock")
-                pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend=llm_backend)
+                pl = PredictionPipeline(
+                    brand_id=brand_cfg.brand_id,
+                    llm_backend=llm_backend,
+                    api_key=_api_key_from_session or None,
+                )
                 # run_one 会自动根据 llm_backend 决定走 mock 还是真实 LLM
                 # 真实模式下 image_paths_map 会注入到 info.images 供 VLM 读取图片
                 pred = pl.run_one(info, image_paths_map=image_paths_map)
@@ -560,7 +581,11 @@ def render_page_summary():
 
     # 持久化到历史库：跨批次累积价格/特征/分数分布
     try:
-        pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend=st.session_state.llm_backend)
+        pl = PredictionPipeline(
+            brand_id=brand_cfg.brand_id,
+            llm_backend=st.session_state.llm_backend,
+            api_key=_api_key_from_session or None,
+        )
         batch_id = pl.save_to_history(
             preds,
             notes=f"Streamlit批次: {st.session_state.get('batch_name', 'untitled')}",
@@ -834,7 +859,11 @@ def render_page_calibration():
             try:
                 # 校准不需要调LLM，但要同一个品牌配置
                 _llm_backend = st.session_state.get("llm_backend", "mock")
-                pl = PredictionPipeline(brand_id=brand_cfg.brand_id, llm_backend=_llm_backend)
+                pl = PredictionPipeline(
+                    brand_id=brand_cfg.brand_id,
+                    llm_backend=_llm_backend,
+                    api_key=_api_key_from_session or None,
+                )
                 loop_result = pl.run_backtest_calibration(
                     predictions=preds,
                     sales_lookup=truth_map_ready,
