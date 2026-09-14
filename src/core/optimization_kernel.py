@@ -128,6 +128,16 @@ class VLMFeatureCalibrator:
             else:
                 log.info("Loop1 生效：Spearman %.4f → %.4f", old_sp, new_sp)
 
+            # 质量诊断：若所有特征与销量都弱相关，说明 VLM 输出没有区分度
+            avg_abs_rho = statistics.mean(abs(v) for v in per_feature_rho.values())
+            if avg_abs_rho < 0.20:
+                log.warning(
+                    "Loop1 质量警告：10个VLM特征与销量的平均绝对Spearman仅%.3f，"
+                    "说明当前VLM输出和真实销量几乎没有线性关系。建议检查："
+                    "① 图片是否正确传入 ② VLM prompt是否导向销量预测 ③ 销量列是否准确。",
+                    avg_abs_rho,
+                )
+
             return VLMFeatureCalibrationResult(
                 feature_biases=biases,
                 old_spearman_avg=float(old_avg),
