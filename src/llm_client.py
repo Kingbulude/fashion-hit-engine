@@ -163,8 +163,40 @@ def _map_zhipu_model(model: str) -> str:
     return _ZHIPU_MODEL_MAP.get(model, model)
 
 
-# 智谱免费层限流较保守（并发 1~30 视账号等级），QPM 默认压到 30
-_ZHIPU_QPM_DEFAULT = 30
+# 智谱免费层限流保守（1 并发 + 低 RPM），QPM 压到 10 防止 429 风暴
+_ZHIPU_QPM_DEFAULT = 10
+
+
+# ========== 图片压缩（多模态调用提速：payload 缩小 5-10 倍）==========
+def downscale_image_data_url(path: str | Path, max_side: int = 1280, quality: int = 85) -> str:
+    """图片 → 压缩后的 data URL（JPEG）。
+
+    手机原图 2-5MB → base64 后 3-7MB，上传慢且 VLM 处理慢；
+    压到 1280px/JPEG85 对服装细节识别足够，payload 缩小 5-10 倍。
+    Pillow 不可用或压缩失败时回退原图。
+    """
+    raw = Path(path).read_bytes()
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(raw)) as im:
+            im = im.convert("RGB")
+            w, h = im.size
+            scale = max_side / max(w, h)
+            if scale < 1.0:
+                im = im.resize((max(1, round(w * scale)), max(1, round(h * scale))))
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=quality, optimize=True)
+            data = buf.getvalue()
+            if len(data) < len(raw):
+                return "data:image/jpeg;base64," + base64.b64encode(data).decode()
+    except Exception as e:  # Pillow 缺失/图片损坏 → 回退原图
+        log.debug("图片压缩回退原图 %s: %s", path, e)
+    ext = Path(path).suffix.lower().lstrip(".") or "jpeg"
+    mime = "image/png" if ext == "png" else "image/jpeg"
+    return f"data:{mime};base64,{encode_image(path)}"
 
 
 # ========== 百炼SDK客户端 ==========
@@ -303,7 +335,7 @@ class BailianClient:
 
 
 # ========== 通用指数退避重试（百炼/智谱客户端共用）==========
-def retry_with_backoff(fn, *, max_retries: int, **kwargs) -> LLMResponse:
+def retry_with_backoff(fn, *, max_retries: int, wait_429_base: float = 0, **kwargs) -> LLMResponse:
     last_err: LLMResponse | None = None
     for attempt in range(1, max_retries + 1):
         try:
@@ -315,9 +347,12 @@ def retry_with_backoff(fn, *, max_retries: int, **kwargs) -> LLMResponse:
             if is_fatal_quota_error(result.error):
                 log.error("致命 API 错误（不重试）: %s", result.error)
                 return result
-            # 429/限流 -> 等待
+            # 429/限流 -> 等待（wait_429_base>0 时用长退避：base×2^(n-1)）
             if "429" in (result.error or "") or "rate" in (result.error or "").lower():
-                wait = 2 ** attempt + 3
+                if wait_429_base > 0:
+                    wait = wait_429_base * (2 ** (attempt - 1))
+                else:
+                    wait = 2 ** attempt + 3
                 time.sleep(wait)
                 continue
             # 其他错误，直接返回
@@ -363,7 +398,9 @@ class ZhipuClient:
         self._api_key = key
         import requests  # 延迟导入（requirements 已含）
         self._requests = requests
-        self._limiter = RateLimiter(api_cfg.qpm_limit or _ZHIPU_QPM_DEFAULT)
+        # 免费层限流保守：无论全局 QPM_LIMIT 设多少，智谱钳到 ≤10 防 429 风暴
+        qpm = min(api_cfg.qpm_limit or _ZHIPU_QPM_DEFAULT, _ZHIPU_QPM_DEFAULT)
+        self._limiter = RateLimiter(qpm)
         self.usage_tracker = UsageTracker()
 
     # ---- 文本生成（人设投票用）----
@@ -399,14 +436,12 @@ class ZhipuClient:
     ) -> LLMResponse:
         glm_model = _map_zhipu_model(model)
         # OpenAI 兼容多模态格式：content 数组 image_url(data URL) + text
+        # 图片先压缩（payload 缩小 5-10 倍，上传+识别都提速）
         content: list[dict[str, Any]] = []
         for p in image_paths:
-            img_b64 = encode_image(p)
-            ext = Path(p).suffix.lower().lstrip(".") or "jpeg"
-            mime = "image/png" if ext == "png" else "image/jpeg"
             content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{img_b64}"},
+                "image_url": {"url": downscale_image_data_url(p)},
             })
         content.append({"type": "text", "text": text_prompt})
         messages = [{"role": "user", "content": content}]
@@ -442,11 +477,16 @@ class ZhipuClient:
 
         if resp.status_code != 200:
             # 提取智谱错误 message（格式 {"error": {"code":…, "message":…}}）
+            # 带上真实 GLM 模型名：上层日志（人设投票/特征提取）显示的是配置别名
+            # （qwen-max 等），这里自曝真实模型，排查限流/参数错误不歧义
             try:
                 err_body = resp.json().get("error", {})
-                err_msg = f"API错误 code={resp.status_code} {err_body.get('code', '')} msg={err_body.get('message', resp.text[:300])}"
+                err_msg = (
+                    f"API错误 code={resp.status_code} {err_body.get('code', '')} "
+                    f"模型={model} msg={err_body.get('message', resp.text[:300])}"
+                )
             except Exception:
-                err_msg = f"API错误 code={resp.status_code} msg={resp.text[:300]}"
+                err_msg = f"API错误 code={resp.status_code} 模型={model} msg={resp.text[:300]}"
             return LLMResponse(content="", model=model, error=err_msg)
 
         try:
@@ -479,6 +519,8 @@ class ZhipuClient:
         self.usage_tracker.record(model, parsed.usage)
         return parsed
 
-    # ---- 指数退避重试（与百炼共用同一套逻辑）----
+    # ---- 指数退避重试（429 用长退避：免费层 RPM 低，短退避会连环 429）----
     def _retry_loop(self, fn, **kwargs) -> LLMResponse:
-        return retry_with_backoff(fn, max_retries=self.cfg.max_retries, **kwargs)
+        return retry_with_backoff(
+            fn, max_retries=self.cfg.max_retries, wait_429_base=12.0, **kwargs,
+        )

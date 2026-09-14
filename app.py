@@ -203,15 +203,28 @@ if _llm_backend != "mock" and _key_for_backend:
                 _t_resp = _t_client.generate_text(
                     "回复：OK", model="qwen-max", max_tokens=8, temperature=0.0,
                 )
-            if _t_resp.ok:
+                # 智谱再测视觉模型（一张 8×8 白图，catch 视觉端参数/格式错误）
+                _v_resp = None
+                if _llm_backend == "zhipu":
+                    import tempfile as _tf
+                    from PIL import Image as _PILImage
+                    with _tf.NamedTemporaryFile(suffix=".png", delete=False) as _tf_f:
+                        _PILImage.new("RGB", (8, 8), (250, 250, 250)).save(_tf_f, "PNG")
+                        _v_path = _tf_f.name
+                    _v_resp = _t_client.generate_multimodal(
+                        "1+1=?", [_v_path], model="qwen-vl-plus", max_tokens=8,
+                    )
+            if _t_resp.ok and (_v_resp is None or _v_resp.ok):
                 _tok = _t_resp.usage.get("total_tokens", 0)
+                _v_part = f" · 视觉 {_v_resp.model} OK" if _v_resp is not None else ""
                 st.sidebar.success(
-                    f"✅ {_backend_name}连接成功（模型 {_t_resp.model}，"
-                    f"本次 {_tok} tokens）。Key 有效，可以开始评估。"
+                    f"✅ {_backend_name}连接成功（文本 {_t_resp.model}{_v_part}，"
+                    f"本次共 {_tok} tokens）。Key 有效，可以开始评估。"
                 )
             else:
+                _bad = _t_resp if not _t_resp.ok else (_v_resp or _t_resp)
                 st.sidebar.error(
-                    f"❌ {_backend_name}调用失败：{_t_resp.error}\n\n"
+                    f"❌ {_backend_name}调用失败：{_bad.error}\n\n"
                     f"请检查 Key 是否正确/有效（智谱："
                     f"open.bigmodel.cn 控制台重新生成完整 Key）。"
                 )

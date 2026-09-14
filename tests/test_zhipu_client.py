@@ -159,9 +159,91 @@ def test_rate_limit_error_is_retryable():
         resp_json={"error": {"code": "1302", "message": "Requests rate limit exceeded (429)"}},
         status=429,
     )
-    resp = c.generate_text("打分", model="qwen-max")
+    with patch("src.llm_client.time.sleep"):  # 429 长退避不真实 sleep
+        resp = c.generate_text("打分", model="qwen-max")
     assert not resp.ok
     assert not is_fatal_quota_error(resp.error), "限流应可重试，不算致命"
+    assert "glm-4.7-flash" in resp.error, "错误应带真实 GLM 模型名（自曝模型）"
+
+
+# ============================================================
+# 4.1 免费层限速保护（QPM 钳制 + 429 长退避）
+# ============================================================
+def test_qpm_clamped_for_free_tier():
+    # 全局 QPM_LIMIT=45 也会被钳到 ≤10，防止免费层 429 风暴
+    c = ZhipuClient(APIConfig(max_retries=1, qpm_limit=45), api_key="k")
+    assert c._limiter.qpm <= 10
+    c2 = ZhipuClient(APIConfig(max_retries=1, qpm_limit=10000), api_key="k")
+    assert c2._limiter.qpm <= 10
+
+
+def test_429_long_backoff_then_success():
+    """429 两次后成功：退避间隔应为 12s/24s（base×2^(n-1)），不是短退避 5/7/11s。"""
+    c = ZhipuClient(APIConfig(max_retries=3, qpm_limit=10000), api_key="k")
+    ok_body = {"choices": [{"message": {"content": "OK"}}],
+               "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}}
+
+    class _Resp:
+        def __init__(self, j, code):
+            self._j, self.status_code, self.text = j, code, str(j)
+
+        def json(self):
+            return self._j
+
+    _queue = [
+        _Resp({"error": {"code": "1302", "message": "Requests rate limit exceeded"}}, 429),
+        _Resp({"error": {"code": "1302", "message": "Requests rate limit exceeded"}}, 429),
+        _Resp(ok_body, 200),
+    ]
+
+    class _FakeRequests:
+        def post(self, url, headers=None, json=None, timeout=None):
+            return _queue.pop(0)
+
+    c._requests = _FakeRequests()
+    with patch("src.llm_client.time.sleep") as mock_sleep:
+        resp = c.generate_text("打分", model="qwen-max")
+    assert resp.ok and resp.content == "OK"
+    waits = [call.args[0] for call in mock_sleep.call_args_list]
+    assert waits == [12.0, 24.0], f"长退避序列应为 [12, 24]，实际 {waits}"
+
+
+# ============================================================
+# 4.2 图片压缩（多模态 payload 提速）
+# ============================================================
+def test_downscale_big_image(tmp_path):
+    try:
+        from PIL import Image
+    except ImportError:
+        return  # 环境无 Pillow → 回退逻辑已覆盖
+    # 3000×2000 噪声图（真实手机照片大小量级）
+    big = tmp_path / "big.png"
+    Image.effect_noise((3000, 2000), 100).convert("RGB").save(big, "PNG")
+    raw_len = big.stat().st_size
+    assert raw_len > 1_000_000, "测试前提：原图应 >1MB"
+
+    from src.llm_client import downscale_image_data_url
+    url = downscale_image_data_url(big)
+    assert url.startswith("data:image/jpeg;base64,"), "应压缩为 JPEG data URL"
+    # base64 长度 ≈ 原始字节 × 4/3；压缩后应显著小于原图
+    assert len(url) < raw_len, f"压缩后 {len(url)}B 应小于原图 {raw_len}B"
+
+
+def test_generate_multimodal_payload_is_compressed(tmp_path):
+    try:
+        from PIL import Image
+    except ImportError:
+        return
+    big = tmp_path / "photo.png"
+    Image.effect_noise((2400, 1800), 90).convert("RGB").save(big, "PNG")
+    c, calls = _mock_client()
+    with patch("src.llm_client.time.sleep"):
+        resp = c.generate_multimodal("描述", [str(big)], model="qwen-vl-plus")
+    assert resp.ok
+    img_url = calls[0]["json"]["messages"][0]["content"][0]["image_url"]["url"]
+    assert img_url.startswith("data:image/jpeg;base64,")
+    # 噪声图是 JPEG 最坏情况（不可压缩）；原图 base64 约 5.7MB → 仍应显著缩小
+    assert len(img_url) < 1_000_000, f"payload 应 <1MB（实际 {len(img_url)}B）"
 
 
 # ============================================================
