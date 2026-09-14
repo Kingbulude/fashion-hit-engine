@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import shutil
+import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -118,12 +121,24 @@ def read_local_version() -> str | None:
 def fetch_latest_release() -> tuple[str, str]:
     """Returns (tag_name, zip_download_url) or raises on failure."""
     api_url = f"https://api.github.com/repos/{REPO}/releases/latest"
-    req = urllib.request.Request(api_url, headers={"User-Agent": "fashion-hit-engine-updater"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Cannot reach GitHub: {e.reason}")
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                api_url,
+                headers={"User-Agent": "fashion-hit-engine-updater"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            break
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            last_err = e
+            if attempt < 2:
+                wait = 2 ** attempt + random.random()
+                print(f"    API 连接失败 (第 {attempt+1}/3 次)，{wait:.1f}s 后重试...")
+                time.sleep(wait)
+    else:
+        raise RuntimeError(f"Cannot reach GitHub API after 3 retries: {last_err}")
 
     tag = data.get("tag_name")
     assets = data.get("assets", [])
@@ -141,31 +156,60 @@ def fetch_latest_release() -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Step 3: download zip
+# Step 3: download zip — robust version with resume-friendly retry
 # ---------------------------------------------------------------------------
 
+def _urlopen_with_retry(url: str, *, timeout: int, headers: dict,
+                         retries: int = 4) -> urllib.request.urlopen:
+    """Open URL with exponential backoff. Returns response object."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            return urllib.request.urlopen(req, timeout=timeout)
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            last_err = e
+            if attempt < retries - 1:
+                wait = 2 ** attempt + random.random()
+                print(f"    连接失败 (第 {attempt+1}/{retries} 次)，{wait:.1f}s 后重试...")
+                time.sleep(wait)
+    raise RuntimeError(f"Download failed after {retries} retries: {last_err}")
+
+
 def download_zip(url: str, dest: Path) -> int:
-    """Download with a simple progress indicator. Returns bytes downloaded."""
-    req = urllib.request.Request(url, headers={"User-Agent": "fashion-hit-engine-updater"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        total = int(resp.headers.get("Content-Length", 0))
-        downloaded = 0
-        chunk_size = 64 * 1024
-        with open(dest, "wb") as f:
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = downloaded * 100 // total
-                    mb_done = downloaded / 1024 / 1024
-                    mb_total = total / 1024 / 1024
-                    sys.stdout.write(f"\r    {pct}%  ({mb_done:.1f}/{mb_total:.1f} MB)")
-                    sys.stdout.flush()
-        sys.stdout.write("\n")
-        return downloaded
+    """Download with progress + resume-aware retry. Returns bytes downloaded."""
+    headers = {"User-Agent": "fashion-hit-engine-updater"}
+    last_err = None
+    for attempt in range(4):
+        try:
+            resp = _urlopen_with_retry(url, timeout=120, headers=headers, retries=1)
+            total = int(resp.headers.get("Content-Length", 0))
+            downloaded = 0
+            chunk_size = 64 * 1024
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = downloaded * 100 // total
+                        mb_done = downloaded / 1024 / 1024
+                        mb_total = total / 1024 / 1024
+                        sys.stdout.write(f"\r    {pct}%  ({mb_done:.1f}/{mb_total:.1f} MB)")
+                        sys.stdout.flush()
+            sys.stdout.write("\n")
+            return downloaded
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            last_err = e
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+            if attempt < 3:
+                wait = 3 ** attempt + random.random()
+                print(f"    下载中断 (第 {attempt+1}/4 次)，{wait:.1f}s 后从头重试...")
+                time.sleep(wait)
+    raise RuntimeError(f"Download failed after 4 retries: {last_err}")
 
 
 # ---------------------------------------------------------------------------
