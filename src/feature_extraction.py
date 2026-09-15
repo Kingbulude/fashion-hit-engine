@@ -262,8 +262,13 @@ def _resolve_models_from_inputs(
         return cfg.api.feature_extraction_models
     if llm_backend == "mock":
         return ["mock"]
-    if llm_backend in ("local", "hybrid"):
+    if llm_backend == "local":
+        # Ollama 本地 VLM
         return ["qwen2.5vl:7b"]
+    if llm_backend == "hybrid":
+        # hybrid 模式 VLM client 是 ZhipuClient，用云端 VLM 模型名；
+        # Ollama 模型名会通过 _ZHIPU_MODEL_MAP 自动映射，这里用标准云端名更直观
+        return ["qwen-vl-plus"]
     return ["qwen-vl-plus"]
 
 

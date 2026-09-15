@@ -158,6 +158,7 @@ def encode_image(path: str | Path) -> str:
 # 品牌适配包/配置里写的是百炼模型名（qwen-vl-plus / qwen-max / deepseek-v3…），
 # 切智谱后端时在此处做透明映射，品牌 YAML 一行不用改。
 _ZHIPU_MODEL_MAP = {
+    # ===== 百炼模型名 → 智谱 =====
     # VLM 特征提取 → GLM-4.6V-Flash（永久免费，128K 上下文，视觉同规模 SOTA）
     "qwen-vl-plus": "glm-4.6v-flash",
     "qwen-vl-max": "glm-4.6v-flash",
@@ -170,6 +171,14 @@ _ZHIPU_MODEL_MAP = {
     "deepseek-v3": "glm-4.7-flash",
     "deepseek-chat": "glm-4.7-flash",
     "deepseek-r1": "glm-4.7-flash",
+    # ===== Ollama 本地模型名 → 智谱 =====
+    # hybrid 模式下 VLM client 是 ZhipuClient，但 feature_extraction
+    # 可能传入 Ollama 模型名（如 _resolve_models_from_inputs 返回的），
+    # 必须在此处映射到智谱真实模型名，否则 API 报 "模型不存在"
+    "qwen2.5vl:7b": "glm-4.6v-flash",
+    "qwen2.5-vl:7b": "glm-4.6v-flash",
+    "qwen2.5:7b": "glm-4.7-flash",
+    "qwen2.5-coder:7b": "glm-4.7-flash",
 }
 
 
