@@ -328,6 +328,19 @@ def extract_style_features(
             if key not in mr:
                 continue
             item = mr[key]
+            # 防御：Ollama 偶尔把单个特征包装成 list（如 {"quality": [{"score": 7}]}）
+            if isinstance(item, list):
+                if len(item) > 0 and isinstance(item[0], dict):
+                    item = item[0]
+                else:
+                    log.warning("[%s] %s 模型%s 特征%s值异常: list 长度=%d 元素类型=%s，跳过",
+                                info.style_id, models[m_idx] if m_idx < len(models) else f"model{m_idx}",
+                                m_idx, key, len(item), type(item[0]) if item else "empty")
+                    continue
+            if not isinstance(item, dict):
+                log.warning("[%s] 模型%s 特征%s值类型异常: %s，跳过",
+                            info.style_id, m_idx, key, type(item))
+                continue
             sc = clamp(safe_float(item.get("score"), 5.0), 1.0, 10.0)
             cf = clamp(safe_float(item.get("confidence"), 0.5), 0.0, 1.0)
             per_model_scores.append(sc)

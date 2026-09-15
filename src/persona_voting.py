@@ -275,7 +275,22 @@ def _vote_one_persona_one_model(
     if not resp.ok:
         raise RuntimeError(f"[人设投票] 人设{_persona_key(persona)}模型{model}失败: {resp.error}")
     try:
-        return extract_json(resp.content)
+        parsed = extract_json(resp.content)
+        # Ollama 本地模型偶尔把单个结果包装成 list 返回 → 自动拆
+        if isinstance(parsed, list):
+            if len(parsed) == 0:
+                raise ValueError("LLM 返回了空数组")
+            if all(isinstance(x, dict) for x in parsed):
+                log.warning(
+                    "[%s] 人设%s 模型%s 返回 list 而非 dict（已自动取第一个元素），原文预览=%s",
+                    info.style_id, _persona_key(persona), model, resp.content[:200],
+                )
+                parsed = parsed[0]
+            else:
+                raise ValueError(f"LLM 返回 list 但元素不是 dict: {type(parsed[0]) if parsed else 'empty'}")
+        if not isinstance(parsed, dict):
+            raise ValueError(f"LLM 返回了 {type(parsed).__name__} 而非 dict")
+        return parsed
     except Exception as e:
         log.warning("[%s] 人设%s 模型%s JSON解析失败: %s, 原文=%s",
                     info.style_id, _persona_key(persona), model, e, resp.content[:300])
