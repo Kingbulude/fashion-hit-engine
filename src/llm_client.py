@@ -403,7 +403,18 @@ class BailianClient:
 
 
 # ========== 通用指数退避重试（百炼/智谱客户端共用）==========
-def retry_with_backoff(fn, *, max_retries: int, wait_429_base: float = 0, **kwargs) -> LLMResponse:
+import random as _random
+
+def retry_with_backoff(
+    fn,
+    *,
+    max_retries: int,
+    wait_429_base: float = 0,
+    # 1305 是智谱模型级拥塞（全用户共享的模型过载），不是我们 R/QPS 超了
+    # 这类错误也需要重试，而且要等更久（模型拥塞缓解比账户限流慢）
+    extra_retryable_hints: tuple = (),
+    **kwargs,
+) -> LLMResponse:
     last_err: LLMResponse | None = None
     for attempt in range(1, max_retries + 1):
         try:
@@ -415,15 +426,43 @@ def retry_with_backoff(fn, *, max_retries: int, wait_429_base: float = 0, **kwar
             if is_fatal_quota_error(result.error):
                 log.error("致命 API 错误（不重试）: %s", result.error)
                 return result
-            # 429/限流 -> 等待（wait_429_base>0 时用长退避：base×2^(n-1)）
-            if "429" in (result.error or "") or "rate" in (result.error or "").lower():
-                if wait_429_base > 0:
-                    wait = wait_429_base * (2 ** (attempt - 1))
+
+            err_text = (result.error or "").lower()
+            is_retryable = (
+                "429" in err_text
+                or "rate" in err_text
+                or any(h in err_text for h in _RETRYABLE_HINTS)
+                or any(h.lower() in err_text for h in extra_retryable_hints)
+                # 智谱 1305: "该模型当前访问量过大" — 模型级拥塞，必须重试
+                or "1305" in err_text
+                # 智谱 1304: 并发数超出
+                or "1304" in err_text
+            )
+
+            if is_retryable:
+                # 1305 模型拥塞 → 退避更激进（模型恢复比限流慢）
+                if "1305" in err_text:
+                    base = wait_429_base * 2 if wait_429_base > 0 else 20
+                    label = "模型拥塞(1305)"
+                elif wait_429_base > 0:
+                    base = wait_429_base
+                    label = "429限流"
                 else:
-                    wait = 2 ** attempt + 3
+                    base = 2
+                    label = "限流"
+                wait = base * (2 ** (attempt - 1))
+                # +-30% jitter，避免多个并发请求同时重试形成风暴
+                wait *= (0.7 + _random.random() * 0.6)
+                wait = round(wait, 1)
+                log.warning(
+                    "[%s] %s，第 %d/%d 次重试，等待 %.1fs ... 错误: %s",
+                    kwargs.get("model", "?"), label, attempt, max_retries, wait,
+                    result.error[:120],
+                )
                 time.sleep(wait)
                 continue
-            # 其他错误，直接返回
+            # 其他不可重试错误，直接返回
+            log.warning("[%s] 不可重试错误直接返回: %s", kwargs.get("model", "?"), result.error[:120])
             return result
         except Exception as e:
             err_msg = str(e)
@@ -432,8 +471,11 @@ def retry_with_backoff(fn, *, max_retries: int, wait_429_base: float = 0, **kwar
                 log.error("致命 API 异常（不重试）: %s", err_msg)
                 return LLMResponse(content="", model=kwargs.get("model", "?"), error=err_msg)
             last_err = LLMResponse(content="", model=kwargs.get("model", "?"), error=err_msg)
-            wait = 2 ** attempt + 1
+            wait = (2 ** attempt) + _random.random() * 2
+            log.warning("[%s] 异常重试 %d/%d: %s", kwargs.get("model", "?"), attempt, max_retries, err_msg[:120])
             time.sleep(wait)
+    log.error("[%s] 重试耗尽（%d 次），最后错误: %s", kwargs.get("model", "?"), max_retries,
+              (last_err.error if last_err else "unknown")[:200])
     return last_err or LLMResponse(content="", model="?", error="max_retries exceeded")
 
 
@@ -467,10 +509,9 @@ class ZhipuClient:
         import requests  # 延迟导入（requirements 已含）
         self._requests = requests
         # 免费层限速严格：1 并发 + 低 RPM（账户级 RPM 比模型级更紧）
-        # 强制每次调用至少 3s 间隔（实测智谱免费层有效 RPM ≈ 12-15）
-        # 使用模块级共享限流器 → 防止多次 new Client / 快速点击测试连接时重置状态
+        # 2.5s 硬间隔 + 指数退避重试（应对 1305 模型拥塞）
         self._limiter = RateLimiter.get_or_create(
-            "zhipu", qpm=4, min_interval=3.0,
+            "zhipu", qpm=8, min_interval=2.5,
         )
         self.usage_tracker = UsageTracker()
 
@@ -590,10 +631,13 @@ class ZhipuClient:
         self.usage_tracker.record(model, parsed.usage)
         return parsed
 
-    # ---- 指数退避重试（429 用长退避：免费层 RPM 低，短退避会连环 429）----
+    # ---- 指数退避重试（智谱 1305/429 都要扛过去，6 次足够了）----
     def _retry_loop(self, fn, **kwargs) -> LLMResponse:
+        # 硬编码 6 次重试：智谱免费层 1305 模型拥塞 + 429 限流都可能来，
+        # 3 次根本不够；Bailian 等其他后端可以继续用 config 默认值
+        zhipu_retries = max(self.cfg.max_retries, 6)
         return retry_with_backoff(
-            fn, max_retries=self.cfg.max_retries, wait_429_base=12.0, **kwargs,
+            fn, max_retries=zhipu_retries, wait_429_base=15.0, **kwargs,
         )
 
 

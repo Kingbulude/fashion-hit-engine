@@ -178,7 +178,7 @@ def test_qpm_clamped_for_free_tier():
 
 
 def test_429_long_backoff_then_success():
-    """429 两次后成功：退避间隔应为 12s/24s（忽略 RateLimiter 的 2s 硬间隔 sleep）。"""
+    """429 两次后成功：ZhipuClient 硬编码 6 次重试，wait_429_base=15s + jitter。"""
     c = ZhipuClient(APIConfig(max_retries=3, qpm_limit=10000), api_key="k")
     ok_body = {"choices": [{"message": {"content": "OK"}}],
                "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}}
@@ -204,9 +204,12 @@ def test_429_long_backoff_then_success():
     with patch("src.llm_client.time.sleep") as mock_sleep:
         resp = c.generate_text("打分", model="qwen-max")
     assert resp.ok and resp.content == "OK"
-    # 过滤掉 RateLimiter 的 2s 硬间隔 sleep，只看 429 退避
-    waits = [round(c.args[0], 1) for c in mock_sleep.call_args_list if c.args[0] > 3]
-    assert waits == [12.0, 24.0], f"长退避序列应为 [12, 24]，实际 {waits}"
+    # 过滤掉 RateLimiter 的 2.5s 硬间隔 sleep，只看 429 退避（>5s）
+    waits = [round(c.args[0], 1) for c in mock_sleep.call_args_list if c.args[0] > 5]
+    # base=15s × 2^n × jitter(0.7~1.3) → 15s→~10-20s, 30s→~20-40s
+    assert len(waits) == 2, f"应有 2 次退避等待，实际 {waits}"
+    assert 10 <= waits[0] <= 22, f"第1次退避应在 10~22s（base 15s + jitter），实际 {waits[0]}"
+    assert 20 <= waits[1] <= 45, f"第2次退避应在 20~45s（base 30s + jitter），实际 {waits[1]}"
 
 
 # ============================================================
