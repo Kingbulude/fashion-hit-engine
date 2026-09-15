@@ -602,6 +602,29 @@ class OllamaClient:
         except Exception as e:
             return False, f"检查失败: {e}"
 
+    # ---- 内部：百炼/智谱模型名 → Ollama 模型名自动映射 ----
+    _MODEL_ALIAS: dict[str, str] = {
+        # 百炼 VLM → Ollama VLM
+        "qwen-vl-plus": "qwen2.5vl:7b",
+        "qwen-vl-max": "qwen2.5vl:7b",
+        "glm-4v-flash": "qwen2.5vl:7b",
+        "glm-4.6v-flash": "qwen2.5vl:7b",
+        # 百炼文本 → Ollama 文本
+        "qwen-max": "qwen2.5:7b",
+        "qwen-plus": "qwen2.5:7b",
+        "glm-4-flash": "qwen2.5:7b",
+        "glm-4.7-flash": "qwen2.5:7b",
+    }
+
+    def _resolve_model(self, model: str, *, is_vlm: bool) -> str:
+        """把上游传来的百炼/智谱模型名映射为 Ollama 实际可用名。"""
+        if not model:
+            return self.vlm_model if is_vlm else self.text_model
+        # 已经是 Ollama 模型名（含 : 或在本地 ollama list 里）
+        if model in self._MODEL_ALIAS:
+            return self._MODEL_ALIAS[model]
+        return model
+
     # ---- 文本生成（人设投票用）----
     def generate_text(
         self,
@@ -617,7 +640,7 @@ class OllamaClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        target_model = model or self.text_model
+        target_model = self._resolve_model(model or self.text_model, is_vlm=False)
         return self._call_chat(
             model=target_model, messages=messages,
             temperature=temperature, max_tokens=max_tokens,
@@ -633,7 +656,7 @@ class OllamaClient:
         temperature: float = 0.2,
         max_tokens: int = 2048,
     ) -> LLMResponse:
-        target_model = model or self.vlm_model
+        target_model = self._resolve_model(model or self.vlm_model, is_vlm=True)
 
         # Ollama VLM 用 /api/chat，图片传 images=[base64]
         content_parts: list[dict[str, Any]] = [{"type": "text", "text": text_prompt}]

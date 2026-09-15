@@ -256,6 +256,8 @@ def _resolve_models_from_inputs(
         return cfg.api.feature_extraction_models
     if llm_backend == "mock":
         return ["mock"]
+    if llm_backend in ("local", "hybrid"):
+        return ["qwen2.5vl:7b"]
     return ["qwen-vl-plus"]
 
 
