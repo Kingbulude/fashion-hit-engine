@@ -493,6 +493,12 @@ class PredictionPipeline:
         if image_paths_map and info.style_id in image_paths_map and not info.images:
             from pathlib import Path
             info.images = [Path(p) for p in image_paths_map[info.style_id]]
+        # 🔍 VLM 关键诊断日志：确认图片是否真的传入
+        if info.images:
+            _imgs = [str(p) for p in info.images]
+            log.info("🎨 [%s] VLM 图片已注入: %d 张 (%s...)", info.style_id, len(_imgs), _imgs[0][-40:] if _imgs else "")
+        else:
+            log.warning("⚠️  [%s] VLM 图片为空! 检查 image_paths_map 是否有此款号 → VLM 会无图瞎猜", info.style_id)
         if use_mock:
             feats = self.feature_engine.extract_mock(
                 info.style_id, fixed_feature_scores=fixed_feature_scores
