@@ -873,12 +873,23 @@ class OllamaClient:
             ]
             content_out = "\n".join(p for p in text_parts if p)
 
-        usage = data.get("usage", {}) or {}
-        # Ollama usage: {"prompt_eval_count": N, "eval_count": N}
+        # Ollama /api/chat 的 usage 是扁平字段（不是嵌套的 usage dict！）：
+        #   { "prompt_eval_count": N, "eval_count": N, ... }
+        # Bailian/Zhipu 才是嵌套 usage dict：
+        #   { "usage": {"input_tokens": N, "output_tokens": N} }
+        # 所以先试扁平，取不到再试嵌套
+        input_tok = (
+            int(data.get("prompt_eval_count", 0) or 0)
+            or int(data.get("usage", {}).get("input_tokens", 0) or 0)
+        )
+        output_tok = (
+            int(data.get("eval_count", 0) or 0)
+            or int(data.get("usage", {}).get("output_tokens", 0) or 0)
+        )
         usage_normalized = {
-            "input_tokens": usage.get("prompt_eval_count", 0),
-            "output_tokens": usage.get("eval_count", 0),
-            "total_tokens": usage.get("prompt_eval_count", 0) + usage.get("eval_count", 0),
+            "input_tokens": input_tok,
+            "output_tokens": output_tok,
+            "total_tokens": input_tok + output_tok,
         }
         parsed = LLMResponse(
             content=content_out.strip(), model=model,
