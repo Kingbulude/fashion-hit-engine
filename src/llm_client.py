@@ -658,30 +658,27 @@ class OllamaClient:
     ) -> LLMResponse:
         target_model = self._resolve_model(model or self.vlm_model, is_vlm=True)
 
-        # Ollama VLM 用 /api/chat，图片传 images=[base64]
-        content_parts: list[dict[str, Any]] = [{"type": "text", "text": text_prompt}]
-        for p in image_paths:
-            b64 = encode_image(p)
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-            })
-        messages = [{"role": "user", "content": content_parts}]
+        # Ollama /api/chat 多模态格式：
+        #   messages.content = string（纯文本）
+        #   payload.images = [base64, base64, ...]  ← 顶层字段
+        images_b64 = [encode_image(p) for p in image_paths]
+        messages = [{"role": "user", "content": text_prompt}]
 
         return self._call_chat(
             model=target_model, messages=messages,
             temperature=temperature, max_tokens=max_tokens,
+            images=images_b64,
         )
 
     # ---- 内部调用 ----
     def _call_chat(
         self, *, model: str, messages: list[dict],
         temperature: float, max_tokens: int,
+        images: list[str] | None = None,
     ) -> LLMResponse:
-        # Ollama 有两套 API：
-        #   /api/chat — 原生 chat 格式（messages + images 字段）
-        #   /v1/chat/completions — OpenAI 兼容
-        # 我们走 /api/chat（支持多模态），参数名稍有不同
+        # Ollama /api/chat 原生格式：
+        #   messages[].content 必须是 string（不是 array）
+        #   images 放在 payload 顶层（多模态专用）
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -693,6 +690,8 @@ class OllamaClient:
             },
             "keep_alive": self.keep_alive,
         }
+        if images:
+            payload["images"] = images
         try:
             resp = self._requests.post(
                 f"{self.base_url}/chat",
