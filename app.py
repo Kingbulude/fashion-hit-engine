@@ -206,7 +206,7 @@ if _llm_backend == "local":
             "请先：\n"
             "1. 下载 Ollama: https://ollama.com/download\n"
             "2. 安装后在终端执行:\n"
-            "   `ollama pull qwen2.5-vl:7b`\n"
+            "   `ollama pull qwen2.5vl:7b`\n"
             "   `ollama pull qwen2.5:7b`\n"
             "3. 确认显存 ≥ 6.5GB（RTX 3070 8GB 可跑）\n\n"
             "已自动回退到 mock 模式。"
@@ -246,7 +246,7 @@ if _llm_backend != "mock":
                 if _llm_backend in ("local", "hybrid"):
                     _hc_ok, _hc_msg = _OC().health_check()
                     if not _hc_ok:
-                        _parts_err.append(f"🖥️ Ollama: {_hc_msg}（请先安装 Ollama + ollama pull qwen2.5-vl:7b + qwen2.5:7b）")
+                        _parts_err.append(f"🖥️ Ollama: {_hc_msg}（请先安装 Ollama + ollama pull qwen2.5vl:7b + qwen2.5:7b）")
                     else:
                         _parts_ok.append(f"🖥️ Ollama 本地正常 ({_hc_msg})")
                     # local 模式额外发一次真实推理确认模型能跑

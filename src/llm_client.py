@@ -563,7 +563,7 @@ class OllamaClient:
 
     DEFAULT_BASE_URL = "http://localhost:11434/api"
     # 默认模型：先用 VLM 做特征提取
-    DEFAULT_VLM_MODEL = "qwen2.5-vl:7b"
+    DEFAULT_VLM_MODEL = "qwen2.5vl:7b"
     DEFAULT_TEXT_MODEL = "qwen2.5:7b"
 
     def __init__(
