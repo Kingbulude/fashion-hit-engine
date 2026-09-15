@@ -27,6 +27,13 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
+# ========== 🔍 让诊断日志可见（Streamlit 默认 WARNING 级别吃掉 log.info）==========
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-5s %(name)s: %(message)s",
+)
+
 from src.config import load_config, list_available_brands, load_brand_profile
 from src.grading import assign_relative_grades
 from src.llm_client import is_fatal_quota_error

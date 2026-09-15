@@ -168,6 +168,27 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         })
 
         personas_list = personas_raw.get("personas", [])
+        # ===== 🔧 合并孩子人设（之前漏掉了！）=====
+        # personas.yaml 里 child_identity_axes 定义了孩子人设（3男3女，6-14岁）
+        # 之前只取了 "personas"（30 妈妈），导致投票完全缺孩子视角 + 性别平衡
+        child_raw = personas_raw.get("child_identity_axes", [])
+        for cp in child_raw:
+            personas_list.append({
+                "persona_id": cp.get("persona_id", f"C_{cp.get('gender', '?')}"),
+                "name": f"{cp.get('age', '?')}岁{'男' if cp.get('gender') == 'male' else '女'}孩",
+                "gender": cp.get("gender"),
+                "age": cp.get("age"),
+                "layer": "child_influencer",
+                "weight": 0.05,
+                "veto_when": cp.get("veto_when", []),
+                "color_preference": [],
+                "axes": {},
+            })
+        # 重算权重
+        total_w = sum(p.get("weight", 1/len(personas_list)) for p in personas_list)
+        if total_w > 0:
+            for p in personas_list:
+                p["weight"] = p.get("weight", 0.05) / total_w
         # 轴数据按决策层声明收集：layer.persona_axis_key → personas.yaml 顶层同名列表
         persona_axes = {
             layer.persona_axis_key: personas_raw.get(layer.persona_axis_key)
