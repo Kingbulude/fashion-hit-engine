@@ -803,9 +803,20 @@ class OllamaClient:
         except Exception as e:
             return LLMResponse(content="", model=model, error=f"Ollama 响应解析失败: {e}")
 
-        # Ollama /api/chat 返回格式：{"message": {"content": "..."}, "usage": {...}}
-        msg = data.get("message", {})
-        content_out = msg.get("content", "") or ""
+        # === 防御：Ollama 响应可能不是 dict（理论上不会，但以防万一）===
+        if isinstance(data, list):
+            # 偶尔 Ollama 会返回数组（不该发生）
+            data = data[0] if data else {}
+        elif not isinstance(data, dict):
+            data = {"message": {"content": str(data)}}
+
+        message_field = data.get("message", {})
+        if isinstance(message_field, list):
+            message_field = message_field[0] if message_field else {}
+        elif not isinstance(message_field, dict):
+            message_field = {"content": str(message_field) if message_field else ""}
+
+        content_out = message_field.get("content", "") or ""
         if isinstance(content_out, list):
             text_parts = [
                 c.get("text", "") if isinstance(c, dict) else str(c)
