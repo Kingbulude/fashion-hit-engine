@@ -589,14 +589,59 @@ class OllamaClient:
     def health_check(self) -> tuple[bool, str]:
         """返回 (是否在线, 诊断信息)。"""
         try:
-            resp = self._requests.get(
-                f"{self.base_url.replace('/api', '')}/api/tags",
-                timeout=3,
-            )
+            # 1. 先试 /api/tags（列出已下载的所有模型，不论是否在显存）
+            base = self.base_url.replace("/api", "")
+            resp = self._requests.get(f"{base}/api/tags", timeout=3)
             if resp.status_code != 200:
                 return False, f"HTTP {resp.status_code} from Ollama"
-            models = [m["name"] for m in resp.json().get("models", [])]
-            return True, f"在线，已加载 {len(models)} 个模型: {', '.join(models)}"
+
+            # Ollama 新旧版本响应格式不同：
+            #   旧: {"models": [{"name": "xxx"}, ...]}
+            #   新: [{"name": "xxx"}, ...]  或  {"models": [{"model": "xxx"}]}
+            data = resp.json()
+            model_entries: list[dict]
+            if isinstance(data, list):
+                model_entries = data
+            else:
+                model_entries = data.get("models", [])
+
+            disk_models = []
+            for m in model_entries:
+                name = m.get("name") or m.get("model") or m.get("Model", "")
+                if name:
+                    disk_models.append(name)
+
+            # 2. 再查 /api/ps（当前正在显存里运行的模型）
+            running_models: list[str] = []
+            try:
+                ps_resp = self._requests.get(f"{base}/api/ps", timeout=3)
+                if ps_resp.status_code == 200:
+                    ps_data = ps_resp.json()
+                    ps_entries: list[dict]
+                    if isinstance(ps_data, list):
+                        ps_entries = ps_data
+                    else:
+                        ps_entries = ps_data.get("models", [])
+                    for m in ps_entries:
+                        name = m.get("name") or m.get("model") or ""
+                        if name:
+                            running_models.append(name)
+            except Exception:
+                pass  # /api/ps 不关键，失败不阻塞
+
+            # 3. 拼结果
+            if disk_models:
+                msg = f"在线，磁盘上有 {len(disk_models)} 个模型: {', '.join(disk_models)}"
+                if running_models:
+                    msg += f"（当前显存加载中: {', '.join(running_models)}）"
+                return True, msg
+            else:
+                # Ollama 在线但没找到任何模型 → 很可能是 OLLAMA_MODELS 配置问题
+                return True, (
+                    "Ollama 在线，但磁盘上没找到任何模型。\n"
+                    "可能原因：OLLAMA_MODELS 环境变量没生效，或模型还在 C 盘。\n"
+                    "请在本机 PowerShell 执行：ollama list 确认模型存在。"
+                )
         except self._requests.ConnectionError:
             return False, "Ollama 未启动（localhost:11434 连接被拒）"
         except Exception as e:
