@@ -318,6 +318,16 @@ class PredictionPipeline:
         # ===== 历史批次持久化：跨批次累积价格/特征/分数分布 =====
         from .history_store import HistoryStore
         self.history = HistoryStore()
+        # ===== 缓存 AppConfig.api（persona_models / feature_extraction_models 等）=====
+        # brand_cfg.personas 是 list，persona_models 从 AppConfig.api 取
+        try:
+            from .config import load_config
+            _api_cfg = load_config(override_api_key=api_key).api
+            self._api_persona_models: list[str] = list(_api_cfg.persona_models)
+            self._api_feature_models: list[str] = list(_api_cfg.feature_extraction_models)
+        except Exception:
+            self._api_persona_models = ["qwen-max", "deepseek-v3"]
+            self._api_feature_models = ["qwen-vl-plus"]
         self._history_prices: list[float] = self.history.load_prices(brand_id)
         log.info("Pipeline init 完成: brand=%s, llm=%s, calibration=%s, history_prices=%d",
                  brand_id, llm_backend, self.calibration, len(self._history_prices))
@@ -560,7 +570,7 @@ class PredictionPipeline:
             "llm_backend": self.llm_backend,
             "is_mock": False,
             "feature_models": sorted(_feat_models) or ["qwen-vl-plus"],
-            "persona_models": self.brand_cfg.personas.get("persona_models", ["qwen-max", "deepseek-v3"]),
+            "persona_models": getattr(self, "_api_persona_models", None) or ["qwen-max", "deepseek-v3"],
             "elapsed_s": _elapsed,
             "brand_id": self.brand_cfg.brand_id,
             # 本款 API 用量（调用次数/token，从上次快照后累计），
