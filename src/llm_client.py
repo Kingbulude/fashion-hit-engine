@@ -649,16 +649,23 @@ class OllamaClient:
 
     # ---- 内部：百炼/智谱模型名 → Ollama 模型名自动映射 ----
     _MODEL_ALIAS: dict[str, str] = {
-        # 百炼 VLM → Ollama VLM
+        # 百炼 / 智谱 VLM → Ollama VLM
         "qwen-vl-plus": "qwen2.5vl:7b",
         "qwen-vl-max": "qwen2.5vl:7b",
+        "qwen3-vl-plus": "qwen2.5vl:7b",
+        "qwen2.5-vl-72b-instruct": "qwen2.5vl:7b",
         "glm-4v-flash": "qwen2.5vl:7b",
         "glm-4.6v-flash": "qwen2.5vl:7b",
-        # 百炼文本 → Ollama 文本
+        # 百炼 / 智谱文本 → Ollama 文本
         "qwen-max": "qwen2.5:7b",
         "qwen-plus": "qwen2.5:7b",
+        "qwen-turbo": "qwen2.5:7b",
         "glm-4-flash": "qwen2.5:7b",
         "glm-4.7-flash": "qwen2.5:7b",
+        # DeepSeek 系列（人设投票默认用 deepseek-v3）
+        "deepseek-v3": "qwen2.5:7b",
+        "deepseek-chat": "qwen2.5:7b",
+        "deepseek-r1": "qwen2.5:7b",
     }
 
     def _resolve_model(self, model: str, *, is_vlm: bool) -> str:
