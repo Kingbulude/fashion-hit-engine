@@ -41,7 +41,30 @@ class RateLimiter:
 
     智谱免费层官方限 1 并发，且低 RPM，不允许任何突发（token bucket 初始 QPM 个
     token → 可瞬间发 QPM 个请求 → 立即 429 风暴）。漏桶 + 硬间隔是唯一可靠的模式。
+
+    支持跨实例共享（模块级 _SHARED_LIMITERS），防止"每次 new Client 就重置限流状态"。
     """
+
+    # 模块级共享：key=identifier，防止多次点击测试连接/快速切换品牌时重置限流
+    _SHARED_LIMITERS: dict[str, "RateLimiter"] = {}
+
+    @classmethod
+    def get_or_create(cls, identifier: str, qpm: int, min_interval: float) -> "RateLimiter":
+        """获取或创建指定 identifier 的共享限流器（跨实例复用）。"""
+        existing = cls._SHARED_LIMITERS.get(identifier)
+        if existing is not None:
+            return existing
+        limiter = cls(qpm, min_interval)
+        cls._SHARED_LIMITERS[identifier] = limiter
+        return limiter
+
+    @classmethod
+    def reset(cls, identifier: str | None = None) -> None:
+        """测试/调试用：重置指定或全部共享限流器。"""
+        if identifier is None:
+            cls._SHARED_LIMITERS.clear()
+        else:
+            cls._SHARED_LIMITERS.pop(identifier, None)
 
     def __init__(self, qpm: int, min_interval: float = 2.0):
         """
@@ -208,7 +231,9 @@ class BailianClient:
 
         self._dashscope = dashscope
         dashscope.api_key = api_cfg.dashscope_api_key
-        self._limiter = RateLimiter(api_cfg.qpm_limit, min_interval=1.0)
+        self._limiter = RateLimiter.get_or_create(
+            "bailian", api_cfg.qpm_limit, min_interval=1.0
+        )
         self.usage_tracker = UsageTracker()
 
     # ---- 文本生成（人设投票用）----
@@ -390,9 +415,12 @@ class ZhipuClient:
         self._api_key = key
         import requests  # 延迟导入（requirements 已含）
         self._requests = requests
-        # 免费层限速严格：1 并发 + 低 RPM，强制每次调用至少 2s 间隔
-        # 无论全局 QPM_LIMIT 设多少都用保守值（防 429 风暴）
-        self._limiter = RateLimiter(qpm=5, min_interval=2.0)
+        # 免费层限速严格：1 并发 + 低 RPM（账户级 RPM 比模型级更紧）
+        # 强制每次调用至少 3s 间隔（实测智谱免费层有效 RPM ≈ 12-15）
+        # 使用模块级共享限流器 → 防止多次 new Client / 快速点击测试连接时重置状态
+        self._limiter = RateLimiter.get_or_create(
+            "zhipu", qpm=4, min_interval=3.0,
+        )
         self.usage_tracker = UsageTracker()
 
     # ---- 文本生成（人设投票用）----

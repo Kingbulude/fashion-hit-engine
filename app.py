@@ -192,20 +192,19 @@ if _llm_backend != "mock" and _key_for_backend:
         try:
             from src.config import APIConfig as _AC
             from src.llm_client import ZhipuClient as _ZC, BailianClient as _BC
-            _t_cfg = _AC(max_retries=1, qpm_limit=10000)
+            _t_cfg = _AC(max_retries=3, qpm_limit=10000)  # 3 次重试：429 有退避
             if _llm_backend == "zhipu":
                 _t_cfg.zhipu_api_key = _key_for_backend
                 _t_client = _ZC(_t_cfg, api_key=_key_for_backend)
             else:
                 _t_cfg.dashscope_api_key = _key_for_backend
                 _t_client = _BC(_t_cfg)
-            with st.spinner(f"正在向{_backend_name}发送测试请求…"):
+            with st.spinner(f"正在向{_backend_name}发送测试请求（首次可能需等待限流器）…"):
                 _t_resp = _t_client.generate_text(
                     "回复：OK", model="qwen-max", max_tokens=8, temperature=0.0,
                 )
                 # 智谱再测视觉模型（一张 8×8 白图，catch 视觉端参数/格式错误）
-                # 视觉与文本模型是两个不同 endpoint，但免费层并发槽位共享，
-                # 加 2s 间隔确保文本请求的并发槽位已释放
+                # 共享 RateLimiter 已保证 3s 间隔，这里额外 sleep 确保并发槽位释放
                 _v_resp = None
                 if _llm_backend == "zhipu":
                     import tempfile as _tf
@@ -214,7 +213,7 @@ if _llm_backend != "mock" and _key_for_backend:
                     with _tf.NamedTemporaryFile(suffix=".png", delete=False) as _tf_f:
                         _PILImage.new("RGB", (8, 8), (250, 250, 250)).save(_tf_f, "PNG")
                         _v_path = _tf_f.name
-                    _time.sleep(2.0)  # 确保 1 并发槽位释放
+                    _time.sleep(1.0)  # 共享限流器已 3s，这里额外等 1s 双保险
                     _v_resp = _t_client.generate_multimodal(
                         "1+1=?", [_v_path], model="qwen-vl-plus", max_tokens=8,
                     )
@@ -227,11 +226,30 @@ if _llm_backend != "mock" and _key_for_backend:
                 )
             else:
                 _bad = _t_resp if not _t_resp.ok else (_v_resp or _t_resp)
-                st.sidebar.error(
-                    f"❌ {_backend_name}调用失败：{_bad.error}\n\n"
-                    f"请检查 Key 是否正确/有效（智谱："
-                    f"open.bigmodel.cn 控制台重新生成完整 Key）。"
-                )
+                _err_text = (_bad.error or "").lower()
+                _is_rate_limit = "429" in _err_text or "rate limit" in _err_text or "速率" in _err_text
+                _is_auth_fail = any(x in _err_text for x in ("401", "403", "令牌", "token", "invalid api", "forbidden"))
+                if _is_rate_limit:
+                    # 速率限制 — Key 本身没问题，只是请求太频繁
+                    st.sidebar.warning(
+                        f"⚠️ {_backend_name}暂时限流（429）— **Key 本身没问题**。\n\n"
+                        f"这说明 Key 有效，只是免费层账户 RPM 较低。"
+                        f"请等待 10-30 秒后重试；批量评估时会自动 3s 间隔串行调用。"
+                        f"\n\n错误详情：`{_bad.error[:200]}`"
+                    )
+                elif _is_auth_fail:
+                    # 鉴权失败 — Key 真的有问题
+                    st.sidebar.error(
+                        f"❌ {_backend_name}鉴权失败 — **Key 无效或已过期**。\n\n"
+                        f"请到智谱 open.bigmodel.cn/usercenter/apikeys 重新生成完整 Key，"
+                        f"粘贴到侧边栏后再试。\n\n错误详情：`{_bad.error[:200]}`"
+                    )
+                else:
+                    # 其他错误
+                    st.sidebar.error(
+                        f"❌ {_backend_name}调用失败：{_bad.error}\n\n"
+                        f"请检查网络连接，或稍后重试。"
+                    )
         except Exception as _t_e:
             st.sidebar.error(f"❌ 连接异常：{_t_e}")
 
