@@ -258,13 +258,13 @@ def test_pipeline_routes_to_zhipu():
 
 def test_app_has_zhipu_mode_and_key_routing():
     # 三模式选择器，智谱免费为默认第一项
-    assert '"智谱 GLM（免费）"' in APP_SRC
+    assert '"智谱 GLM"' in APP_SRC
     assert '"百炼 API（阿里云·付费）"' in APP_SRC
     # Key 按后端分流
     assert 'st.session_state.api_key_for_backend = _key_for_backend' in APP_SRC
     assert "ZHIPU_API_KEY" in APP_SRC
     # 智谱模式缺 Key 的回退提示
-    assert "智谱 GLM（免费）」，但未检测到智谱 API Key" in APP_SRC
+    assert "智谱 API Key" in APP_SRC
     # 侧边栏测试连接按钮（一键验证 Key）
     assert "🔌 测试连接" in APP_SRC
 

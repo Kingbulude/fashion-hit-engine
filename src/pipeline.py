@@ -323,20 +323,41 @@ class PredictionPipeline:
                  brand_id, llm_backend, self.calibration, len(self._history_prices))
 
     @property
-    def client(self) -> BailianClient | ZhipuClient:
+    def client(self) -> BailianClient | ZhipuClient | OllamaClient:
+        """主 client：hybrid/local 模式下返回 OllamaClient，其他返回云端。"""
         if self._client is None:
+            if self.llm_backend in ("hybrid", "local"):
+                from .llm_client import OllamaClient
+                self._client = OllamaClient()
+            else:
+                try:
+                    api_cfg = load_config(override_api_key=self.api_key).api
+                except Exception:
+                    from .config import APIConfig
+                    api_cfg = APIConfig(dashscope_api_key=self.api_key or "")
+                if self.llm_backend == "zhipu":
+                    # 智谱（免费）：self.api_key 优先（UI 粘贴），其次 .env 的 ZHIPU_API_KEY
+                    api_cfg.zhipu_api_key = self.api_key or api_cfg.zhipu_api_key
+                    self._client = ZhipuClient(api_cfg)
+                else:
+                    self._client = BailianClient(api_cfg)
+        return self._client
+
+    @property
+    def text_client(self) -> BailianClient | ZhipuClient | OllamaClient:
+        """文本 client：hybrid→智谱云端；local→ Ollama 本地；其他同 self.client。"""
+        if self.llm_backend not in ("hybrid",):
+            return self.client  # type: ignore[return-value]
+        # hybrid 模式：文本强制走云端智谱
+        if getattr(self, "_text_client", None) is None:
             try:
                 api_cfg = load_config(override_api_key=self.api_key).api
             except Exception:
                 from .config import APIConfig
                 api_cfg = APIConfig(dashscope_api_key=self.api_key or "")
-            if self.llm_backend == "zhipu":
-                # 智谱（免费）：self.api_key 优先（UI 粘贴），其次 .env 的 ZHIPU_API_KEY
-                api_cfg.zhipu_api_key = self.api_key or api_cfg.zhipu_api_key
-                self._client = ZhipuClient(api_cfg)
-            else:
-                self._client = BailianClient(api_cfg)
-        return self._client
+            api_cfg.zhipu_api_key = self.api_key or api_cfg.zhipu_api_key
+            self._text_client = ZhipuClient(api_cfg)
+        return self._text_client
 
     # ===== 三大引擎合成（调用 ensemble_engine）=====
     def synthesise_final(
@@ -516,7 +537,12 @@ class PredictionPipeline:
             self.client, info, cfg=None,
             brand_cfg=self.brand_cfg, llm_backend=self.llm_backend,
         )
-        voting = run_persona_voting(self.client, info, feats, None, brand_cfg=self.brand_cfg)
+        # hybrid 模式：人设投票强制走 text_client（云端文本模型）；
+        # local / 默认：VLM + 文本都走 self.client（Ollama 本地或云端）
+        voting = run_persona_voting(
+            self.text_client if self.llm_backend == "hybrid" else self.client,
+            info, feats, None, brand_cfg=self.brand_cfg,
+        )
         channels, _ = calculate_channel_scores(
             info, feats, voting, cfg=None, all_style_prices=price_pool, brand_cfg=self.brand_cfg,
             category_id=info.category or None,

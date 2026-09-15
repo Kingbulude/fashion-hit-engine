@@ -544,3 +544,179 @@ class ZhipuClient:
         return retry_with_backoff(
             fn, max_retries=self.cfg.max_retries, wait_429_base=12.0, **kwargs,
         )
+
+
+# ========== Ollama 本地客户端（混合路线：本地 VLM + 云端文本）==========
+class OllamaClient:
+    """本地 Ollama 推理客户端（OpenAI 兼容 /chat/completions）。
+
+    专为 RTX 3070 8GB 等消费级显卡设计：7B Q4_K_M 量化模型 ~4.5GB 显存，
+    7B VLM ~6.5GB 显存，RTX 3070 能稳稳跑。
+
+    支持两类场景：
+    - **VLM 视觉**：qwen2.5-vl:7b / qwen2.5-vl:7b-instruct（图片特征提取）
+    - **文本**：qwen2.5:7b / qwen2.5-coder:7b（人设投票，可选）
+
+    Ollama 默认 http://localhost:11434，零 API Key、零成本、零限流。
+    使用完自动释放显存（keep_alive 由 Ollama 服务控制，默认可设 10s）。
+    """
+
+    DEFAULT_BASE_URL = "http://localhost:11434/api"
+    # 默认模型：先用 VLM 做特征提取
+    DEFAULT_VLM_MODEL = "qwen2.5-vl:7b"
+    DEFAULT_TEXT_MODEL = "qwen2.5:7b"
+
+    def __init__(
+        self,
+        *,
+        base_url: str | None = None,
+        vlm_model: str | None = None,
+        text_model: str | None = None,
+        num_ctx: int = 2048,
+        keep_alive: str = "10s",
+    ) -> None:
+        self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self.vlm_model = vlm_model or self.DEFAULT_VLM_MODEL
+        self.text_model = text_model or self.DEFAULT_TEXT_MODEL
+        self.num_ctx = num_ctx
+        self.keep_alive = keep_alive
+        self.usage_tracker = UsageTracker()
+
+        import requests  # 延迟导入
+        self._requests = requests
+
+    # ---- Ollama 健康检查（快速诊断服务是否在线）----
+    def health_check(self) -> tuple[bool, str]:
+        """返回 (是否在线, 诊断信息)。"""
+        try:
+            resp = self._requests.get(
+                f"{self.base_url.replace('/api', '')}/api/tags",
+                timeout=3,
+            )
+            if resp.status_code != 200:
+                return False, f"HTTP {resp.status_code} from Ollama"
+            models = [m["name"] for m in resp.json().get("models", [])]
+            return True, f"在线，已加载 {len(models)} 个模型: {', '.join(models)}"
+        except self._requests.ConnectionError:
+            return False, "Ollama 未启动（localhost:11434 连接被拒）"
+        except Exception as e:
+            return False, f"检查失败: {e}"
+
+    # ---- 文本生成（人设投票用）----
+    def generate_text(
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> LLMResponse:
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        target_model = model or self.text_model
+        return self._call_chat(
+            model=target_model, messages=messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+
+    # ---- 多模态图像理解（特征提取用）----
+    def generate_multimodal(
+        self,
+        text_prompt: str,
+        image_paths: list[str | Path],
+        *,
+        model: str | None = None,
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+    ) -> LLMResponse:
+        target_model = model or self.vlm_model
+
+        # Ollama VLM 用 /api/chat，图片传 images=[base64]
+        content_parts: list[dict[str, Any]] = [{"type": "text", "text": text_prompt}]
+        for p in image_paths:
+            b64 = encode_image(p)
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            })
+        messages = [{"role": "user", "content": content_parts}]
+
+        return self._call_chat(
+            model=target_model, messages=messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+
+    # ---- 内部调用 ----
+    def _call_chat(
+        self, *, model: str, messages: list[dict],
+        temperature: float, max_tokens: int,
+    ) -> LLMResponse:
+        # Ollama 有两套 API：
+        #   /api/chat — 原生 chat 格式（messages + images 字段）
+        #   /v1/chat/completions — OpenAI 兼容
+        # 我们走 /api/chat（支持多模态），参数名稍有不同
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "num_ctx": self.num_ctx,
+            },
+            "keep_alive": self.keep_alive,
+        }
+        try:
+            resp = self._requests.post(
+                f"{self.base_url}/chat",
+                json=payload,
+                timeout=300,  # VLM 首 token 可能慢，留足时间
+            )
+        except Exception as e:
+            return LLMResponse(content="", model=model, error=f"Ollama 网络错误: {e}")
+
+        if resp.status_code != 200:
+            err_text = resp.text[:300]
+            if "model not found" in err_text.lower():
+                hint = (
+                    f"Ollama 未找到模型 `{model}`。"
+                    f"请先在终端执行：ollama pull {model}"
+                )
+                return LLMResponse(content="", model=model, error=hint)
+            return LLMResponse(
+                content="", model=model,
+                error=f"Ollama HTTP {resp.status_code}: {err_text}",
+            )
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            return LLMResponse(content="", model=model, error=f"Ollama 响应解析失败: {e}")
+
+        # Ollama /api/chat 返回格式：{"message": {"content": "..."}, "usage": {...}}
+        msg = data.get("message", {})
+        content_out = msg.get("content", "") or ""
+        if isinstance(content_out, list):
+            text_parts = [
+                c.get("text", "") if isinstance(c, dict) else str(c)
+                for c in content_out
+            ]
+            content_out = "\n".join(p for p in text_parts if p)
+
+        usage = data.get("usage", {}) or {}
+        # Ollama usage: {"prompt_eval_count": N, "eval_count": N}
+        usage_normalized = {
+            "input_tokens": usage.get("prompt_eval_count", 0),
+            "output_tokens": usage.get("eval_count", 0),
+            "total_tokens": usage.get("prompt_eval_count", 0) + usage.get("eval_count", 0),
+        }
+        parsed = LLMResponse(
+            content=content_out.strip(), model=model,
+            usage=usage_normalized, raw=data,
+        )
+        self.usage_tracker.record(model, parsed.usage)
+        return parsed

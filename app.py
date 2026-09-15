@@ -110,10 +110,19 @@ st.sidebar.divider()
 # --- 侧边栏：LLM 模式切换（智谱免费为默认） ---
 llm_mode_label = st.sidebar.radio(
     "🤖 预测引擎",
-    options=["智谱 GLM（免费）", "百炼 API（阿里云·付费）", "演示模式（mock）"],
+    options=[
+        "智谱 GLM（全云端·免费）",
+        "全本地 Ollama（零成本·零限流·最快）",
+        "混合模式（本地 VLM + 智谱文本）",
+        "百炼 API（阿里云·付费）",
+        "演示模式（mock）",
+    ],
     help=(
         "智谱：GLM-4.6V-Flash 视觉 + GLM-4.7-Flash 文本，均永久免费，"
         "到 open.bigmodel.cn 注册即得 Key（无需信用卡）。"
+        "全本地：VLM + 文本全走 Ollama，零成本零限流，但需要本机 Ollama + RTX 3070 8GB 以上。"
+        "  比智谱快约 3 倍（20 款 ≈ 22 min vs 62 min）。"
+        "混合：视觉本地 Ollama + 文本智谱云端。需要 Ollama + 智谱 Key。"
         "百炼：阿里云付费 API（每批约 2-6 元，免费额度已耗尽时慎选）。"
         "演示模式用伪随机数据跑通全链路，仅用于本地调试。"
     ),
@@ -148,15 +157,29 @@ _zhipu_key_from_session = st.session_state.get("zhipu_api_key", "").strip()
 _dashscope_key_from_session = st.session_state.get("dashscope_api_key", "").strip()
 
 # --- 后端路由 + Key 校验（缺 Key 自动回退 mock） ---
-if llm_mode_label == "智谱 GLM（免费）":
+if llm_mode_label.startswith("智谱 GLM"):
     _llm_backend = "zhipu"
     _key_for_backend = (
         _zhipu_key_from_session
         or os.getenv("ZHIPU_API_KEY", "").strip()
     )
     _key_missing_hint = (
-        "你选择了「智谱 GLM（免费）」，但未检测到智谱 API Key，已自动回退到 mock 模式。"
+        "你选择了「智谱 GLM（全云端·免费）」，但未检测到智谱 API Key，已自动回退到 mock 模式。"
         "请到 https://open.bigmodel.cn/usercenter/apikeys 免费创建 Key 后粘贴到上方输入框。"
+    )
+elif llm_mode_label.startswith("全本地 Ollama"):
+    _llm_backend = "local"
+    _key_for_backend = ""  # 本地 Ollama 不需要 API Key
+    _key_missing_hint = "本模式不需要 API Key，但需要先安装 Ollama 并 pull 模型。"
+elif llm_mode_label.startswith("混合模式"):
+    _llm_backend = "hybrid"
+    _key_for_backend = (
+        _zhipu_key_from_session
+        or os.getenv("ZHIPU_API_KEY", "").strip()
+    )
+    _key_missing_hint = (
+        "你选择了「混合模式（本地 VLM + 智谱文本）」，但未检测到智谱 API Key（文本端需要）。"
+        "请创建 Key 后粘贴。本地 Ollama VLM 不需要 Key。"
     )
 elif llm_mode_label == "百炼 API（阿里云·付费）":
     _llm_backend = "dashscope"
@@ -172,8 +195,26 @@ else:
     _llm_backend = "mock"
     _key_for_backend = ""
 
+# 本地 Ollama 模式不要求 API Key，检查 Ollama 是否在线
+_local_ollama_ok = True
+if _llm_backend == "local":
+    from src.llm_client import OllamaClient as _OC
+    _local_ollama_ok, _ = _OC().health_check()
+    if not _local_ollama_ok:
+        st.sidebar.warning(
+            "⚠️ Ollama 未启动（localhost:11434 连接被拒）。\n\n"
+            "请先：\n"
+            "1. 下载 Ollama: https://ollama.com/download\n"
+            "2. 安装后在终端执行:\n"
+            "   `ollama pull qwen2.5-vl:7b`\n"
+            "   `ollama pull qwen2.5:7b`\n"
+            "3. 确认显存 ≥ 6.5GB（RTX 3070 8GB 可跑）\n\n"
+            "已自动回退到 mock 模式。"
+        )
+        _llm_backend = "mock"
+
 _api_key_fallback_reason: str | None = None
-if _llm_backend != "mock" and not _key_for_backend:
+if _llm_backend not in ("mock", "local") and not _key_for_backend:
     _api_key_fallback_reason = _key_missing_hint
     st.sidebar.error(_api_key_fallback_reason)
     _llm_backend = "mock"
@@ -185,73 +226,74 @@ st.session_state.api_key_fallback_reason = _api_key_fallback_reason
 st.session_state.api_key_for_backend = _key_for_backend
 
 # --- 侧边栏：测试连接（1 次真实调用，一键验证 Key + 网络 + 后端路由）---
-if _llm_backend != "mock" and _key_for_backend:
+if _llm_backend != "mock":
     if st.sidebar.button("🔌 测试连接", use_container_width=True,
-                         help="发 1 次真实 API 调用，立即验证 Key 有效性（不跑批次也能确认）"):
-        _backend_name = "智谱" if _llm_backend == "zhipu" else "百炼"
-        try:
-            from src.config import APIConfig as _AC
-            from src.llm_client import ZhipuClient as _ZC, BailianClient as _BC
-            _t_cfg = _AC(max_retries=3, qpm_limit=10000)  # 3 次重试：429 有退避
-            if _llm_backend == "zhipu":
-                _t_cfg.zhipu_api_key = _key_for_backend
-                _t_client = _ZC(_t_cfg, api_key=_key_for_backend)
-            else:
-                _t_cfg.dashscope_api_key = _key_for_backend
-                _t_client = _BC(_t_cfg)
-            with st.spinner(f"正在向{_backend_name}发送测试请求（首次可能需等待限流器）…"):
-                _t_resp = _t_client.generate_text(
-                    "回复：OK", model="qwen-max", max_tokens=8, temperature=0.0,
-                )
-                # 智谱再测视觉模型（一张 8×8 白图，catch 视觉端参数/格式错误）
-                # 共享 RateLimiter 已保证 3s 间隔，这里额外 sleep 确保并发槽位释放
-                _v_resp = None
-                if _llm_backend == "zhipu":
-                    import tempfile as _tf
-                    from PIL import Image as _PILImage
-                    import time as _time
-                    with _tf.NamedTemporaryFile(suffix=".png", delete=False) as _tf_f:
-                        _PILImage.new("RGB", (8, 8), (250, 250, 250)).save(_tf_f, "PNG")
-                        _v_path = _tf_f.name
-                    _time.sleep(1.0)  # 共享限流器已 3s，这里额外等 1s 双保险
-                    _v_resp = _t_client.generate_multimodal(
-                        "1+1=?", [_v_path], model="qwen-vl-plus", max_tokens=8,
+                         help="hybrid 模式会同时检查本地 Ollama 和云端智谱"):
+        from src.config import APIConfig as _AC
+        from src.llm_client import ZhipuClient as _ZC, BailianClient as _BC, OllamaClient as _OC
+        _hc_ok, _hc_msg = True, ""
+        if _llm_backend == "hybrid":
+            _hc_ok, _hc_msg = _OC().health_check()
+        if _llm_backend != "hybrid" and not _key_for_backend:
+            st.sidebar.error("❌ 请先粘贴 API Key")
+        else:
+            try:
+                _t_cfg = _AC(max_retries=3, qpm_limit=10000)
+                _parts_ok: list[str] = []
+                _parts_err: list[str] = []
+
+                # ① 本地 Ollama 健康检查（local / hybrid 都要）
+                if _llm_backend in ("local", "hybrid"):
+                    _hc_ok, _hc_msg = _OC().health_check()
+                    if not _hc_ok:
+                        _parts_err.append(f"🖥️ Ollama: {_hc_msg}（请先安装 Ollama + ollama pull qwen2.5-vl:7b + qwen2.5:7b）")
+                    else:
+                        _parts_ok.append(f"🖥️ Ollama 本地正常 ({_hc_msg})")
+                    # local 模式额外发一次真实推理确认模型能跑
+                    if _llm_backend == "local" and _hc_ok:
+                        try:
+                            _l_client = _OC()
+                            _t_resp = _l_client.generate_text("回复：OK", max_tokens=8)
+                            if _t_resp.ok:
+                                _parts_ok.append(f"🖥️ Ollama 文本推理 OK ({_t_resp.model})")
+                            else:
+                                _parts_err.append(f"🖥️ Ollama 推理失败: {_t_resp.error[:120]}")
+                        except Exception as e:
+                            _parts_err.append(f"🖥️ Ollama 推理异常: {e}")
+                    if _llm_backend == "hybrid" and not _key_for_backend:
+                        _parts_err.append("☁️ 智谱 API Key 未填（文本端需要）")
+
+                # ② 智谱 / hybrid-智谱文本 测试
+                if _llm_backend in ("zhipu", "hybrid") and _key_for_backend:
+                    _t_cfg.zhipu_api_key = _key_for_backend
+                    _z_client = _ZC(_t_cfg, api_key=_key_for_backend)
+                    _t_resp = _z_client.generate_text(
+                        "回复：OK", model="qwen-max", max_tokens=8, temperature=0.0,
                     )
-            if _t_resp.ok and (_v_resp is None or _v_resp.ok):
-                _tok = _t_resp.usage.get("total_tokens", 0)
-                _v_part = f" · 视觉 {_v_resp.model} OK" if _v_resp is not None else ""
-                st.sidebar.success(
-                    f"✅ {_backend_name}连接成功（文本 {_t_resp.model}{_v_part}，"
-                    f"本次共 {_tok} tokens）。Key 有效，可以开始评估。"
-                )
-            else:
-                _bad = _t_resp if not _t_resp.ok else (_v_resp or _t_resp)
-                _err_text = (_bad.error or "").lower()
-                _is_rate_limit = "429" in _err_text or "rate limit" in _err_text or "速率" in _err_text
-                _is_auth_fail = any(x in _err_text for x in ("401", "403", "令牌", "token", "invalid api", "forbidden"))
-                if _is_rate_limit:
-                    # 速率限制 — Key 本身没问题，只是请求太频繁
-                    st.sidebar.warning(
-                        f"⚠️ {_backend_name}暂时限流（429）— **Key 本身没问题**。\n\n"
-                        f"这说明 Key 有效，只是免费层账户 RPM 较低。"
-                        f"请等待 10-30 秒后重试；批量评估时会自动 3s 间隔串行调用。"
-                        f"\n\n错误详情：`{_bad.error[:200]}`"
+                    if _t_resp.ok:
+                        _parts_ok.append(f"☁️ 智谱文本 OK ({_t_resp.model})")
+                    else:
+                        _parts_err.append(f"☁️ 智谱文本失败: {_t_resp.error[:120]}")
+
+                # ③ 百炼测试
+                if _llm_backend == "dashscope":
+                    _t_cfg.dashscope_api_key = _key_for_backend
+                    _b_client = _BC(_t_cfg)
+                    _t_resp = _b_client.generate_text(
+                        "回复：OK", model="qwen-max", max_tokens=8, temperature=0.0,
                     )
-                elif _is_auth_fail:
-                    # 鉴权失败 — Key 真的有问题
-                    st.sidebar.error(
-                        f"❌ {_backend_name}鉴权失败 — **Key 无效或已过期**。\n\n"
-                        f"请到智谱 open.bigmodel.cn/usercenter/apikeys 重新生成完整 Key，"
-                        f"粘贴到侧边栏后再试。\n\n错误详情：`{_bad.error[:200]}`"
-                    )
-                else:
-                    # 其他错误
-                    st.sidebar.error(
-                        f"❌ {_backend_name}调用失败：{_bad.error}\n\n"
-                        f"请检查网络连接，或稍后重试。"
-                    )
-        except Exception as _t_e:
-            st.sidebar.error(f"❌ 连接异常：{_t_e}")
+                    if _t_resp.ok:
+                        _parts_ok.append(f"☁️ 百炼 OK ({_t_resp.model})")
+                    else:
+                        _parts_err.append(f"☁️ 百炼失败: {_t_resp.error[:120]}")
+
+                # 汇总
+                if _parts_err:
+                    st.sidebar.error("❌ 测试未通过：\n\n" + "\n".join(_parts_err))
+                if _parts_ok:
+                    st.sidebar.success("✅ 测试通过：\n\n" + "\n".join(_parts_ok))
+            except Exception as _t_e:
+                st.sidebar.error(f"❌ 测试异常：{_t_e}")
 
 st.sidebar.title("🧭 导航")
 page = st.sidebar.radio("", PAGES, index=0)
