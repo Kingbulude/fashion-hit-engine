@@ -20,7 +20,7 @@ from typing import Any
 from tqdm import tqdm
 
 from .config import AppConfig
-from .llm_client import BailianClient
+from .llm_client import BailianClient, resolve_and_dedupe_models
 from .types import (
     BrandConfig,
     DecisionLayer,
@@ -310,6 +310,8 @@ def vote_persona(
     """单人设 + 多模型混合，均值聚合（决策层通用）"""
     pid = _persona_key(persona)
     models = cfg.api.persona_models if cfg is not None else _DEFAULT_PERSONA_MODELS
+    # 去重提速：Ollama/智谱映射后可能重复 → 直接砍掉，节省一半请求
+    models = resolve_and_dedupe_models(client, models, is_vlm=False)
 
     layers = _resolve_layers(brand_cfg)
     if brand_cfg is not None:

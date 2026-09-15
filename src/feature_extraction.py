@@ -12,7 +12,7 @@ from typing import Any
 from tqdm import tqdm
 
 from .config import AppConfig, load_brand_profile
-from .llm_client import BailianClient, LLMResponse
+from .llm_client import BailianClient, LLMResponse, resolve_and_dedupe_models
 from .types import (
     BrandConfig,
     FeatureScore,
@@ -284,6 +284,8 @@ def extract_style_features(
 
     brand_context = _resolve_brand_context_from_inputs(cfg, brand_cfg)
     models = _resolve_models_from_inputs(cfg, llm_backend)
+    # VLM 模型去重（同人设投票：映射后重复的只留一个）
+    models = resolve_and_dedupe_models(client, models or [], is_vlm=True)
 
     # mock mode 快速路径
     if llm_backend == "mock" or (models and models[0] == "mock"):

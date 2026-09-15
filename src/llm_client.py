@@ -178,6 +178,48 @@ def _map_zhipu_model(model: str) -> str:
     return _ZHIPU_MODEL_MAP.get(model, model)
 
 
+# ========== 模型名解析 + 去重（提速关键：映射后重复的只留一个）==========
+def resolve_and_dedupe_models(
+    client: Any,
+    model_names: list[str],
+    *,
+    is_vlm: bool = False,
+) -> list[str]:
+    """把品牌 YAML 里的百炼模型名 → 映射到 client 实际可用名，并去重。
+
+    典型场景：
+      Ollama 本地: ["qwen-max", "deepseek-v3"] → 都映射到 "qwen2.5:7b" → 去重为 1 个
+      智谱云端:   ["qwen-max", "deepseek-v3"] → 都映射到 "glm-4.7-flash" → 去重为 1 个
+      百炼云端:   ["qwen-max", "deepseek-v3"] → 两个都是真实不同模型 → 保留 2 个
+
+    不去重时每次人设投票会对同一个模型发多次完全相同的请求，
+    本地 Ollama 单卡串行场景下直接浪费 2× 时间。
+    """
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for name in model_names:
+        # 按 client 类型选映射逻辑
+        if isinstance(client, OllamaClient):
+            actual = client._resolve_model(name, is_vlm=is_vlm)
+        elif isinstance(client, ZhipuClient):
+            actual = _map_zhipu_model(name)
+        else:
+            # BailianClient 或其他：原样通过
+            actual = name
+        if actual not in seen:
+            seen.add(actual)
+            resolved.append(actual)
+        else:
+            log.debug("模型去重: %s → %s（已存在，跳过）", name, actual)
+    if len(resolved) < len(model_names):
+        log.info(
+            "模型去重优化: %d → %d 个（client=%s, is_vlm=%s）",
+            len(model_names), len(resolved),
+            type(client).__name__, is_vlm,
+        )
+    return resolved
+
+
 # 智谱免费层限流保守（1 并发 + 低 RPM），QPM 压到 10 防止 429 风暴
 _ZHIPU_QPM_DEFAULT = 10
 
