@@ -251,7 +251,8 @@ def test_generate_multimodal_payload_is_compressed(tmp_path):
 # 5. pipeline / app 集成（源码级断言）
 # ============================================================
 def test_pipeline_routes_to_zhipu():
-    assert 'if self.llm_backend == "zhipu":' in PIPELINE_SRC
+    # hybrid 和 zhipu 的 VLM 都走智谱云端（合并判断）
+    assert '("hybrid", "zhipu")' in PIPELINE_SRC or 'in ("hybrid", "zhipu")' in PIPELINE_SRC
     assert "ZhipuClient(api_cfg)" in PIPELINE_SRC
     assert "zhipu_api_key" in PIPELINE_SRC
 

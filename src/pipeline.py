@@ -334,9 +334,14 @@ class PredictionPipeline:
 
     @property
     def client(self) -> BailianClient | ZhipuClient | OllamaClient:
-        """主 client：hybrid/local 模式下返回 OllamaClient，其他返回云端。"""
+        """主 client（VLM 特征提取用）
+
+        hybrid 模式 → Zhipu 云端 VLM（专业图像理解是最大短板，必须用云端）
+        local  模式 → Ollama 本地 VLM（零成本）
+        zhipu 模式 → Zhipu 全云端
+        """
         if self._client is None:
-            if self.llm_backend in ("hybrid", "local"):
+            if self.llm_backend == "local":
                 from .llm_client import OllamaClient
                 self._client = OllamaClient()
             else:
@@ -345,8 +350,8 @@ class PredictionPipeline:
                 except Exception:
                     from .config import APIConfig
                     api_cfg = APIConfig(dashscope_api_key=self.api_key or "")
-                if self.llm_backend == "zhipu":
-                    # 智谱（免费）：self.api_key 优先（UI 粘贴），其次 .env 的 ZHIPU_API_KEY
+                if self.llm_backend in ("hybrid", "zhipu"):
+                    # hybrid 和 zhipu 的 VLM 都走智谱云端（glm-4.6v-flash 免费且专业）
                     api_cfg.zhipu_api_key = self.api_key or api_cfg.zhipu_api_key
                     self._client = ZhipuClient(api_cfg)
                 else:
@@ -355,18 +360,18 @@ class PredictionPipeline:
 
     @property
     def text_client(self) -> BailianClient | ZhipuClient | OllamaClient:
-        """文本 client：hybrid→智谱云端；local→ Ollama 本地；其他同 self.client。"""
+        """文本 client（人设投票/渠道分用）
+
+        hybrid → Ollama 本地（文本理解 7B 够用，零成本，不占智谱配额）
+        local  → Ollama 本地
+        其他   → 同 self.client
+        """
         if self.llm_backend not in ("hybrid",):
             return self.client  # type: ignore[return-value]
-        # hybrid 模式：文本强制走云端智谱
+        # hybrid 模式：文本走本地 Ollama
         if getattr(self, "_text_client", None) is None:
-            try:
-                api_cfg = load_config(override_api_key=self.api_key).api
-            except Exception:
-                from .config import APIConfig
-                api_cfg = APIConfig(dashscope_api_key=self.api_key or "")
-            api_cfg.zhipu_api_key = self.api_key or api_cfg.zhipu_api_key
-            self._text_client = ZhipuClient(api_cfg)
+            from .llm_client import OllamaClient
+            self._text_client = OllamaClient()
         return self._text_client
 
     # ===== 三大引擎合成（调用 ensemble_engine）=====
