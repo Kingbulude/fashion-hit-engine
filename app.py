@@ -120,7 +120,7 @@ llm_mode_label = st.sidebar.radio(
     options=[
         "智谱 GLM（全云端·免费）",
         "全本地 Ollama（零成本·零限流·最快）",
-        "混合模式（本地 VLM + 智谱文本）",
+        "混合模式（智谱 VLM + 本地文本）",
         "百炼 API（阿里云·付费）",
         "演示模式（mock）",
     ],
@@ -185,7 +185,7 @@ elif llm_mode_label.startswith("混合模式"):
         or os.getenv("ZHIPU_API_KEY", "").strip()
     )
     _key_missing_hint = (
-        "你选择了「混合模式（本地 VLM + 智谱文本）」，但未检测到智谱 API Key（文本端需要）。"
+        "你选择了「混合模式（智谱 VLM + 本地文本）」，但未检测到智谱 API Key（文本端需要）。"
         "请创建 Key 后粘贴。本地 Ollama VLM 不需要 Key。"
     )
 elif llm_mode_label == "百炼 API（阿里云·付费）":
