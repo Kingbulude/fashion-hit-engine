@@ -721,12 +721,51 @@ class OllamaClient:
         temperature: float, max_tokens: int,
         images: list[str] | None = None,
     ) -> LLMResponse:
-        # Ollama /api/chat 原生格式：
-        #   messages[].content 必须是 string（不是 array）
-        #   images 放在 payload 顶层（多模态专用）
+        # === Ollama 格式强制规范 ===
+        # Ollama /api/chat 的硬约束：
+        #   1. messages[].content 必须是 string（不能是 array）
+        #   2. 图片走 payload 顶层 images=[base64, ...]
+        # 不管上游是谁（BailianClient 签名、旧 feature_extraction 路径、
+        # 还是有人手工构造 OpenAI array 格式），在这里统一转一次。
+        normalized_messages: list[dict[str, Any]] = []
+        extracted_images: list[str] = list(images) if images else []
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, str):
+                # 已经是 Ollama 格式
+                normalized_messages.append({"role": msg.get("role", "user"), "content": content})
+            elif isinstance(content, list):
+                # OpenAI array 格式 → 提取 text + image_url
+                text_parts: list[str] = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text" and "text" in part:
+                            text_parts.append(str(part["text"]))
+                        elif part.get("type") == "image_url":
+                            img_info = part.get("image_url", {})
+                            url = img_info.get("url", "") if isinstance(img_info, dict) else str(img_info)
+                            if url.startswith("data:"):
+                                # data:image/jpeg;base64,xxxxx → 只取 base64
+                                extracted_images.append(url.split(",", 1)[-1])
+                            elif url:
+                                # 纯 base64
+                                extracted_images.append(url)
+                        elif "image" in part:
+                            img_val = part["image"]
+                            if isinstance(img_val, str) and img_val.startswith("data:"):
+                                extracted_images.append(img_val.split(",", 1)[-1])
+                            elif isinstance(img_val, str):
+                                extracted_images.append(img_val)
+                normalized_messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": "\n".join(text_parts) if text_parts else "(image-only request)",
+                })
+            else:
+                normalized_messages.append({"role": msg.get("role", "user"), "content": str(content)})
+
         payload: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": normalized_messages,
             "stream": False,
             "options": {
                 "temperature": temperature,
@@ -735,8 +774,8 @@ class OllamaClient:
             },
             "keep_alive": self.keep_alive,
         }
-        if images:
-            payload["images"] = images
+        if extracted_images:
+            payload["images"] = extracted_images
         try:
             resp = self._requests.post(
                 f"{self.base_url}/chat",
