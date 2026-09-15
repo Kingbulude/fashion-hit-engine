@@ -37,37 +37,29 @@ class LLMResponse:
 
 # ========== Token/速率 限流器 ==========
 class RateLimiter:
-    """简单的分钟级 QPM 限流（令牌桶），对免费层够用"""
+    """严格串行限流 —— 每次调用之间至少 min_interval 秒。
 
-    def __init__(self, qpm: int):
+    智谱免费层官方限 1 并发，且低 RPM，不允许任何突发（token bucket 初始 QPM 个
+    token → 可瞬间发 QPM 个请求 → 立即 429 风暴）。漏桶 + 硬间隔是唯一可靠的模式。
+    """
+
+    def __init__(self, qpm: int, min_interval: float = 2.0):
+        """
+        qpm: 每分钟最多请求数（仅用于日志/告警，不作为突发上限）
+        min_interval: 两次调用之间的最小间隔秒数（硬限速，核心保护）
+        """
         self.qpm = qpm
-        self._tokens = qpm
-        self._last_refill = time.time()
-        self._lock = asyncio.Lock() if False else None  # 同步阶段只用 sleep
+        self.min_interval = min_interval
+        self._last_call: float = 0.0
 
     def acquire(self, n: int = 1) -> None:
         now = time.time()
-        # 每分钟补充 tokens
-        elapsed = now - self._last_refill
-        if elapsed >= 60:
-            self._tokens = self.qpm
-            self._last_refill = now
-        else:
-            self._tokens = min(self.qpm, self._tokens + self.qpm * elapsed / 60.0)
-            # 只更新 if 超过了1秒精度
-            if elapsed >= 1.0:
-                self._last_refill = now
-
-        if self._tokens >= n:
-            self._tokens -= n
-            return
-
-        # 等待令牌补充
-        need = n - self._tokens
-        wait_s = (need / self.qpm) * 60.0 + 0.5
-        time.sleep(wait_s)
-        self._tokens = self.qpm - n
-        self._last_refill = time.time()
+        elapsed = now - self._last_call
+        # 硬限速：每次调用之间至少 min_interval 秒
+        if elapsed < self.min_interval:
+            wait = self.min_interval - elapsed
+            time.sleep(wait)
+        self._last_call = time.time()
 
 
 # ========== API 用量统计（钱花哪了，一眼可见）==========
@@ -216,7 +208,7 @@ class BailianClient:
 
         self._dashscope = dashscope
         dashscope.api_key = api_cfg.dashscope_api_key
-        self._limiter = RateLimiter(api_cfg.qpm_limit)
+        self._limiter = RateLimiter(api_cfg.qpm_limit, min_interval=1.0)
         self.usage_tracker = UsageTracker()
 
     # ---- 文本生成（人设投票用）----
@@ -398,9 +390,9 @@ class ZhipuClient:
         self._api_key = key
         import requests  # 延迟导入（requirements 已含）
         self._requests = requests
-        # 免费层限流保守：无论全局 QPM_LIMIT 设多少，智谱钳到 ≤10 防 429 风暴
-        qpm = min(api_cfg.qpm_limit or _ZHIPU_QPM_DEFAULT, _ZHIPU_QPM_DEFAULT)
-        self._limiter = RateLimiter(qpm)
+        # 免费层限速严格：1 并发 + 低 RPM，强制每次调用至少 2s 间隔
+        # 无论全局 QPM_LIMIT 设多少都用保守值（防 429 风暴）
+        self._limiter = RateLimiter(qpm=5, min_interval=2.0)
         self.usage_tracker = UsageTracker()
 
     # ---- 文本生成（人设投票用）----

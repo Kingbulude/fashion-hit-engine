@@ -178,7 +178,7 @@ def test_qpm_clamped_for_free_tier():
 
 
 def test_429_long_backoff_then_success():
-    """429 两次后成功：退避间隔应为 12s/24s（base×2^(n-1)），不是短退避 5/7/11s。"""
+    """429 两次后成功：退避间隔应为 12s/24s（忽略 RateLimiter 的 2s 硬间隔 sleep）。"""
     c = ZhipuClient(APIConfig(max_retries=3, qpm_limit=10000), api_key="k")
     ok_body = {"choices": [{"message": {"content": "OK"}}],
                "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}}
@@ -204,7 +204,8 @@ def test_429_long_backoff_then_success():
     with patch("src.llm_client.time.sleep") as mock_sleep:
         resp = c.generate_text("打分", model="qwen-max")
     assert resp.ok and resp.content == "OK"
-    waits = [call.args[0] for call in mock_sleep.call_args_list]
+    # 过滤掉 RateLimiter 的 2s 硬间隔 sleep，只看 429 退避
+    waits = [round(c.args[0], 1) for c in mock_sleep.call_args_list if c.args[0] > 3]
     assert waits == [12.0, 24.0], f"长退避序列应为 [12, 24]，实际 {waits}"
 
 

@@ -204,13 +204,17 @@ if _llm_backend != "mock" and _key_for_backend:
                     "回复：OK", model="qwen-max", max_tokens=8, temperature=0.0,
                 )
                 # 智谱再测视觉模型（一张 8×8 白图，catch 视觉端参数/格式错误）
+                # 视觉与文本模型是两个不同 endpoint，但免费层并发槽位共享，
+                # 加 2s 间隔确保文本请求的并发槽位已释放
                 _v_resp = None
                 if _llm_backend == "zhipu":
                     import tempfile as _tf
                     from PIL import Image as _PILImage
+                    import time as _time
                     with _tf.NamedTemporaryFile(suffix=".png", delete=False) as _tf_f:
                         _PILImage.new("RGB", (8, 8), (250, 250, 250)).save(_tf_f, "PNG")
                         _v_path = _tf_f.name
+                    _time.sleep(2.0)  # 确保 1 并发槽位释放
                     _v_resp = _t_client.generate_multimodal(
                         "1+1=?", [_v_path], model="qwen-vl-plus", max_tokens=8,
                     )
