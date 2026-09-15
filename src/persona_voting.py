@@ -275,7 +275,7 @@ def _vote_one_persona_one_model(
     if not resp.ok:
         raise RuntimeError(f"[人设投票] 人设{_persona_key(persona)}模型{model}失败: {resp.error}")
     try:
-        parsed = extract_json(resp.content)
+        parsed = extract_json(resp.content, as_dict=True)
         # Ollama 本地模型偶尔把单个结果包装成 list 返回 → 自动拆
         if isinstance(parsed, list):
             if len(parsed) == 0:

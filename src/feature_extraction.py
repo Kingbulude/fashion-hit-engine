@@ -219,7 +219,7 @@ def _extract_one_model(
     if not resp.ok:
         raise RuntimeError(f"[特征提取{model}] {info.style_id} 失败: {resp.error}")
     try:
-        parsed = extract_json(resp.content)
+        parsed = extract_json(resp.content, as_dict=True)
         assert isinstance(parsed, dict), f"解析出的不是dict而是{type(parsed)}"
         return parsed
     except Exception as e:

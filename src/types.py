@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -224,48 +225,105 @@ _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 _JSON_STRIP_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
-def extract_json(text: str) -> dict | list:
-    """从LLM输出的文本中提取JSON对象/数组。支持 ```json ... ``` 包裹或裸JSON。"""
+def extract_json(text: str, *, as_dict: bool = False) -> dict | list:
+    """从LLM输出的文本中提取JSON对象/数组。支持 ```json ... ``` 包裹或裸JSON。
+
+    Args:
+        text: LLM 原始输出文本
+        as_dict: 如果为 True，强制返回 dict（list 会尝试提取/构造兜底 dict）。
+                 这是 Ollama 本地模式的核心补丁：小模型经常偷懒返回
+                 纯数值数组 [7.5] 或 list 包装，下游调 .get() 就崩。
+                 默认 False 保持兼容。
+    """
     text = _JSON_STRIP_RE.sub("", text).strip()
+    raw: Any = None
     # 先试代码块
     m = _JSON_BLOCK_RE.search(text)
     if m:
         try:
-            return json.loads(m.group(1))
+            raw = json.loads(m.group(1))
         except json.JSONDecodeError:
             text = m.group(1)
-    # 找最外层 { ... } 或 [ ... ]
-    for opener, closer in (("{", "}"), ("[", "]")):
-        start = text.find(opener)
-        if start >= 0:
-            depth = 0
-            in_str = False
-            esc = False
-            for i in range(start, len(text)):
-                ch = text[i]
-                if esc:
-                    esc = False
-                    continue
-                if ch == "\\":
-                    esc = True
-                    continue
-                if ch == '"':
-                    in_str = not in_str
-                    continue
-                if in_str:
-                    continue
-                if ch == opener:
-                    depth += 1
-                elif ch == closer:
-                    depth -= 1
-                    if depth == 0:
-                        snippet = text[start:i + 1]
-                        try:
-                            return json.loads(snippet)
-                        except json.JSONDecodeError:
-                            break
-    # 最后一招：直接 parse 全文
-    return json.loads(text)
+            raw = None
+    if raw is None:
+        # 找最外层 { ... } 或 [ ... ]
+        for opener, closer in (("{", "}"), ("[", "]")):
+            start = text.find(opener)
+            if start >= 0:
+                depth = 0
+                in_str = False
+                esc = False
+                for i in range(start, len(text)):
+                    ch = text[i]
+                    if esc:
+                        esc = False
+                        continue
+                    if ch == "\\":
+                        esc = True
+                        continue
+                    if ch == '"':
+                        in_str = not in_str
+                        continue
+                    if in_str:
+                        continue
+                    if ch == opener:
+                        depth += 1
+                    elif ch == closer:
+                        depth -= 1
+                        if depth == 0:
+                            snippet = text[start:i + 1]
+                            try:
+                                raw = json.loads(snippet)
+                                break
+                            except json.JSONDecodeError:
+                                break
+                if raw is not None:
+                    break
+    if raw is None:
+        # 最后一招：直接 parse 全文
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            # 彻底无 JSON → as_dict 模式兜底返回空 dict
+            if as_dict:
+                log_warn = logging.getLogger(__name__)
+                log_warn.warning("extract_json 未找到任何有效 JSON，返回空 dict 兜底（原文=%s）", text[:100])
+                raw = {}
+            else:
+                raise
+
+    if as_dict:
+        raw = _coerce_to_dict(raw, text)
+    return raw
+
+
+def _coerce_to_dict(raw: Any, original_text: str = "") -> dict:
+    """把 extract_json 的返回值强制转成 dict（从各种 LLM 偷懒格式里抢救）。
+
+    处理的场景：
+      dict                          → 原样返回
+      [dict, dict, ...]             → 取第一个 dict
+      [float] / [str] / [int]       → 构造 {"final_score": 7.5} 兜底
+      [] 空数组                      → 返回 {}
+      其他非 dict 类型              → 返回 {}
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        if len(raw) == 0:
+            log_warn = logging.getLogger(__name__)
+            log_warn.warning("extract_json 收到空数组，返回空 dict 兜底")
+            return {}
+        first = raw[0]
+        if isinstance(first, dict):
+            return first  # list 包装了 dict → 取第一个
+        # 纯数值/字符串数组 → 构造兜底 dict
+        fallback_val = first
+        return {"final_score": fallback_val, "_raw_list": raw, "_original_preview": original_text[:100]}
+    # 非 dict 非 list → 兜底空 dict
+    log_warn = logging.getLogger(__name__)
+    log_warn.warning("extract_json 收到 %s，返回空 dict 兜底（原文=%s）", type(raw).__name__, original_text[:100])
+    return {}
 
 
 def safe_float(v: Any, default: float = 5.0) -> float:
