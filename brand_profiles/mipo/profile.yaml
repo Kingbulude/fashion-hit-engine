@@ -1,34 +1,39 @@
 brand_id: mipo
 brand_name: MIPO蜜扑
 industry_segment: children_outdoor
-target_age_range: [6, 14]
+target_age_range: [6, 18]
+target_size_range: [110, 180]
 decision_structure:
   type: multi_layer
   layers:
     - id: mom_decision_layer
-      name: 妈妈决策者层（28-38岁华东新一线宝妈）
+      name: 妈妈决策者层（28-40岁华东新一线宝妈，主要影响6-12岁）
       persona_axis_key: identity_axes
       role: decider
-      default_weight: 0.65
+      default_weight: 0.55
     - id: child_influence_layer
-      name: 孩子影响层（6-14岁男童为主）
+      name: 孩子/青少年影响层（6-18岁，13岁以上自主决策权增强）
       persona_axis_key: child_identity_axes
       role: veto
-      default_weight: 0.35
+      default_weight: 0.45
   age_weight_rules:
     - age_range: [6, 8]
       mom_weight: 0.75
       child_weight: 0.25
       label: 妈妈主导（低年级）
     - age_range: [9, 11]
-      mom_weight: 0.55
-      child_weight: 0.45
+      mom_weight: 0.60
+      child_weight: 0.40
       label: 共同决策（小学中高年级）
     - age_range: [12, 14]
       mom_weight: 0.35
       child_weight: 0.65
-      label: 孩子主导（初中）
-default_target_age: 9
+      label: 孩子主导（初中早期）
+    - age_range: [15, 18]
+      mom_weight: 0.30
+      child_weight: 0.70
+      label: 青少年自主（初高中，潮牌/街头审美）
+default_target_age: 12
 default_engine_weights:
   persona_voting: 0.35
   channel_scoring: 0.30

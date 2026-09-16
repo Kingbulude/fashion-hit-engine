@@ -641,7 +641,7 @@ class PredictionPipeline:
                 style_id=f"T251{i+1:03d}",
                 images=[],
                 fab_description=(
-                    f"{cname}款：采用功能性面料，多口袋系统，适合6-14岁"
+                    f"{cname}款：采用功能性面料，多口袋系统，适合6-18岁全客群"
                     f"{self.brand_cfg.decision_structure.default_target_age}岁儿童日常和户外穿着。"
                 ),
                 category=cid,

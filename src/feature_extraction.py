@@ -67,7 +67,7 @@ def _render_bars_prompt(features_cfg: dict[str, Any]) -> str:
     lines.append("")
     lines.append("【反例警告】")
     lines.append("- ❌ 错误理由：'宽松版型，有垂坠感'（只有视觉描述，没有销量影响判断）")
-    lines.append("- ✅ 正确理由：'宽松oversize版型，比正常大1个码，有魔术贴调节；对10-14岁男孩是主推款型，直播间能引流→高销加分'")
+    lines.append("- ✅ 正确理由：'宽松oversize版型，比正常大1个码，有魔术贴调节；对目标客群是主推款型，直播间能引流→高销加分'")
     lines.append("")
     lines.append("【输出格式】纯JSON，不要额外文字")
     lines.append('''{

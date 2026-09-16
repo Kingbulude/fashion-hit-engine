@@ -12,7 +12,7 @@ features:
     category: physical
     description: "宽松/修身/廓形的程度"
     anchors:
-      1: {range: [1, 2], label: "超紧贴身", description: "运动压缩衣感，完全贴合身体轮廓。对MIPO 6-14岁客群：运动可但日常上学穿不舒服，**销冠潜力低**。"}
+      1: {range: [1, 2], label: "超紧贴身", description: "运动压缩衣感，完全贴合身体轮廓。对MIPO 6-18岁全客群：运动可但日常上学穿不舒服，**销冠潜力低**。"}
       2: {range: [3, 4], label: "修身", description: "修身版型，略有余量，活动不紧绷但不宽松。对MIPO：基础版型，**销量中性**。"}
       3: {range: [5, 6], label: "常规", description: "标准H型版型，无明显宽松或紧身特征。对MIPO：安全不出错，**常规款销量**。"}
       4: {range: [7, 8], label: "宽松oversize", description: "明显宽松，比正常大1-2个码，有垂坠感但廓形清晰。对MIPO：**视觉冲击力强，能成主推**（MIPO爆款多为此档）。"}

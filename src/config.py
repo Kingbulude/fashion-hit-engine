@@ -99,12 +99,13 @@ def _build_default_decision_structure() -> BrandDecisionStructure:
         {"age_range": [6, 8], "mom_weight": 0.70, "child_weight": 0.30, "label": "决策者主导"},
         {"age_range": [9, 11], "mom_weight": 0.50, "child_weight": 0.50, "label": "共同决策"},
         {"age_range": [12, 14], "mom_weight": 0.30, "child_weight": 0.70, "label": "影响层主导"},
+        {"age_range": [15, 18], "mom_weight": 0.25, "child_weight": 0.75, "label": "青少年自主"},
     ]
     return BrandDecisionStructure(
         type="multi_layer",
         layers=layers,
         age_weight_rules=age_weight_rules,
-        default_target_age=10,
+        default_target_age=12,
     )
 
 
@@ -169,7 +170,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
 
         personas_list = personas_raw.get("personas", [])
         # ===== 🔧 合并孩子人设（之前漏掉了！）=====
-        # personas.yaml 里 child_identity_axes 定义了孩子人设（3男3女，6-14岁）
+        # personas.yaml 里 child_identity_axes 定义了孩子人设（7男7女，6-18岁全覆盖）
         # 之前只取了 "personas"（30 妈妈），导致投票完全缺孩子视角 + 性别平衡
         child_raw = personas_raw.get("child_identity_axes", [])
         for cp in child_raw:
