@@ -262,24 +262,8 @@ def assign_grade(
         if voting and voting.opposition_rate > float(risk_rule.get("opposition_max", 0.30)):
             base = "风险" if base in {"P", "A"} else "A"
 
-        # —— P 款主动识别（品牌调性展示款，故意小批量）——
-        # 业务逻辑：高 F10(独特) 或 高 F09(调性) 是品牌 P 款的信号，
-        # 但必须同时满足"销量驱动特征弱"（双渠道偏低）才成立。
-        # 如果双渠道都好（设计感转化成了吸引力），即使 F10 高也不能降 P。
-        p_rule = rules.get("p_grade", {})
-        if base != "风险" and feats:
-            uniqueness_high = float(p_rule.get("uniqueness_high", 7.5))
-            brand_tone_high = float(p_rule.get("brand_tone_high", 7.5))
-            # 从 features 字典取 F10 和 F09
-            feat_scores = {k: float(getattr(f, "score", 5.0))
-                          for k, f in getattr(feats, "features", {}).items()}
-            f10 = feat_scores.get("F10_uniqueness", 5.0)
-            f09 = feat_scores.get("F09_brand_tone", 5.0)
-            is_brand_showcase = (f10 >= uniqueness_high) or (f09 >= brand_tone_high)
-            channels_weak = (channels.natural_score < 6.5) or (channels.live_score < 6.0)
-            if is_brand_showcase and channels_weak:
-                # 把它从 S/A+/A 降到 P —— 这是品牌展示款，不追求销量
-                base = "P" if base not in {"S", "A+"} else "P"
+    # 注意：P 款识别已移到 assign_relative_grades 末尾（后处理）
+    # 相对分级会覆盖绝对档，P 款必须在相对分级之后应用
 
     return base
 
@@ -350,6 +334,37 @@ def assign_relative_grades(
                 g = "P"
             p.grade.grade = g
             result[p.info.style_id] = g
+
+    # ========== P 款主动识别（后处理，在相对分级之后）==========
+    # 数据验证发现：S款 F03=4.4 F09=7.2；P款 F03=5.3 F09=8.0
+    # 最强区分信号是 F03 色彩风险，其次 F09 调性
+    # 触发条件：
+    #   (F03≥6 AND F09≥7.5) → 高调性 + 拼色/撞色 → P款
+    #   (F10≥7.5 AND 双渠道弱) → 原逻辑
+    COLOR_RISK_HIGH = 6.0
+    BRAND_TONE_HIGH = 7.5
+    UNIQUENESS_HIGH = 7.5
+    for p in preds:
+        sid = p.info.style_id
+        if result.get(sid) == "风险":
+            continue  # 风险款不动
+        feats = getattr(p, "features", None)
+        channels = getattr(p, "channels", None)
+        if not feats or not channels:
+            continue
+        feat_scores = {k: float(getattr(f, "score", 5.0))
+                      for k, f in getattr(feats, "features", {}).items()}
+        f03 = feat_scores.get("F03_color_risk", 5.0)
+        f09 = feat_scores.get("F09_brand_tone", 5.0)
+        f10 = feat_scores.get("F10_uniqueness", 5.0)
+        p_showcase = (f09 >= BRAND_TONE_HIGH) and (f03 >= COLOR_RISK_HIGH)
+        channels_weak = (channels.natural_score < 6.5) or (channels.live_score < 6.0)
+        p_unique = (f10 >= UNIQUENESS_HIGH) and channels_weak
+        if p_showcase or p_unique:
+            result[sid] = "P"
+            p.grade.grade = "P"
+            log.debug("P款识别：%s (F03=%.1f F09=%.1f F10=%.1f → showcase=%s unique=%s)",
+                      sid, f03, f09, f10, p_showcase, p_unique)
 
     log.info("相对分级完成：%s（绝对档快照存 metadata.absolute_grade）",
              {g: list(k for k, v in result.items() if v == g) for g in ("S", "A+", "A", "P")})
