@@ -256,20 +256,45 @@ def merge_release(extracted_root: Path, dest_root: Path) -> int:
 
         dest_file = dest_root / rel
         dest_file.parent.mkdir(parents=True, exist_ok=True)
-        # Retry copy — Windows file locks can linger briefly after process kill
+        # Robust copy: on Windows, Python locks imported .py files.
+        # Strategy: rename old file → .bak (works even when locked!),
+        #   then copy new file, then delete .bak on next run.
+        # This handles self-update (update.py overwriting itself) and any
+        #   other .py that the running process has imported.
+        bak_file = dest_file.with_suffix(dest_file.suffix + ".bak")
         for attempt in range(5):
             try:
+                if dest_file.is_file():
+                    # Rename old file out of the way (works on locked files!)
+                    try:
+                        dest_file.rename(bak_file)
+                    except OSError:
+                        # Another attempt may have already renamed it
+                        pass
                 shutil.copy2(src_file, dest_file)
                 copied += 1
                 break
             except PermissionError as pe:
+                # Clean up the bak if we created it but copy still failed
+                if bak_file.is_file() and not dest_file.is_file():
+                    try:
+                        bak_file.rename(dest_file)  # restore original
+                    except OSError:
+                        pass
                 if attempt < 4:
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 raise RuntimeError(
-                    f"Cannot overwrite {rel} after 5 retries — another process "
-                    f"still has it open. Close all app windows and try again."
+                    f"Cannot overwrite {rel} after 5 retries. "
+                    f"If this was update.py itself: run 'git pull origin main' manually, "
+                    f"then re-run update.bat."
                 ) from pe
+        # Best-effort cleanup of .bak from previous run's self-update
+        if bak_file.is_file():
+            try:
+                bak_file.unlink()
+            except OSError:
+                pass  # will be cleaned up next time
 
         # also write any missing parent .gitkeep files for calibrated dirs
 
