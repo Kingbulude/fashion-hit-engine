@@ -582,8 +582,21 @@ class ResidualDecomposer:
             mu = statistics.mean(eps)
             sigma = statistics.pstdev(eps) if len(eps) > 1 else 0.0
 
-            upper = mu + 2.0 * sigma if sigma > 0 else mu
-            lower = mu - 2.0 * sigma if sigma > 0 else mu
+            # --- 阈值修正（硬 bug fix）---
+            # rank_percentile 残差 ε ∈ [-1, 1]，小样本时 σ 天然偏大，
+            # ±2σ 会超出 [-1, 1] 实际范围 → 即使完全反排也 0 个触发。
+            # 修：(1) 截断到 ε 的物理边界 ±1.0
+            #     (2) 小样本（n<20）收紧到 1.5σ
+            #     (3) σ 极小（<0.1，近乎完美排序）时用硬阈值 ±0.3 兜底
+            n_eps = len(eps)
+            sigma_mult = 1.5 if n_eps < 20 else 2.0
+            if sigma < 0.1:
+                # 近乎完美排序 → 用硬阈值
+                upper = min(mu + 0.3, 1.0)
+                lower = max(mu - 0.3, -1.0)
+            else:
+                upper = min(mu + sigma_mult * sigma, 1.0) if sigma > 0 else mu
+                lower = max(mu - sigma_mult * sigma, -1.0) if sigma > 0 else mu
 
             id_col = "style_id" if "style_id" in meta_df.columns else None
             # 营销投放列（ADR-0001：实际投放，缺失时归因跳过）
