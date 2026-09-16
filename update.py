@@ -256,8 +256,20 @@ def merge_release(extracted_root: Path, dest_root: Path) -> int:
 
         dest_file = dest_root / rel
         dest_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_file, dest_file)
-        copied += 1
+        # Retry copy — Windows file locks can linger briefly after process kill
+        for attempt in range(5):
+            try:
+                shutil.copy2(src_file, dest_file)
+                copied += 1
+                break
+            except PermissionError as pe:
+                if attempt < 4:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                raise RuntimeError(
+                    f"Cannot overwrite {rel} after 5 retries — another process "
+                    f"still has it open. Close all app windows and try again."
+                ) from pe
 
         # also write any missing parent .gitkeep files for calibrated dirs
 
@@ -265,29 +277,56 @@ def merge_release(extracted_root: Path, dest_root: Path) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Step 5: check if streamlit is running
+# Step 5: kill running app processes (streamlit/python)
 # ---------------------------------------------------------------------------
 
-def find_running_streamlit() -> str | None:
-    """Return process id or None."""
+def kill_running_apps() -> bool:
+    """Find and kill streamlit/python processes from this project. Returns True if something was killed."""
     import subprocess
+    killed_any = False
     try:
         if sys.platform == "win32":
+            # Windows: find python processes with streamlit or app.py in command line
             out = subprocess.run(
-                ["wmic", "process", "where", "name='python.exe'", "get", "processid,commandline"],
+                ["wmic", "process", "where", "name='python.exe'", "get",
+                 "processid,commandline", "/format:csv"],
                 capture_output=True, text=True, timeout=5,
             ).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if not line or line.startswith("Node"):
+                    continue
+                # CSV format: Node,ProcessId,CommandLine
+                parts = line.split(",")
+                if len(parts) < 3:
+                    continue
+                pid = parts[1].strip()
+                cmd = parts[2].lower() if len(parts) > 2 else ""
+                if ("streamlit" in cmd or "app.py" in cmd) and pid.isdigit():
+                    _info(f"Killing process PID={pid} ...")
+                    subprocess.run(["taskkill", "/F", "/PID", pid],
+                                   capture_output=True, timeout=5)
+                    killed_any = True
         else:
             out = subprocess.run(
-                ["pgrep", "-af", "streamlit"],
+                ["pgrep", "-f", "streamlit|app.py"],
                 capture_output=True, text=True, timeout=5,
             ).stdout
-        for line in out.splitlines():
-            if "streamlit" in line.lower() or "app.py" in line.lower():
-                return line.strip()
-    except Exception:
-        pass
-    return None
+            for pid in out.split():
+                if pid.strip().isdigit():
+                    _info(f"Killing process PID={pid} ...")
+                    subprocess.run(["kill", "-9", pid], timeout=5)
+                    killed_any = True
+    except Exception as e:
+        _warn(f"Failed to kill processes: {e}")
+
+    if killed_any:
+        # Wait a moment for file handles to be released
+        _info("Waiting for file handles to be released (2s)...")
+        time.sleep(2)
+        # Verify no more streamlit processes
+        time.sleep(1)
+    return killed_any
 
 
 # ---------------------------------------------------------------------------
@@ -326,14 +365,13 @@ def main() -> int:
     print()
     print(f"  {YELLOW}Update available: {local} → {remote_tag}{RESET}")
 
-    # 4. check if streamlit running
-    streamlit_proc = find_running_streamlit()
-    if streamlit_proc:
-        print()
-        _warn("Streamlit appears to be running.")
-        _warn("Please close the app window first, then re-run update.bat.")
-        _pause()
-        return 2
+    # 4. kill running app processes (streamlit/python) — auto so user doesn't have to
+    _info("Checking for running app processes...")
+    killed = kill_running_apps()
+    if killed:
+        _ok("Killed running streamlit/app processes.")
+    else:
+        _ok("No running app processes found.")
 
     # 5. download
     tmp_dir = Path(".update_tmp")
