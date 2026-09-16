@@ -320,11 +320,59 @@ def extract_style_features(
             log.error("[%s] 模型%s特征提取失败: %s", info.style_id, m, e)
             errors.append(f"{m}: {e}")
 
-    if not model_results:
-        # 带上底层错误（额度耗尽/鉴权失败要能传到上层触发快速失败）
-        raise RuntimeError(
-            f"[{info.style_id}] 所有模型特征提取均失败: {'; '.join(errors) or '未知错误'}"
+    # ========== VLM 级 Fallback 第 2 层 ==========
+    # 主 client（智谱 VLM）全挂 → 自动切本地 Ollama VLM 兜底
+    # 典型场景：glm-4.6v-flash 连续 3 次 1305 模型拥塞
+    if not model_results and llm_backend in ("hybrid", "zhipu"):
+        log.warning(
+            "[%s] 云端 VLM 全部失败 (%s)，自动切 Ollama VLM fallback ...",
+            info.style_id, "; ".join(errors[:2]),
         )
+        try:
+            from .llm_client import OllamaClient
+            ollama_client = OllamaClient()
+            ollama_vlm_models = ["qwen2.5vl:7b", "qwen3-vl:8b"]
+            for om in ollama_vlm_models:
+                try:
+                    log.info("[%s] 尝试 Ollama VLM: %s", info.style_id, om)
+                    res = _extract_one_model(
+                        ollama_client, info, features_cfg,
+                        model=om, brand_context=brand_context,
+                    )
+                    model_results.append(res)
+                    errors = []  # Ollama 成功了，清空之前的错误
+                    log.info("[%s] Ollama VLM %s fallback 成功！", info.style_id, om)
+                    break
+                except Exception as oe:
+                    log.warning("[%s] Ollama VLM %s 也失败: %s", info.style_id, om, oe)
+                    errors.append(f"ollama/{om}: {oe}")
+        except Exception as fe:
+            log.warning("[%s] Ollama fallback 也不可用: %s", info.style_id, fe)
+
+    if not model_results:
+        # ========== VLM 级 Fallback 第 3 层：brand 默认特征分兜底 ==========
+        # 两个 VLM 都挂 → 用 BARS anchors 中点作为默认分，让 pipeline 继续跑
+        # 精度会降（所有款都是 brand 平均水平），但不会整批废
+        log.warning(
+            "[%s] 所有 VLM 均失败 (%s)，使用 brand 默认特征分兜底",
+            info.style_id, "; ".join(errors[:2]),
+        )
+        if brand_cfg is None:
+            brand_cfg = load_brand_profile("mipo")
+        feat_defs = features_cfg["features"]
+        default_result = {}
+        for key, fd in feat_defs.items():
+            anchors = fd.get("anchors", {})
+            low_score = float(anchors.get("low", {}).get("score", 3.0))
+            high_score = float(anchors.get("high", {}).get("score", 8.0))
+            mid_score = round((low_score + high_score) / 2, 1)
+            default_result[key] = {
+                "score": mid_score,
+                "confidence": 0.3,  # 低置信度，校准层会忽略
+                "reason": f"VLM 全部失败，使用 brand 默认分（BARS anchors 中点 {mid_score}）",
+            }
+        model_results.append(default_result)
+        errors = []
 
     feat_defs = features_cfg["features"]
     result = StyleFeatures(style_id=info.style_id)

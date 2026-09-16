@@ -413,9 +413,12 @@ def retry_with_backoff(
     # 1305 是智谱模型级拥塞（全用户共享的模型过载），不是我们 R/QPS 超了
     # 这类错误也需要重试，而且要等更久（模型拥塞缓解比账户限流慢）
     extra_retryable_hints: tuple = (),
+    # 连续多少次 1305 就提前 abort（模型真的挂了，再等也没用）
+    abort_on_consecutive_1305: int = 3,
     **kwargs,
 ) -> LLMResponse:
     last_err: LLMResponse | None = None
+    consecutive_1305 = 0
     for attempt in range(1, max_retries + 1):
         try:
             result = fn(**kwargs)
@@ -428,13 +431,26 @@ def retry_with_backoff(
                 return result
 
             err_text = (result.error or "").lower()
+            is_1305 = "1305" in err_text
+            if is_1305:
+                consecutive_1305 += 1
+                # 连续 N 次 1305 → 模型确实挂了，提前 abort 让上层 fallback
+                if consecutive_1305 >= abort_on_consecutive_1305:
+                    log.warning(
+                        "[%s] 连续 %d 次 1305 模型拥塞，提前 abort（让上层 fallback）",
+                        kwargs.get("model", "?"), consecutive_1305,
+                    )
+                    return result
+            else:
+                consecutive_1305 = 0
+
             is_retryable = (
                 "429" in err_text
                 or "rate" in err_text
                 or any(h in err_text for h in _RETRYABLE_HINTS)
                 or any(h.lower() in err_text for h in extra_retryable_hints)
                 # 智谱 1305: "该模型当前访问量过大" — 模型级拥塞，必须重试
-                or "1305" in err_text
+                or is_1305
                 # 智谱 1304: 并发数超出
                 or "1304" in err_text
             )
