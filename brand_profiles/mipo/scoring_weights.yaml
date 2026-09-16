@@ -19,14 +19,15 @@ scoring_formulas:
 
   # ===== 直播带货评分器 =====
   # 关注："画面吸睛→有料可讲→记忆深刻"冲动转化
+  # 注意：F10_uniqueness（设计独特性）已移除 —— 独特性≠好卖，
+  # 极高独特性反而是P款信号（品牌展示款，小批量）
   live_channel:
     name: "直播带货分"
     description: "抖音/快手直播、达人带货、短视频种草"
     formula:
-      F05_photogenic:        0.35   # 上镜感（3秒停留）
-      F04_function_visibility: 0.35 # 功能可见性（话术钩子）
-      F10_uniqueness:        0.30   # 设计独特性（记忆点）
-    # 计算方式: score = 0.35*F05 + 0.35*F04 + 0.30*F10
+      F05_photogenic:        0.50   # 上镜感（3秒停留）—— 唯一视觉记忆点
+      F04_function_visibility: 0.50  # 功能可见性（话术钩子）—— 直播间能讲
+    # 计算方式: score = 0.50*F05 + 0.50*F04
     threshold_for_s: 7.0
     threshold_for_a: 6.5
     low_threshold:   5.0
@@ -37,15 +38,15 @@ price_value:
   description: "感知价值期望 vs 价格在品类中的百分位"
 
   # 感知价值期望（第一阶段用经验权重，第一季后从数据回归）
+  # 注意：F10_uniqueness 和 F09_brand_tone 已从销量公式移除 ——
+  # 高独特性/高调性是品牌展示款特征，不等于高销量
   perceived_value_weights:
-    F04_function_visibility: 0.35   # 功能质感
-    F08_fabric_perception:   0.30   # 面料感知
-    F10_uniqueness:          0.15   # 设计独特
-    F09_brand_tone:          0.10   # 品牌调性
-    F04_F08_interaction:     0.10   # 交互项：功能×面料联合感知
+    F04_function_visibility: 0.40   # 功能质感（父母觉得专业）
+    F08_fabric_perception:   0.40   # 面料感知（预期穿着体验）
+    F04_F08_interaction:     0.20   # 交互项：功能×面料联合感知
 
   # 计算方式:
-  #   perceived_value = 0.35*F04 + 0.30*F08 + 0.15*F10 + 0.10*F09 + 0.10*(F04*F08/10)
+  #   perceived_value = 0.40*F04 + 0.40*F08 + 0.20*(F04*F08/10)
   #   price_percentile = 该价格在品类历史订单中的百分位（0-1）
   #   value_match = (perceived_value / 10) - price_percentile    # 正值=物超所值，负值=价格偏高
   #   价格风险等级: value_match > +0.15 → 低风险（物超所值）
@@ -90,9 +91,13 @@ grading_thresholds:
     single_high_min:   7.0    # 单维度≥7.0即可算A级
 
   p_grade:
-    # 品牌调性贡献+设计独特性双高，不追求销量
-    brand_tone_min:    7.0
-    uniqueness_min:    7.5
+    # P款识别：品牌调性/独特性极高，但销量驱动特征弱
+    # 这类是故意小批量的品牌展示款，设计感强但注定卖不动
+    # 业务定义：先设计好款 → 决定给多少颜色/量 → P款通常只给 1-2 色
+    brand_tone_high:    7.5     # F09 高分（调性标杆）
+    uniqueness_high:    7.5     # F10 高分（独特设计）
+    # 关键触发条件：(高F10 或 高F09) AND (双渠道分偏低)
+    # 即：调性/独特性到位了，但实穿/搭配/功能/上镜没跟上 → P款信号
 
   risk_grade:
     # 双渠道均弱 或 反对率>30%

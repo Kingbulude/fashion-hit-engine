@@ -262,6 +262,25 @@ def assign_grade(
         if voting and voting.opposition_rate > float(risk_rule.get("opposition_max", 0.30)):
             base = "风险" if base in {"P", "A"} else "A"
 
+        # —— P 款主动识别（品牌调性展示款，故意小批量）——
+        # 业务逻辑：高 F10(独特) 或 高 F09(调性) 是品牌 P 款的信号，
+        # 但必须同时满足"销量驱动特征弱"（双渠道偏低）才成立。
+        # 如果双渠道都好（设计感转化成了吸引力），即使 F10 高也不能降 P。
+        p_rule = rules.get("p_grade", {})
+        if base != "风险" and feats:
+            uniqueness_high = float(p_rule.get("uniqueness_high", 7.5))
+            brand_tone_high = float(p_rule.get("brand_tone_high", 7.5))
+            # 从 features 字典取 F10 和 F09
+            feat_scores = {k: float(getattr(f, "score", 5.0))
+                          for k, f in getattr(feats, "features", {}).items()}
+            f10 = feat_scores.get("F10_uniqueness", 5.0)
+            f09 = feat_scores.get("F09_brand_tone", 5.0)
+            is_brand_showcase = (f10 >= uniqueness_high) or (f09 >= brand_tone_high)
+            channels_weak = (channels.natural_score < 6.5) or (channels.live_score < 6.0)
+            if is_brand_showcase and channels_weak:
+                # 把它从 S/A+/A 降到 P —— 这是品牌展示款，不追求销量
+                base = "P" if base not in {"S", "A+"} else "P"
+
     return base
 
 
