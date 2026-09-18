@@ -666,7 +666,7 @@ class OllamaClient:
 
     支持两类场景：
     - **VLM 视觉**：qwen2.5-vl:7b / qwen2.5-vl:7b-instruct（图片特征提取）
-    - **文本**：qwen2.5:7b / qwen2.5-coder:7b（人设投票，可选）
+    - **文本**：qwen2.5:14b（人设投票，14B 提升区分度和稳定性）
 
     Ollama 默认 http://localhost:11434，零 API Key、零成本、零限流。
     使用完自动释放显存（keep_alive 由 Ollama 服务控制，默认可设 10s）。
@@ -675,7 +675,7 @@ class OllamaClient:
     DEFAULT_BASE_URL = "http://localhost:11434/api"
     # 默认模型：先用 VLM 做特征提取
     DEFAULT_VLM_MODEL = "qwen2.5vl:7b"
-    DEFAULT_TEXT_MODEL = "qwen2.5:7b"
+    DEFAULT_TEXT_MODEL = "qwen2.5:14b"
 
     def __init__(
         self,
@@ -768,15 +768,15 @@ class OllamaClient:
         "glm-4v-flash": "qwen2.5vl:7b",
         "glm-4.6v-flash": "qwen2.5vl:7b",
         # 百炼 / 智谱文本 → Ollama 文本
-        "qwen-max": "qwen2.5:7b",
-        "qwen-plus": "qwen2.5:7b",
-        "qwen-turbo": "qwen2.5:7b",
-        "glm-4-flash": "qwen2.5:7b",
-        "glm-4.7-flash": "qwen2.5:7b",
+        "qwen-max": "qwen2.5:14b",
+        "qwen-plus": "qwen2.5:14b",
+        "qwen-turbo": "qwen2.5:14b",
+        "glm-4-flash": "qwen2.5:14b",
+        "glm-4.7-flash": "qwen2.5:14b",
         # DeepSeek 系列（人设投票默认用 deepseek-v3）
-        "deepseek-v3": "qwen2.5:7b",
-        "deepseek-chat": "qwen2.5:7b",
-        "deepseek-r1": "qwen2.5:7b",
+        "deepseek-v3": "qwen2.5:14b",
+        "deepseek-chat": "qwen2.5:14b",
+        "deepseek-r1": "qwen2.5:14b",
     }
 
     def _resolve_model(self, model: str, *, is_vlm: bool) -> str:
