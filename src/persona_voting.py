@@ -251,7 +251,7 @@ def _render_persona_prompt(
 姓名：{persona.get('name', pid)}（人设ID: {pid}）
 三维定位：{axes_block}
 购买关注点：{fab_focus}
-颜色偏好：{color_pref}
+主推色偏好：{color_pref}（注意：一款可能有多个颜色，你只关心主推色/主图色是否对你的胃口，其他颜色不影响你的评分——多色覆盖是优点不是风险）
 
 【决策结构】
 {chr(10).join(weight_lines)}
