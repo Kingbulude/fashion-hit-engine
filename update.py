@@ -36,7 +36,19 @@ PROTECTED_PATHS = [
     "output",
     "calibration",
     ".streamlit/secrets.toml",
+    ".uploads",          # user-uploaded images / assets
 ]
+
+# File extensions that are user-generated data — NEVER overwrite.
+# These include Excel batch exports, PDFs, image uploads, etc.
+PROTECTED_EXTENSIONS = {
+    ".xlsx", ".xls", ".xlsm", ".csv",       # spreadsheets
+    ".zip", ".7z", ".rar",                  # archives (user exports)
+    ".pdf", ".docx", ".pptx",               # user documents
+    ".png", ".jpg", ".jpeg", ".gif",        # uploaded images
+    ".ipynb",                               # Jupyter notebooks
+    ".log",                                 # log files
+}
 
 # Within brand_profiles/, protect ONLY the calibrated subdirectory contents.
 # Everything else under brand_profiles/ (config.yaml etc.) gets updated.
@@ -218,36 +230,51 @@ def download_zip(url: str, dest: Path) -> int:
 
 def _is_protected(rel_path: str) -> bool:
     """Check if a relative path should NOT be overwritten."""
-    # Top-level exact matches
     top = rel_path.split("/")[0]
     if top in PROTECTED_PATHS:
         return True
 
-    # Glob matches
+    # User data extensions — never overwrite
+    from pathlib import PurePosixPath
+    ext = PurePosixPath(rel_path).suffix.lower()
+    if ext in PROTECTED_EXTENSIONS:
+        return True
+
+    # Glob matches (brand calibrated)
     from fnmatch import fnmatchcase
     for pat in BRAND_CALIBRATED_GLOBS:
-        # fnmatch wants forward slashes on all platforms
         if fnmatchcase(rel_path.replace("\\", "/"), pat):
             return True
 
     return False
 
 
-def merge_release(extracted_root: Path, dest_root: Path) -> int:
-    """Copy files from extracted zip into dest_root, skip protected paths."""
+def merge_release(extracted_root: Path, dest_root: Path) -> tuple[int, int]:
+    """Copy files from extracted zip into dest_root, skip protected paths.
+
+    Returns (copied, skipped). PermissionError on non-code files is treated
+    as skip (user may have it open in Excel / browser). Only truly critical
+    code file locks raise RuntimeError.
+    """
     copied = 0
     skipped = 0
+    locked_skipped: list[str] = []
+
+    # Code files — locked ones (e.g. imported .py) must succeed or crash,
+    # because half-updated source would break the engine.
+    CODE_EXT = {".py", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini",
+                ".md", ".txt", ".bat", ".sh", ".ts", ".tsx", ".js",
+                ".css", ".html", ".gitkeep", ".env.example"}
 
     # Zip extracts as  fashion-hit-engine/<files>  — we want its contents
     src_dir = extracted_root
     children = list(src_dir.iterdir())
-    # If the zip has one top-level folder, drill into it
     if len(children) == 1 and children[0].is_dir():
         src_dir = children[0]
 
     for src_file in src_dir.rglob("*"):
         if src_file.is_dir():
-            continue  # we only copy files; parent dirs auto-created
+            continue
         rel = src_file.relative_to(src_dir).as_posix()
 
         if _is_protected(rel):
@@ -256,47 +283,64 @@ def merge_release(extracted_root: Path, dest_root: Path) -> int:
 
         dest_file = dest_root / rel
         dest_file.parent.mkdir(parents=True, exist_ok=True)
-        # Robust copy: on Windows, Python locks imported .py files.
-        # Strategy: rename old file → .bak (works even when locked!),
-        #   then copy new file, then delete .bak on next run.
-        # This handles self-update (update.py overwriting itself) and any
-        #   other .py that the running process has imported.
         bak_file = dest_file.with_suffix(dest_file.suffix + ".bak")
+        final_ext = dest_file.suffix.lower()
+
+        last_err: PermissionError | None = None
         for attempt in range(5):
             try:
                 if dest_file.is_file():
-                    # Rename old file out of the way (works on locked files!)
                     try:
                         dest_file.rename(bak_file)
                     except OSError:
-                        # Another attempt may have already renamed it
                         pass
                 shutil.copy2(src_file, dest_file)
                 copied += 1
+                # Best-effort bak cleanup
+                if bak_file.is_file():
+                    try:
+                        bak_file.unlink()
+                    except OSError:
+                        pass
                 break
             except PermissionError as pe:
-                # Clean up the bak if we created it but copy still failed
+                last_err = pe
                 if bak_file.is_file() and not dest_file.is_file():
                     try:
-                        bak_file.rename(dest_file)  # restore original
+                        bak_file.rename(dest_file)
                     except OSError:
                         pass
                 if attempt < 4:
                     time.sleep(0.5 * (attempt + 1))
                     continue
-                raise RuntimeError(
-                    f"Cannot overwrite {rel} after 5 retries. "
-                    f"If this was update.py itself: run 'git pull origin main' manually, "
-                    f"then re-run update.bat."
-                ) from pe
-        # Best-effort cleanup of .bak from previous run's self-update
-        if bak_file.is_file():
+                # --- retry exhausted ---
+                if final_ext in CODE_EXT:
+                    # Critical source file — cannot half-update
+                    raise RuntimeError(
+                        f"Cannot overwrite {rel} after 5 retries (file locked by another process). "
+                        f"Close Python / Streamlit / any IDE holding this file, then re-run update.bat. "
+                        f"Or manually run: copy /Y {rel} from the downloaded zip."
+                    ) from pe
+                else:
+                    # Non-code file that slipped past _is_protected — just skip it
+                    locked_skipped.append(rel)
+                    skipped += 1
+                    break
+
+        # Best-effort bak cleanup from a previous run's self-update
+        if bak_file.is_file() and not dest_file.is_file():
             try:
                 bak_file.unlink()
             except OSError:
-                pass  # will be cleaned up next time
+                pass
 
-        # also write any missing parent .gitkeep files for calibrated dirs
+    if locked_skipped:
+        _warn(f"Skipped {len(locked_skipped)} locked file(s) (open in another program):")
+        for f in locked_skipped[:5]:
+            _warn(f"  ↳ {f}")
+        if len(locked_skipped) > 5:
+            _warn(f"  ↳ ... and {len(locked_skipped) - 5} more")
+        _warn("These were non-code user data — skipping them does not affect the update.")
 
     return copied, skipped
 
