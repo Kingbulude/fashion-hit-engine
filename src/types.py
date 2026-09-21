@@ -64,6 +64,7 @@ class StyleInfo:
     sales_qty: int = 0          # 销量
     sell_through_pct: float = 0.0  # 售罄率
     season: str = ""            # 季节（春夏/秋冬）
+    year: str = ""              # 年份（2025 / 2026 / ...）
     is_main_push: bool = False  # 是否主推
     is_live_stream: bool = False  # 是否直播重点
     is_blind: bool = False  # 盲测组标记（见 src/blind_set.py）
@@ -223,6 +224,10 @@ class BrandConfig:
     # 由适配包 YAML 自行定义字符→数值（通常是 4/3/2/1）。
     # 未定义时 data_io 按正常 float/int 读取，不影响其他品牌。
     sales_label_mapping: Optional[dict[str, float]] = None
+    # 是否在 3Loop 校准阶段按年份分组独立拟合。
+    # 开启后每年数据独立跑 Loop1/Loop2/Loop3，避免跨年度风格漂移污染校准权重。
+    # 需要 Excel 里有「年份」列（YEAR_COL_ALIASES）。默认 False（不分组）。
+    calibration_group_by_year: bool = False
 
 
 # ========== 结构化解析 ==========
@@ -354,6 +359,7 @@ PRICE_COL_ALIASES = ["售价", "成交价格", "成交价", "吊牌价"]
 STYLE_ID_COL_ALIASES = ["款式编号", "款号", "style_id", "商品编号"]
 CATEGORY_COL_ALIASES = ["品类", "品类名称", "类别", "商品品类", "商品类别"]
 SEASON_COL_ALIASES = ["季节", "上架季节", "季节属性", "适用季节"]
+YEAR_COL_ALIASES = ["年份", "年度", "上架年份", "销售年份", "上架年度"]
 FAB_COL_ALIASES = ["FAB描述", "FAB", "fab", "款式描述", "版型/设计描述"]
 MAIN_PUSH_COL_ALIASES = ["是否主推", "主推", "是否主推款", "实际主推"]
 LIVE_STREAM_COL_ALIASES = ["是否直播重点", "直播重点", "直播款", "实际直播"]

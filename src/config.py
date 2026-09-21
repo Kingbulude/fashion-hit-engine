@@ -162,6 +162,8 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         sales_label_mapping = profile_yaml.get("sales_label_mapping") or None
         if sales_label_mapping:
             sales_label_mapping = {str(k).strip(): float(v) for k, v in sales_label_mapping.items()}
+        # 是否按年份分组校准（MIPO 有 2025-2026 跨年度数据时开启）
+        calibration_group_by_year = bool(profile_yaml.get("calibration_group_by_year", False))
         default_channel_split = profile_yaml.get("default_channel_split", {
             "natural": 0.50,
             "live_stream": 0.50,
@@ -225,6 +227,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         personas_list = personas_raw.get("personas", [])
         persona_axes = {}
         sales_label_mapping = None  # 兼容旧 config 目录时没有品牌适配包 YAML
+        calibration_group_by_year = False
 
     # 若 calibrated_dir 下存在校准文件，则自动覆盖
     calibrated_dir.mkdir(parents=True, exist_ok=True)
@@ -261,6 +264,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         features_biases=features_biases,
         engine_weights=engine_weights,
         sales_label_mapping=sales_label_mapping,
+        calibration_group_by_year=calibration_group_by_year,
     )
 
 

@@ -19,6 +19,7 @@ from .types import (
     SEASON_COL_ALIASES,
     SELL_THROUGH_COL_ALIASES,
     STYLE_ID_COL_ALIASES,
+    YEAR_COL_ALIASES,
     BrandConfig,
     StyleInfo,
     _truthy_excel_value,
@@ -123,6 +124,7 @@ def read_styles_excel(
     price_col: str | None = "售价",
     fab_col: str | None = "FAB描述",
     season_col: str | None = "季节",
+    year_col: str | None = "年份",
     manual_grade_col: str | None = "内审分级",
     sales_col: str | None = "累计销量",
     sell_through_col: str | None = "售罄率",
@@ -157,6 +159,7 @@ def read_styles_excel(
     price_col = _resolve_col(price_col, PRICE_COL_ALIASES)
     fab_col = _resolve_col(fab_col, FAB_COL_ALIASES)
     season_col = _resolve_col(season_col, SEASON_COL_ALIASES)
+    year_col = _resolve_col(year_col, YEAR_COL_ALIASES)
     manual_grade_col = _resolve_col(manual_grade_col, MANUAL_GRADE_COL_ALIASES)
     sales_col = _resolve_col(sales_col, SALES_QTY_COL_ALIASES)
 
@@ -286,6 +289,7 @@ def read_styles_excel(
             sales_qty=sales,
             sell_through_pct=sell_through,
             season=(_get(season_col) or "").strip(),
+            year=(str(_get(year_col)).strip() if _get(year_col) is not None else ""),
             is_main_push=_truthy_excel_value(_get(main_push_col)),
             is_live_stream=_truthy_excel_value(_get(live_col)),
         ))
