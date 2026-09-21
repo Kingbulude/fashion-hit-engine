@@ -88,6 +88,15 @@ def resolve_category(
     return "_unknown"
 
 
+def _is_parsable_as_number(s: str) -> bool:
+    """判断字符串是否能转成 float（宽松：空串/纯符号不行，"9000+" 也会失败）。"""
+    try:
+        float(s)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def _match_images(style_id: str, images_dir: Path) -> list[Path]:
     """模糊匹配图片文件：匹配 style_id 文件名前缀"""
     if not images_dir.exists():
@@ -150,6 +159,43 @@ def read_styles_excel(
     season_col = _resolve_col(season_col, SEASON_COL_ALIASES)
     manual_grade_col = _resolve_col(manual_grade_col, MANUAL_GRADE_COL_ALIASES)
     sales_col = _resolve_col(sales_col, SALES_QTY_COL_ALIASES)
+
+    # ===== 品牌特定：用 sales_label_mapping 反向发现销量列 =====
+    # 场景（MIPO）：Excel 里有 sales_qty 别名列名但值为空/不全，
+    # 真正有效的销售数据在另一列（如「本期爆旺平滑」有序标签列）。
+    # 条件：常规别名没找到 OR 找到但有效值太少（<50% 非空且可转数值）。
+    # 此时若 brand_cfg 声明了 sales_label_mapping，就扫描每列的值，
+    # 找哪列能匹配最多 mapping 的 key（"爆"/"旺"/"平"/"滞"），
+    # 找到就把该列当作 sales_col。
+    # 完全不加通用层别名、也不硬编码列名。
+    sales_col_needs_fallback = sales_col is None
+    if sales_col is not None and not sales_col_needs_fallback:
+        col_vals = df[sales_col].dropna().astype(str).str.strip()
+        numericable = sum(1 for v in col_vals if v and _is_parsable_as_number(v))
+        if len(col_vals) == 0 or numericable / max(len(col_vals), 1) < 0.5:
+            sales_col_needs_fallback = True
+            log.info("sales_col「%s」值基本为空/不可解析（%d 行仅 %d 个有效数值），触发品牌 fallback",
+                     sales_col, len(df), numericable)
+
+    if sales_col_needs_fallback and brand_cfg is not None:
+        label_map = brand_cfg.sales_label_mapping
+        if label_map:
+            key_set = {str(k).strip() for k in label_map.keys()}
+            best_col: str | None = None
+            best_hits = 0
+            for col in df.columns:
+                col_vals = df[col].astype(str).str.strip().tolist()
+                hits = sum(1 for v in col_vals if v in key_set)
+                if hits > best_hits:
+                    best_hits = hits
+                    best_col = str(col)
+            if best_col is not None and best_hits > 0:
+                sales_col = best_col
+                log.info(
+                    "sales_col 品牌发现：列「%s」的 %d 个值匹配 sales_label_mapping（mapping=%s）",
+                    sales_col, best_hits, list(key_set),
+                )
+
     sell_through_col = _resolve_col(sell_through_col, SELL_THROUGH_COL_ALIASES)
     main_push_col = _resolve_col(main_push_col, MAIN_PUSH_COL_ALIASES)
     live_col = _resolve_col(live_col, LIVE_STREAM_COL_ALIASES)
