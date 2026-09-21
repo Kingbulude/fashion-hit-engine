@@ -218,6 +218,11 @@ class BrandConfig:
     personas_weights: Optional[dict[str, float]] = None
     features_biases: Optional[dict[str, float]] = None
     engine_weights: Optional[dict[str, float]] = None
+    # 品牌特定的「销售标签 → 数值」映射。
+    # 当 Excel 里的销量列不是连续数值（如 MIPO 用"爆/旺/平/滞"有序标签）时，
+    # 由适配包 YAML 自行定义字符→数值（通常是 4/3/2/1）。
+    # 未定义时 data_io 按正常 float/int 读取，不影响其他品牌。
+    sales_label_mapping: Optional[dict[str, float]] = None
 
 
 # ========== 结构化解析 ==========

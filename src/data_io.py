@@ -191,7 +191,26 @@ def read_styles_excel(
             grade = ""
 
         price = safe_float(_get(price_col), 0.0)
-        sales = int(safe_float(_get(sales_col), 0.0))
+
+        # ===== 销量读取：支持品牌自定义的销售标签 → 数值映射 =====
+        # 当 Excel 里销量列是有序字符标签（如 MIPO 的"爆/旺/平/滞"）时，
+        # brand_cfg.sales_label_mapping 定义了每个标签对应的数值（通常是 4/3/2/1）。
+        # 未映射时按正常 float/int 读取，不影响其他品牌。
+        raw_sales = _get(sales_col)
+        sales_label_map = (
+            brand_cfg.sales_label_mapping
+            if brand_cfg is not None
+            else None
+        )
+        if sales_label_map and isinstance(raw_sales, str):
+            label_key = raw_sales.strip()
+            if label_key in sales_label_map:
+                sales = int(sales_label_map[label_key])
+            else:
+                # 映射表里找不到 → 兜底：尝试 float 解析；不行就 0
+                sales = int(safe_float(raw_sales, 0.0))
+        else:
+            sales = int(safe_float(raw_sales, 0.0))
         st = _get(sell_through_col)
         if isinstance(st, str) and st.endswith("%"):
             sell_through = safe_float(st.rstrip("%"), 0.0) / 100.0

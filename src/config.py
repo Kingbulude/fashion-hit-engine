@@ -157,6 +157,11 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
             "channel_scoring": 0.30,
             "price_value": 0.35,
         })
+        # 品牌特定的销售标签→数值映射（如 MIPO 的 爆/旺/平/滞 → 4/3/2/1）。
+        # 未声明时为 None，data_io 按通用数值读取，不影响其他品牌。
+        sales_label_mapping = profile_yaml.get("sales_label_mapping") or None
+        if sales_label_mapping:
+            sales_label_mapping = {str(k).strip(): float(v) for k, v in sales_label_mapping.items()}
         default_channel_split = profile_yaml.get("default_channel_split", {
             "natural": 0.50,
             "live_stream": 0.50,
@@ -219,6 +224,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
 
         personas_list = personas_raw.get("personas", [])
         persona_axes = {}
+        sales_label_mapping = None  # 兼容旧 config 目录时没有品牌适配包 YAML
 
     # 若 calibrated_dir 下存在校准文件，则自动覆盖
     calibrated_dir.mkdir(parents=True, exist_ok=True)
@@ -254,6 +260,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         personas_weights=personas_weights,
         features_biases=features_biases,
         engine_weights=engine_weights,
+        sales_label_mapping=sales_label_mapping,
     )
 
 
