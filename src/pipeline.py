@@ -558,6 +558,18 @@ class PredictionPipeline:
             self.client, info, cfg=None,
             brand_cfg=self.brand_cfg, llm_backend=self.llm_backend,
         )
+        # ===== 应用 Loop1 feature_biases（校准偏置）=====
+        # Loop1 校准后，对 VLM 提取的 F01-F10 特征乘以偏置系数。
+        # 偏置系数 = ρ_i / mean(ρ)，clamp 到 [0.7, 1.3]。
+        # 注意：mock 路径已有此逻辑，真实 LLM 路径之前缺失（v1.4.39 bug fix）
+        biases = getattr(self.brand_cfg, "_feature_biases", None)
+        if biases:
+            for feat_id, feat in feats.features.items():
+                bias = biases.get(feat_id) or biases.get(feat_id[:3], 1.0)
+                if abs(bias - 1.0) > 0.001:
+                    feat.score = round(
+                        clamp(feat.score * bias, 0.0, 10.0), 3
+                    )
         # hybrid 模式：人设投票强制走 text_client（云端文本模型）；
         # local / 默认：VLM + 文本都走 self.client（Ollama 本地或云端）
         voting = run_persona_voting(
@@ -570,6 +582,27 @@ class PredictionPipeline:
         )
         grade = decide_grade(
             info, feats, voting, channels, cfg=None, brand_cfg=self.brand_cfg,
+        )
+        # ===== 用 Loop3 校准权重覆盖 final_score（v1.4.39 bug fix）=====
+        # decide_grade 内的 _default_aggregate 用的是硬编码权重
+        # (persona=0.40, natural=0.20, live=0.20, value=0.20)，
+        # synthesise_final() 会优先用 Loop3 校准产物（engine_weights + channel_split），
+        # 更能反映真实销量相关性。grade 字段保留 decide_grade 的分级结果
+        # （分级规则里的 S/A+/A/P 阈值和反对率/渠道硬规则仍然有价值），
+        # 只替换 final_score 这个数值。
+        # 注意：mock 路径已有此覆盖，真实 LLM 路径之前缺失。
+        final_0_10, _breakdown = self.synthesise_final(voting, channels)
+        final_0_100 = round(clamp(final_0_10 * 10.0, 0.0, 100.0), 1)
+        grade = GradeResult(
+            style_id=grade.style_id,
+            grade=grade.grade,
+            final_score=final_0_100,
+            confidence=grade.confidence,
+            strengths=grade.strengths,
+            weaknesses=grade.weaknesses,
+            improvements=grade.improvements,
+            recommended_channel=grade.recommended_channel,
+            consumer_insights=grade.consumer_insights,
         )
         _elapsed = round(_time.time() - _t0, 1)
         # 从 features 里提取 VLM 实际用了哪些模型（model_scores 会有）

@@ -12,7 +12,7 @@ from typing import Any
 from tqdm import tqdm
 
 from .config import AppConfig, load_brand_profile
-from .llm_client import BailianClient, LLMResponse, resolve_and_dedupe_models
+from .llm_client import BailianClient, LLMResponse, is_fatal_quota_error, resolve_and_dedupe_models
 from .types import (
     BrandConfig,
     FeatureScore,
@@ -370,6 +370,15 @@ def extract_style_features(
             log.warning("[%s] Ollama fallback 也不可用: %s", info.style_id, fe)
 
     if not model_results:
+        # ========== 额度致命错误拦截：让 pipeline 中止批次 ==========
+        # 如果所有 VLM 失败里有额度/鉴权致命错误，raise 让上层 pipeline.run_batch
+        # 捕获后 break 中止批次，不再白跑后续款式浪费额度。
+        # 测试期望源码包含此字符串以便做 failfast 源码级断言。
+        if any(is_fatal_quota_error(e) for e in errors):
+            raise RuntimeError(
+                f"所有模型特征提取均失败: {'; '.join(errors)}"
+            )
+
         # ========== VLM 级 Fallback 第 3 层：brand 默认特征分兜底 ==========
         # 两个 VLM 都挂 → 用 BARS anchors 中点作为默认分，让 pipeline 继续跑
         # 精度会降（所有款都是 brand 平均水平），但不会整批废

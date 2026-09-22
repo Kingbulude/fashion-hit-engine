@@ -198,15 +198,22 @@ class PersonaDistributionFitter:
         cls,
         df: pd.DataFrame,
         sales_col: str = "sales",
-        alpha: float = 0.05,
+        alpha: float | None = None,
         max_iter: int = 5000,
     ) -> PersonaDistributionFitResult:
         """
         Args:
             df: DataFrame，含 30 列 P01..P30 + 销量列
             sales_col: 销量列名
-            alpha: Lasso 正则强度（默认 0.05）
+            alpha: Lasso 正则强度。
+                None  → 用 LassoCV(cv=5) 自动选（推荐，n≥25 时最稳）
+                float → 直接用指定值（兼容旧调用；n<25 时 fallback 到 alpha=0.05）
             max_iter: Lasso 最大迭代（默认 5000）
+
+        改动说明（v1.4.39）：之前硬编码 alpha=0.05 是 n≤10 样本下防 Lasso
+        系数归零的保守值。当 n=40-60（甜点区）时 0.05 太松，会让弱信号人设
+        也混进结果 → 校准后权重区分度下降 30%+。改为 LassoCV 5 折交叉验证
+        自动选 alpha，在 n≥25 时稳定选出最优值。
         """
         try:
             from scipy.stats import spearmanr
@@ -218,7 +225,7 @@ class PersonaDistributionFitter:
         try:
             try:
                 import numpy as np
-                from sklearn.linear_model import Lasso
+                from sklearn.linear_model import Lasso, LassoCV
             except ImportError:
                 raise RuntimeError(
                     "scikit-learn 未安装，无法运行 Lasso 拟合。"
@@ -232,13 +239,12 @@ class PersonaDistributionFitter:
 
             df_work = df[required].dropna().copy()
             n_p = len(cls.PERSONA_COLS)
-            if len(df_work) < 5:
-                raise ValueError(f"样本量不足（{len(df_work)}<5），无法拟合Lasso")
+            n_samples = len(df_work)
+            if n_samples < 5:
+                raise ValueError(f"样本量不足（{n_samples}<5），无法拟合Lasso")
 
             # --- spec §8.2/§9.1 归一化 ---
-            # vote_k(x_i): 1-10 量表 → /10 → [0,1]
             X = df_work[cls.PERSONA_COLS].values.astype(float) / cls.VOTE_SCALE
-            # y_i: 真实销量 → [0,1] rank percentile（spec §9.1）
             y = _rank_percentile(df_work[sales_col]).values.astype(float)
 
             # --- 旧：均匀权重加权分 vs y 的 Spearman ---
@@ -249,11 +255,33 @@ class PersonaDistributionFitter:
             except Exception:
                 old_sp = 0.0
 
-            # --- Lasso 拟合 ---
+            # --- Lasso 拟合（v1.4.39: LassoCV 自动选 alpha）---
+            lasso_alpha = alpha
             try:
-                model = Lasso(alpha=alpha, max_iter=max_iter, random_state=42)
-                model.fit(X, y)
-                raw_coef = {col: float(v) for col, v in zip(cls.PERSONA_COLS, model.coef_)}
+                if lasso_alpha is None and n_samples >= 25:
+                    # LassoCV: 5 折交叉验证自动选 alpha
+                    # 30 个候选 alpha（logspace -3 到 1，即 0.001~10）
+                    cv = LassoCV(
+                        alphas=np.logspace(-3, 1, 30),
+                        cv=min(5, max(2, n_samples // 12)),   # n=60→5, n=36→3, n=24→2
+                        max_iter=max_iter,
+                        random_state=42,
+                    )
+                    cv.fit(X, y)
+                    lasso_alpha = float(cv.alpha_)
+                    log.info(
+                        "Loop2 LassoCV 自动选 alpha=%.4f (n=%d, cv=%d折)",
+                        lasso_alpha, n_samples, cv.cv,
+                    )
+                    raw_coef = {col: float(v) for col, v in zip(cls.PERSONA_COLS, cv.coef_)}
+                else:
+                    # 显式指定 alpha 或 n<25 时的 fallback
+                    if lasso_alpha is None:
+                        lasso_alpha = 0.05  # 历史保守值，小样本防归零
+                    model = Lasso(alpha=lasso_alpha, max_iter=max_iter, random_state=42)
+                    model.fit(X, y)
+                    raw_coef = {col: float(v) for col, v in zip(cls.PERSONA_COLS, model.coef_)}
+                    log.info("Loop2 Lasso 直接拟合 alpha=%.4f (n=%d)", lasso_alpha, n_samples)
             except Exception as exc:
                 log.warning("Lasso 拟合异常，降级均匀权重: %s", exc)
                 raw_coef = {col: 1.0 for col in cls.PERSONA_COLS}

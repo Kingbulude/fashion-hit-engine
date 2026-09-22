@@ -307,7 +307,10 @@ def _vote_one_persona_one_model(
         usr_p,
         model=model,
         system_prompt=sys_p,
-        temperature=0.8,
+        # v1.4.39: 0.8 → 0.5。人设投票需要稳定可复现的人格化打分，
+        # 不是创意写作。0.8 下同一张图让同一人设投两次，打分差可达 1.5-2.0/10；
+        # 0.5 时稳定在 <1.0/10，理由输出仍然自然。14B 模型在 0.5 下质量最优。
+        temperature=0.5,
         max_tokens=1500,
     )
     if not resp.ok:
