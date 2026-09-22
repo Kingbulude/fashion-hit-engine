@@ -61,56 +61,642 @@ def _count_calibration_rounds(brand_cfg: BrandConfig) -> int:
 PAGES = ["📤 上传批次", "📋 批次总表", "🔍 单款详情报告", "📊 回测校准"]
 st.set_page_config(page_title="fashion-hit-engine · 服装爆款预测通用引擎", layout="wide")
 
-# --- 侧边栏顶部：品牌选择 ---
-st.sidebar.title("🏷️ 选择品牌")
+# ==================== 全局莫兰迪主题 CSS ====================
+st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fraunces:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+
+<style>
+/* ---------- Base ---------- */
+:root {
+  --bg: #f4f2ed;
+  --surface: #ffffff;
+  --surface-soft: #f8f6f1;
+  --border: #e6e3dc;
+  --border-light: #edeae4;
+  --text: #2e2b27;
+  --text-muted: #8a857d;
+  --text-subtle: #b3aea3;
+  --accent: #a8b5c4;       /* 雾霾蓝 */
+  --accent-deep: #8699ab;
+  --accent-soft: #cdd5de;
+  --sage: #b8c5b1;         /* 鼠尾草绿 */
+  --sage-deep: #8ea084;
+  --oat: #d4b896;          /* 燕麦驼 */
+  --oat-deep: #b89772;
+  --rose: #c9a0a0;         /* 干玫瑰粉 */
+  --rose-deep: #a87a7a;
+  --purple: #b5a9c4;       /* 烟紫 */
+  --gray: #9a9489;         /* 高级灰（P级/中性） */
+  --gray-deep: #746f65;
+  --radius: 12px;
+  --shadow-sm: 0 1px 2px rgba(46,43,39,0.04);
+  --shadow-md: 0 4px 16px rgba(46,43,39,0.06);
+}
+
+html, body, [class*="css"] {
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif !important;
+  color: var(--text) !important;
+  background: var(--bg) !important;
+  font-feature-settings: "tnum";
+}
+
+/* ---------- Streamlit container overrides ---------- */
+.stApp { background: var(--bg); }
+.block-container { padding-top: 2.5rem; padding-bottom: 3rem; max-width: 1280px; }
+
+/* ---------- Sidebar ---------- */
+[data-testid="stSidebar"] {
+  background: var(--surface) !important;
+  border-right: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] > div:first-child { padding-top: 2rem; }
+[data-testid="stSidebar"] .block-container { padding: 1.25rem 1.25rem 2rem; }
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+  font-family: 'Inter', sans-serif !important;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- Typography ---------- */
+h1 {
+  font-family: 'Fraunces', 'Inter', 'PingFang SC', serif !important;
+  font-weight: 600 !important;
+  font-size: 1.65rem !important;
+  letter-spacing: -0.015em !important;
+  color: var(--text) !important;
+  padding-bottom: 0.25rem !important;
+  border-bottom: none !important;
+}
+h2 {
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 600 !important;
+  font-size: 1.1rem !important;
+  letter-spacing: -0.01em !important;
+  color: var(--text) !important;
+  margin-top: 1.5rem !important;
+  margin-bottom: 0.75rem !important;
+}
+h3 {
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 500 !important;
+  font-size: 0.95rem !important;
+  color: var(--text-muted) !important;
+  letter-spacing: 0.02em !important;
+  text-transform: uppercase !important;
+}
+.stMarkdown p { line-height: 1.65; }
+.stMarkdown h4, .stMarkdown h5, .stMarkdown h6 { color: var(--text-muted) !important; font-weight: 500 !important; }
+
+/* ---------- Cards ---------- */
+div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stContainer"]) {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+div[data-testid="stContainer"] {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 1.25rem 1.5rem !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* ---------- Buttons ---------- */
+.stButton > button, [data-testid="stButton"] > button {
+  border-radius: 10px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  font-weight: 500 !important;
+  font-size: 0.875rem !important;
+  padding: 0.5rem 1.25rem !important;
+  transition: all 0.18s ease !important;
+  box-shadow: none !important;
+}
+.stButton > button:hover, [data-testid="stButton"] > button:hover {
+  border-color: var(--accent) !important;
+  background: var(--surface-soft) !important;
+  color: var(--accent-deep) !important;
+  transform: translateY(-1px);
+}
+.stButton > button[data-baseweb="button"][kind="primary"],
+button[kind="primary"] {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+.stButton > button[data-baseweb="button"][kind="primary"]:hover {
+  background: var(--accent-deep) !important;
+  border-color: var(--accent-deep) !important;
+  color: #fff !important;
+}
+
+/* ---------- Inputs ---------- */
+input, select, textarea {
+  border-radius: 10px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(168,181,196,0.15) !important;
+}
+div[data-baseweb="base-input"], div[data-baseweb="select"] {
+  border-radius: 10px !important;
+}
+
+/* ---------- Selectbox / Multiselect ---------- */
+[data-baseweb="select"] > div {
+  border-radius: 10px !important;
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
+}
+[data-baseweb="select"]:hover > div {
+  border-color: var(--accent) !important;
+}
+ul[data-baseweb="menu"] {
+  border-radius: 10px !important;
+  border-color: var(--border) !important;
+}
+li[data-baseweb="option"][aria-selected="true"] {
+  background: var(--surface-soft) !important;
+  color: var(--accent-deep) !important;
+}
+
+/* ---------- Metric ---------- */
+[data-testid="stMetricValue"] {
+  font-family: 'Fraunces', serif !important;
+  font-weight: 600 !important;
+  color: var(--text) !important;
+}
+[data-testid="stMetricLabel"] {
+  color: var(--text-muted) !important;
+  font-weight: 500 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+[data-testid="stMetricDelta"] { color: var(--sage-deep) !important; }
+
+/* ---------- DataFrame ---------- */
+[data-testid="stDataFrame"] table {
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--border) !important;
+  overflow: hidden !important;
+}
+[data-testid="stDataFrame"] th {
+  background: var(--surface-soft) !important;
+  color: var(--text-muted) !important;
+  font-weight: 500 !important;
+  border-bottom: 1px solid var(--border) !important;
+  text-transform: none !important;
+}
+[data-testid="stDataFrame"] td {
+  border-bottom: 1px solid var(--border-light) !important;
+}
+[data-testid="stDataFrame"] tr:hover td {
+  background: var(--surface-soft) !important;
+}
+
+/* ---------- Expander ---------- */
+[data-testid="stExpander"] {
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  background: var(--surface) !important;
+  margin-bottom: 0.75rem;
+}
+[data-testid="stExpander"] summary {
+  padding: 0.75rem 1rem !important;
+  font-weight: 500 !important;
+  color: var(--text) !important;
+}
+[data-testid="stExpander"] summary:hover {
+  color: var(--accent-deep) !important;
+}
+[data-testid="stExpander"] details[open] summary {
+  border-bottom: 1px solid var(--border) !important;
+}
+[data-testid="stExpander"] > div > div { padding: 1rem !important; }
+
+/* ---------- Tabs ---------- */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {
+  gap: 0 !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab"] {
+  border-radius: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  padding: 0.6rem 1.25rem !important;
+  color: var(--text-muted) !important;
+  font-weight: 500 !important;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+  color: var(--text) !important;
+  border-bottom: 2px solid var(--accent) !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab"]:hover {
+  color: var(--accent-deep) !important;
+}
+
+/* ---------- Info / Warning / Error boxes ---------- */
+.stAlert, [data-baseweb="notification"] {
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--border) !important;
+  padding: 0.85rem 1rem !important;
+}
+.element-container .stAlert { border-left: 3px solid var(--accent) !important; }
+.stWarning { border-left-color: var(--oat) !important; }
+.stError { border-left-color: var(--rose) !important; }
+.stSuccess { border-left-color: var(--sage) !important; }
+
+/* ---------- Divider ---------- */
+hr, [data-testid="stDivider"] {
+  border-color: var(--border) !important;
+  margin: 1.5rem 0 !important;
+}
+
+/* ---------- Progress ---------- */
+div[data-baseweb="progress-bar"] {
+  background: var(--border-light) !important;
+  border-radius: 10px !important;
+  height: 8px !important;
+}
+div[data-baseweb="progress-bar"] > div {
+  background: var(--accent) !important;
+  border-radius: 10px !important;
+}
+
+/* ---------- File uploader ---------- */
+[data-testid="stFileUploader"] {
+  border: 2px dashed var(--border) !important;
+  border-radius: var(--radius) !important;
+  background: var(--surface-soft) !important;
+}
+[data-testid="stFileUploader"] section { background: transparent !important; }
+
+/* ---------- Radio / Checkbox ---------- */
+[data-baseweb="radio"] div[role="radiogroup"], [data-baseweb="checkbox"] {
+  gap: 0.5rem !important;
+}
+[data-baseweb="radio"] label, [data-baseweb="checkbox"] label {
+  color: var(--text-muted) !important;
+  font-weight: 500 !important;
+  padding: 0.35rem 0.85rem !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  margin-right: 0.25rem !important;
+}
+[data-baseweb="radio"] label:hover, [data-baseweb="checkbox"] label:hover {
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+}
+[data-baseweb="radio"] label[data-checked="true"], [data-baseweb="checkbox"] label[data-checked="true"] {
+  background: var(--surface-soft) !important;
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+}
+
+/* ---------- Slider ---------- */
+div[data-baseweb="slider"] > div > div:first-child {
+  background: var(--accent) !important;
+}
+
+/* ---------- Breadcrumb ---------- */
+.breadcrumb {
+  font-family: 'Fraunces', serif;
+  font-size: 0.8rem;
+  color: var(--text-subtle);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+.breadcrumb .sep { color: var(--border); margin: 0 0.4rem; }
+
+/* ---------- Hero Banner ---------- */
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.75rem 0 1.5rem 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+}
+.hero h1 {
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 2rem !important;
+  letter-spacing: -0.02em !important;
+}
+.hero-sub {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-top: 0.25rem;
+  font-weight: 400;
+}
+
+/* ---------- Stepper ---------- */
+.stepper {
+  display: flex;
+  gap: 1.5rem;
+  margin: 1.25rem 0 0.5rem;
+}
+.stepper-step {
+  flex: 1;
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.stepper-num {
+  font-family: 'Fraunces', serif;
+  font-size: 1.1rem;
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+.stepper-label {
+  font-weight: 500;
+  margin-top: 0.15rem;
+  font-size: 0.85rem;
+}
+.stepper-active { border-color: var(--accent); background: var(--surface-soft); }
+.stepper-done { border-color: var(--sage); }
+
+/* ---------- Grade Badges ---------- */
+.badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+.badge-s { background: #f7e5e5; color: var(--rose-deep); }
+.badge-aplus { background: #f2ecd8; color: var(--oat-deep); }
+.badge-a { background: #e8ede3; color: var(--sage-deep); }
+.badge-p { background: #eceae6; color: var(--text-muted); }
+.badge-info { background: #eef0f3; color: var(--accent-deep); }
+
+/* ---------- Score Ring ---------- */
+.score-ring {
+  font-family: 'Fraunces', serif;
+  font-size: 3.25rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.score-ring-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 0.35rem;
+}
+
+/* ---------- Bar feature rows ---------- */
+.feature-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.feature-name {
+  width: 180px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.feature-bar-wrap {
+  flex: 1;
+  height: 8px;
+  background: var(--border-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.feature-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+.feature-score {
+  width: 52px;
+  text-align: right;
+  font-family: 'Fraunces', serif;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+/* ---------- Sidebar header ---------- */
+.sb-brand {
+  padding: 1rem 0.25rem 0.75rem;
+}
+.sb-brand-name {
+  font-family: 'Fraunces', serif;
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.sb-brand-meta {
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-top: 0.15rem;
+}
+.sb-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  margin-top: 0.4rem;
+}
+.sb-badge.active {
+  background: var(--surface-soft);
+  color: var(--accent-deep);
+  border-color: var(--accent);
+}
+
+.sb-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: 2px;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+.sb-nav-item:hover {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+/* ---------- Gallery ---------- */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+.gallery img {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  width: 100%;
+  aspect-ratio: 3/4;
+  object-fit: cover;
+  transition: transform 0.2s ease;
+}
+.gallery img:hover { transform: scale(1.02); }
+
+/* ---------- Stat Card Row ---------- */
+.stat-row {
+  display: flex;
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+.stat-card {
+  flex: 1;
+  padding: 1.25rem 1.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.stat-value {
+  font-family: 'Fraunces', serif;
+  font-size: 1.85rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.stat-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  margin-top: 0.1rem;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* ---------- Filter Pills ---------- */
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.75rem 0;
+}
+.pill-group .stMultiSelect { min-width: 200px; }
+
+/* ---------- Spearman Gauge ---------- */
+.gauge-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1rem;
+}
+.gauge-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-bottom: 0.3rem;
+}
+.gauge-value {
+  font-family: 'Fraunces', serif;
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+.gauge-delta {
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-top: 0.2rem;
+}
+.gauge-delta.pos { color: var(--sage-deep); }
+.gauge-delta.neg { color: var(--rose-deep); }
+
+/* ---------- Hide Streamlit chrome ---------- */
+#MainMenu, header { visibility: hidden; }
+footer { visibility: hidden; }
+[data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; }
+[data-testid="stToolbar"] { visibility: hidden; }
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
+</style>
+""", unsafe_allow_html=True)
+
+# --- 侧边栏顶部：莫兰迪品牌 Header ---
 available_brands = list_available_brands()
 if not available_brands:
-    st.sidebar.error("❌ 没有可用的品牌适配包，请检查 brand_profiles/ 目录")
     available_brands = ["mipo"]
 if "brand_id" not in st.session_state:
     st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
-
-brand_id = st.sidebar.selectbox(
-    "使用哪个品牌的适配包？",
-    options=available_brands,
-    index=available_brands.index(st.session_state.brand_id)
-    if st.session_state.brand_id in available_brands else 0,
-    help="每个品牌独立维护：30人设+BARS量表+品类价格带+S/A/P阈值+3Loop校准产物"
-)
-if brand_id != st.session_state.brand_id:
-    st.session_state.brand_id = brand_id
-    # 切换品牌 → 清空批次缓存（否则旧品牌的preds结构在新品牌下解释错误）
-    for k in ("preds", "df_input", "style_to_images", "progress_info",
-              "style_infos", "image_paths_map", "batch_name",
-              "selected_style_id"):
-        st.session_state.pop(k, None)
-    st.rerun()
 
 # 加载 BrandConfig（贯穿整个会话共享）
 @st.cache_data(show_spinner=False, ttl=3600)
 def _cached_load_brand(_bid: str) -> BrandConfig:
     return load_brand_profile(_bid)
 
-brand_cfg: BrandConfig = _cached_load_brand(brand_id)
+brand_cfg: BrandConfig = _cached_load_brand(st.session_state.brand_id)
 n_calibration: int = _count_calibration_rounds(brand_cfg)
 
-# --- 侧边栏：品牌信息摘要 ---
-with st.sidebar.expander(f"📌 {brand_cfg.brand_name}", expanded=True):
-    st.write(f"**品牌ID：** `{brand_cfg.brand_id}`")
-    st.write(f"**决策结构：** {brand_cfg.decision_structure.type}")
-    if brand_cfg.decision_structure.type == "multi_layer":
-        layer_names = "、".join(l.name for l in brand_cfg.decision_structure.layers)
-        st.write(f"**层数：** {len(brand_cfg.decision_structure.layers)} 层（{layer_names}）")
-    st.write(f"**品类数：** {len(brand_cfg.category_registry.get('categories', []))}")
-    st.write(f"**人设数：** {len(brand_cfg.personas)} 个身份三轴线")
-    st.write(f"**校准轮次：** {n_calibration or '0（冷启动）'}")
-    try:
-        from src.history_store import HistoryStore
-        h = HistoryStore()
-        summary = h.get_summary(brand_cfg.brand_id)
-        st.write(f"**历史批次：** {summary['batches']} 批 / {summary['styles']} 款")
-    except Exception:
-        pass
+# 取历史数据
+_hist_batches = 0
+_hist_styles = 0
+try:
+    from src.history_store import HistoryStore
+    h = HistoryStore()
+    summary = h.get_summary(brand_cfg.brand_id)
+    _hist_batches = summary.get("batches", 0)
+    _hist_styles = summary.get("styles", 0)
+except Exception:
+    pass
+
+# 用 markdown 渲染 Fraunces 品牌 header
+st.sidebar.markdown(f"""
+<div class="sb-brand">
+  <div class="sb-brand-name">{brand_cfg.brand_name}</div>
+  <div class="sb-brand-meta">{brand_cfg.brand_id} · Decision Engine</div>
+  <div class="sb-badge">校准 {n_calibration} 轮 · {_hist_batches} 批 / {_hist_styles} 款</div>
+</div>
+""", unsafe_allow_html=True)
+
+# 品牌切换 selectbox（保持功能）
+brand_id = st.sidebar.selectbox(
+    "品牌",
+    options=available_brands,
+    index=available_brands.index(st.session_state.brand_id)
+    if st.session_state.brand_id in available_brands else 0,
+    label_visibility="collapsed",
+    help="每个品牌独立维护：30人设+BARS量表+品类价格带+S/A/P阈值+3Loop校准产物"
+)
+if brand_id != st.session_state.brand_id:
+    st.session_state.brand_id = brand_id
+    for k in ("preds", "df_input", "style_to_images", "progress_info",
+              "style_infos", "image_paths_map", "batch_name",
+              "selected_style_id"):
+        st.session_state.pop(k, None)
+    st.rerun()
 
 st.sidebar.divider()
 
@@ -302,21 +888,34 @@ if _llm_backend != "mock":
             except Exception as _t_e:
                 st.sidebar.error(f"❌ 测试异常：{_t_e}")
 
-st.sidebar.title("🧭 导航")
-page = st.sidebar.radio("", PAGES, index=0)
+st.sidebar.divider()
 
-# 从 VERSION 文件动态读版本号 —— 用户一眼确认自己跑的是哪个版本
+# --- 莫兰迪风格导航（带选中高亮） ---
+st.sidebar.markdown(
+    '<div style="font-size:0.72rem;letter-spacing:0.12em;text-transform:uppercase;'
+    'color:#b0ab9f;margin-bottom:0.4rem;padding-left:0.2rem;">导航</div>',
+    unsafe_allow_html=True,
+)
+page = st.sidebar.radio(
+    " ",
+    PAGES,
+    index=0,
+    label_visibility="collapsed",
+)
+
+# 从 VERSION 文件动态读版本号
 _VERSION_STR = "unknown"
 try:
     _VERSION_STR = (ROOT / "VERSION").read_text().strip()
 except Exception:
     pass
-st.sidebar.caption(
-    f"**当前版本：{_VERSION_STR}**  "
-    f"[⬆️ 更新](https://github.com/Kingbulude/fashion-hit-engine/releases/latest)\n"
-    "· 通用CORE引擎 10特征30人设\n"
-    "· VLM特征提取 + 人设投票\n"
-    "· 3Loop 越用越准"
+st.sidebar.markdown(
+    f'<div style="font-size:0.7rem;color:#b0ab9f;margin-top:1.25rem;line-height:1.4;">'
+    f'v {_VERSION_STR} · '
+    f'<a href="https://github.com/Kingbulude/fashion-hit-engine/releases/latest" '
+    f'style="color:#8a857e;text-decoration:none;border-bottom:1px solid #e8e5df;">更新</a>'
+    f'</div>',
+    unsafe_allow_html=True,
 )
 
 # ========== 兼容：保持 cfg 变量接口（AppConfig 薄兼容）==========
@@ -337,14 +936,14 @@ if "style_to_images" not in st.session_state:  # 款号 -> list[图片路径]
 
 # ========== 面包屑组件（公共） ==========
 def render_breadcrumb(*, suffix: str | None = None) -> None:
-    parts = [f"🏷️ {brand_cfg.brand_name}"]
+    parts = [f"{brand_cfg.brand_name}"]
     if st.session_state.batch_name:
-        parts.append(f"📦 {st.session_state.batch_name}")
+        parts.append(f"{st.session_state.batch_name}")
     if suffix:
         parts.append(suffix)
     st.markdown(
-        "<div style='font-size:13px;color:#6b7280;margin-bottom:8px;'>"
-        + "  ›  ".join(parts)
+        "<div class='breadcrumb'>"
+        + " <span class='sep'>·</span> ".join(parts)
         + "</div>",
         unsafe_allow_html=True,
     )
@@ -486,23 +1085,57 @@ def unzip_to_temp_dir(
 # 页面 1：📤 上传批次
 # ============================================================
 def render_page_upload():
-    render_breadcrumb(suffix="📤 上传批次")
-    st.title("📤 上传评估批次")
+    render_breadcrumb(suffix="上传批次")
 
-    st.markdown("#### ① 填批次名")
+    # Hero banner
+    st.markdown(f"""
+<div class="hero">
+  <div>
+    <h1>上传评估批次</h1>
+    <div class="hero-sub">{brand_cfg.brand_name} · 准备一批新款，让 VLM + 30 人设给出预测</div>
+  </div>
+  <div style="text-align:right;">
+    <div style="font-family:'Fraunces',serif;font-size:1.5rem;font-weight:600;color:#8699ab;">{n_calibration or 0}</div>
+    <div style="font-size:0.78rem;color:#8a857e;">已校准轮次</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    # Stepper
+    st.markdown("""
+<div class="stepper">
+  <div class="stepper-step stepper-active">
+    <div class="stepper-num">01</div>
+    <div class="stepper-label">批次信息</div>
+  </div>
+  <div class="stepper-step">
+    <div class="stepper-num">02</div>
+    <div class="stepper-label">款式 Excel</div>
+  </div>
+  <div class="stepper-step">
+    <div class="stepper-num">03</div>
+    <div class="stepper-label">图片包</div>
+  </div>
+  <div class="stepper-step">
+    <div class="stepper-num">04</div>
+    <div class="stepper-label">开始评估</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
     batch_name = st.text_input(
         "批次名（必填，方便后续区分）", value=st.session_state.batch_name or "2026春第一批",
         help="建议格式：年份+季节+第N批，如2026春第一批"
     )
 
-    st.markdown("#### ② 上传款式信息表 Excel / CSV")
+    st.markdown("**款式信息表 Excel / CSV**")
     st.caption(
         "列参考：款式编号、面料成分、版型/设计描述、售价 必填；"
         "建议加一列「品类」；可最后追加「真实销售结果」列供后续回测。"
     )
     xlsx_file = st.file_uploader("拖放或选择 .xlsx / .csv", type=["xlsx", "csv"])
 
-    st.markdown("#### ③ 上传图片包（两种方式二选一）")
+    st.markdown("**图片包（两种方式二选一）**")
     mode = st.radio(
         "图片来源",
         ["📁 本机路径（推荐：直接填文件夹绝对路径）", "📦 上传 ZIP 压缩包"],
@@ -756,9 +1389,16 @@ def render_page_upload():
 # 页面 2：📋 批次总表
 # ============================================================
 def render_page_summary():
-    render_breadcrumb(suffix="📋 批次总表")
-    st.title(f"📋 批次总表"
-             f" {(' · ' + st.session_state.batch_name) if st.session_state.batch_name else ''}")
+    render_breadcrumb(suffix="批次总表")
+    _batch = st.session_state.batch_name or ""
+    st.markdown(f"""
+<div class="hero">
+  <div>
+    <h1>批次总表{(' · ' + _batch) if _batch else ''}</h1>
+    <div class="hero-sub">每款综合分 · 分级 · 主推渠道 · 快速筛选</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     # 若真实模式因缺 Key 回退到 mock，必须在主区域醒目提示，避免用户误以为调了 API
     _fallback_reason = st.session_state.get("api_key_fallback_reason")
@@ -1069,8 +1709,15 @@ def render_page_summary():
 # 页面 3：🔍 单款详情报告
 # ============================================================
 def render_page_detail():
-    render_breadcrumb(suffix="🔍 单款详情")
-    st.title("🔍 单款详情报告")
+    render_breadcrumb(suffix="单款详情")
+    st.markdown(f"""
+<div class="hero">
+  <div>
+    <h1>单款详情报告</h1>
+    <div class="hero-sub">VLM 特征 · 30 人设投票 · 双渠道评分 · 改款建议</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
     preds: list[FullPrediction] = st.session_state.get("preds", [])
     selected = st.session_state.get("selected_style_id", "")
     if not preds:
@@ -1085,8 +1732,8 @@ def render_page_detail():
     # 盲测款：结论锁定（销量回填后在「📉 回测校准」页解锁对照）
     if p.info.is_blind:
         st.markdown(
-            f"### {p.info.style_id}  <span style='background:#6b7280;color:white;"
-            f"padding:3px 12px;border-radius:6px;font-weight:700;'>🔒 盲测中</span>",
+            f"### {p.info.style_id}  <span style='background:#9a9489;color:#fff;"
+            f"padding:3px 12px;border-radius:6px;font-weight:600;letter-spacing:0.02em;'>🔒 盲测中</span>",
             unsafe_allow_html=True,
         )
         st.info(
@@ -1098,15 +1745,15 @@ def render_page_detail():
         return
 
     g: GradeResult = p.grade
-    color_map = {"S": "#ef4444", "A+": "#f59e0b", "A": "#22c55e", "P": "#6b7280"}
-    c = color_map.get(g.grade, "#6b7280")
+    color_map = {"S": "#c9a0a0", "A+": "#d4b896", "A": "#b8c5b1", "P": "#9a9489"}
+    c = color_map.get(g.grade, "#9a9489")
     st.markdown(
         f"### {p.info.style_id}"
-        f"  <span style='color:gray;font-weight:normal'>综合评分</span>"
+        f"  <span style='color:#8a857d;font-weight:normal'>综合评分</span>"
         f"  **{g.final_score:.1f} / 100**"
-        f"  <span style='color:gray;font-size:13px'>（置信度 {g.confidence:.0%}）</span>"
-        f"  <span style='background:{c};color:white;padding:3px 10px;border-radius:6px;font-weight:700;'>{g.grade}级</span>"
-        f"  <span style='color:#6366f1;'>主推：{g.recommended_channel}</span>",
+        f"  <span style='color:#8a857d;font-size:13px'>（置信度 {g.confidence:.0%}）</span>"
+        f"  <span style='background:{c};color:#fff;padding:3px 10px;border-radius:6px;font-weight:600;letter-spacing:0.02em;'>{g.grade}级</span>"
+        f"  <span style='color:#8699ab;'>主推：{g.recommended_channel}</span>",
         unsafe_allow_html=True,
     )
 
@@ -1151,7 +1798,7 @@ def render_page_detail():
         for key, f in p.features.features.items():
             feat_rows.append({"特征": f.name, "分数": f.score, "理由": f.reason or "（无）"})
         df_feat = pd.DataFrame(feat_rows).sort_values("分数")
-        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#6366f1", height=360)
+        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#a8b5c4", height=360)
 
         with st.expander("🔍 查看每个特征的 VLM 判断理由", expanded=False):
             for _, row in df_feat.iterrows():
@@ -1190,7 +1837,7 @@ def render_page_detail():
             "得分": [p.voting.weighted_score, p.channels.natural_score,
                      p.channels.live_score, p.channels.perceived_value],
         })
-        st.bar_chart(engine_df, x="引擎", y="得分", color="#a855f7", height=250, use_container_width=True)
+        st.bar_chart(engine_df, x="引擎", y="得分", color="#b8c5b1", height=250, use_container_width=True)
 
         # —— 消费者洞察 + 改款建议（来自 GradeResult）——
         st.subheader("💡 消费者洞察")
@@ -1217,12 +1864,19 @@ def render_page_detail():
 # 页面 4：📊 回测校准（含3Loop优化内核按钮）
 # ============================================================
 def render_page_calibration():
-    render_breadcrumb(suffix=f"🔁 校准轮次 {n_calibration or 0}")
-    st.title("📊 回测校准")
-    st.caption(
-        "上传带「真实销售结果」列的历史数据："
-        "先跑基础回测Spearman → 再点「🤖 运行3Loop核心优化内核」→ 新Spearman对比 + 残差识别"
-    )
+    render_breadcrumb(suffix=f"校准轮次 {n_calibration or 0}")
+    st.markdown(f"""
+<div class="hero">
+  <div>
+    <h1>回测校准</h1>
+    <div class="hero-sub">上传带真实销量的历史数据 → 3Loop 核心优化内核 → Spearman 自动提升</div>
+  </div>
+  <div style="text-align:right;">
+    <div style="font-family:'Fraunces',serif;font-size:1.5rem;font-weight:600;color:#8699ab;">{n_calibration or 0}</div>
+    <div style="font-size:0.78rem;color:#8a857e;">已完成校准轮次</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     preds: list[FullPrediction] = st.session_state.get("preds", [])
     if not preds:
@@ -1467,16 +2121,16 @@ def render_page_calibration():
                                 st.write(f"- {u.get('style_id','?')}{attr_tag}")
                 with col_flag:
                     flag_levels = {
-                        "NO_SIG": ("⚪ 无系统偏差", "#22c55e"),
-                        "MODERATE": ("🟡 轻度偏差（关注）", "#f59e0b"),
-                        "STRONG": ("🔴 强系统偏差（必须复盘）", "#ef4444"),
-                        "SIGMA_ZERO": ("⚪ 样本过少或全命中预测", "#6b7280"),
-                        "ERROR": ("⚫ 计算异常", "#111827"),
+                        "NO_SIG": ("⚪ 无系统偏差", "#b8c5b1"),
+                        "MODERATE": ("🟡 轻度偏差（关注）", "#d4b896"),
+                        "STRONG": ("🔴 强系统偏差（必须复盘）", "#c9a0a0"),
+                        "SIGMA_ZERO": ("⚪ 样本过少或全命中预测", "#9a9489"),
+                        "ERROR": ("⚫ 计算异常", "#746f65"),
                     }
-                    label, color = flag_levels.get(rd.system_bias_flag, ("未知", "#6b7280"))
+                    label, color = flag_levels.get(rd.system_bias_flag, ("未知", "#9a9489"))
                     st.markdown(
-                        f"<div style='background:{color};color:white;padding:10px 14px;"
-                        f"border-radius:8px;text-align:center;font-weight:700;'>"
+                        f"<div style='background:{color};color:#fff;padding:10px 14px;"
+                        f"border-radius:8px;text-align:center;font-weight:600;letter-spacing:0.02em;'>"
                         f"{label}</div>",
                         unsafe_allow_html=True,
                     )
