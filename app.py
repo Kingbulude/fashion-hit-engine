@@ -81,12 +81,15 @@ st.markdown("""
   --accent: #a8b5c4;       /* 雾霾蓝 */
   --accent-deep: #8699ab;
   --accent-soft: #cdd5de;
-  --sage: #b8c5b1;         /* 鼠尾草绿 */
-  --sage-deep: #8ea084;
-  --oat: #d4b896;          /* 燕麦驼 */
-  --oat-deep: #b89772;
-  --rose: #c9a0a0;         /* 干玫瑰粉 */
-  --rose-deep: #a87a7a;
+  --sage: #9fb893;         /* 鼠尾草绿（中饱和） */
+  --sage-deep: #708a63;
+  --sage-soft: #e4ece1;
+  --oat: #c8a272;          /* 燕麦驼（中饱和） */
+  --oat-deep: #9a7c56;
+  --oat-soft: #f0e6d6;
+  --rose: #b98888;         /* 豆沙玫瑰（中饱和） */
+  --rose-deep: #966868;
+  --rose-soft: #ecdcdc;
   --purple: #b5a9c4;       /* 烟紫 */
   --gray: #9a9489;         /* 高级灰（P级/中性） */
   --gray-deep: #746f65;
@@ -309,9 +312,10 @@ li[data-baseweb="option"][aria-selected="true"] {
   padding: 0.85rem 1rem !important;
 }
 .element-container .stAlert { border-left: 3px solid var(--accent) !important; }
-.stWarning { border-left-color: var(--oat) !important; }
-.stError { border-left-color: var(--rose) !important; }
-.stSuccess { border-left-color: var(--sage) !important; }
+.stInfo { background: #eef0f3 !important; border-left-color: var(--accent-deep) !important; }
+.stSuccess { background: var(--sage-soft) !important; border-left-color: var(--sage-deep) !important; }
+.stWarning { background: var(--oat-soft) !important; border-left-color: var(--oat-deep) !important; }
+.stError { background: var(--rose-soft) !important; border-left-color: var(--rose-deep) !important; }
 
 /* ---------- Divider ---------- */
 hr, [data-testid="stDivider"] {
@@ -437,9 +441,9 @@ div[data-baseweb="slider"] > div > div:first-child {
   font-size: 0.78rem;
   letter-spacing: 0.02em;
 }
-.badge-s { background: #f7e5e5; color: var(--rose-deep); }
-.badge-aplus { background: #f2ecd8; color: var(--oat-deep); }
-.badge-a { background: #e8ede3; color: var(--sage-deep); }
+.badge-s { background: var(--rose-soft); color: var(--rose-deep); }
+.badge-aplus { background: var(--oat-soft); color: var(--oat-deep); }
+.badge-a { background: var(--sage-soft); color: var(--sage-deep); }
 .badge-p { background: #eceae6; color: var(--text-muted); }
 .badge-info { background: #eef0f3; color: var(--accent-deep); }
 
@@ -1745,7 +1749,7 @@ def render_page_detail():
         return
 
     g: GradeResult = p.grade
-    color_map = {"S": "#c9a0a0", "A+": "#d4b896", "A": "#b8c5b1", "P": "#9a9489"}
+    color_map = {"S": "#b98888", "A+": "#c8a272", "A": "#9fb893", "P": "#9a9489"}
     c = color_map.get(g.grade, "#9a9489")
     st.markdown(
         f"### {p.info.style_id}"
@@ -1837,7 +1841,7 @@ def render_page_detail():
             "得分": [p.voting.weighted_score, p.channels.natural_score,
                      p.channels.live_score, p.channels.perceived_value],
         })
-        st.bar_chart(engine_df, x="引擎", y="得分", color="#b8c5b1", height=250, use_container_width=True)
+        st.bar_chart(engine_df, x="引擎", y="得分", color="#9fb893", height=250, use_container_width=True)
 
         # —— 消费者洞察 + 改款建议（来自 GradeResult）——
         st.subheader("💡 消费者洞察")
@@ -2121,9 +2125,9 @@ def render_page_calibration():
                                 st.write(f"- {u.get('style_id','?')}{attr_tag}")
                 with col_flag:
                     flag_levels = {
-                        "NO_SIG": ("⚪ 无系统偏差", "#b8c5b1"),
-                        "MODERATE": ("🟡 轻度偏差（关注）", "#d4b896"),
-                        "STRONG": ("🔴 强系统偏差（必须复盘）", "#c9a0a0"),
+                        "NO_SIG": ("⚪ 无系统偏差", "#9fb893"),
+                        "MODERATE": ("🟡 轻度偏差（关注）", "#c8a272"),
+                        "STRONG": ("🔴 强系统偏差（必须复盘）", "#b98888"),
                         "SIGMA_ZERO": ("⚪ 样本过少或全命中预测", "#9a9489"),
                         "ERROR": ("⚫ 计算异常", "#746f65"),
                     }
