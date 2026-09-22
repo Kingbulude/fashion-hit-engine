@@ -161,8 +161,14 @@ def fetch_latest_release() -> tuple[str, str]:
             zip_url = a.get("browser_download_url")
             break
 
-    if not tag or not zip_url:
-        raise RuntimeError(f"Latest release has no tag or no zip asset.")
+    if not tag:
+        raise RuntimeError("Latest release has no tag.")
+
+    # Fallback: if no custom zip asset, use GitHub's auto-generated source zip
+    # Every tag automatically gets source.zip at this URL
+    if not zip_url:
+        zip_url = f"https://github.com/{REPO}/archive/refs/tags/{tag}.zip"
+        _info(f"Using source-code zip (no custom release asset found).")
 
     return tag, zip_url
 
@@ -189,15 +195,17 @@ def _urlopen_with_retry(url: str, *, timeout: int, headers: dict,
 
 
 def download_zip(url: str, dest: Path) -> int:
-    """Download with progress + resume-aware retry. Returns bytes downloaded."""
+    """Download with heartbeat + progress. Returns bytes downloaded."""
     headers = {"User-Agent": "fashion-hit-engine-updater"}
     last_err = None
     for attempt in range(4):
         try:
+            print()  # newline before progress bar
             resp = _urlopen_with_retry(url, timeout=120, headers=headers, retries=1)
             total = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
             chunk_size = 64 * 1024
+            last_report = time.time()
             with open(dest, "wb") as f:
                 while True:
                     chunk = resp.read(chunk_size)
@@ -205,12 +213,24 @@ def download_zip(url: str, dest: Path) -> int:
                         break
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if total:
-                        pct = downloaded * 100 // total
-                        mb_done = downloaded / 1024 / 1024
-                        mb_total = total / 1024 / 1024
-                        sys.stdout.write(f"\r    {pct}%  ({mb_done:.1f}/{mb_total:.1f} MB)")
+                    now = time.time()
+                    # Update progress at least every 0.5s OR every 5%
+                    time_ok = (now - last_report) >= 0.5
+                    pct_now = (downloaded * 100 // total) if total else 0
+                    pct_changed = total and (downloaded * 100 // total !=
+                                             (downloaded - len(chunk)) * 100 // total)
+                    if time_ok or pct_changed:
+                        if total:
+                            pct = pct_now
+                            mb_done = downloaded / 1024 / 1024
+                            mb_total = total / 1024 / 1024
+                            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                            sys.stdout.write(f"\r    [{bar}] {pct}%  ({mb_done:.1f}/{mb_total:.1f} MB)")
+                        else:
+                            mb_done = downloaded / 1024 / 1024
+                            sys.stdout.write(f"\r    下载中... ({mb_done:.1f} MB, 未知总大小)")
                         sys.stdout.flush()
+                        last_report = now
             sys.stdout.write("\n")
             return downloaded
         except (urllib.error.URLError, socket.timeout, OSError) as e:
@@ -219,7 +239,7 @@ def download_zip(url: str, dest: Path) -> int:
                 dest.unlink(missing_ok=True)
             if attempt < 3:
                 wait = 3 ** attempt + random.random()
-                print(f"    下载中断 (第 {attempt+1}/4 次)，{wait:.1f}s 后从头重试...")
+                print(f"\n    下载中断 (第 {attempt+1}/4 次)，{wait:.1f}s 后从头重试...")
                 time.sleep(wait)
     raise RuntimeError(f"Download failed after 4 retries: {last_err}")
 
@@ -355,22 +375,38 @@ def kill_running_apps() -> bool:
     killed_any = False
     try:
         if sys.platform == "win32":
-            # Windows: find python processes with streamlit or app.py in command line
-            out = subprocess.run(
-                ["wmic", "process", "where", "name='python.exe'", "get",
-                 "processid,commandline", "/format:csv"],
-                capture_output=True, text=True, timeout=5,
-            ).stdout
-            for line in out.splitlines():
-                line = line.strip()
-                if not line or line.startswith("Node"):
+            # Windows: PowerShell Get-CimInstance (Win11+ compatible, wmic removed)
+            ps_script = (
+                "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+                "Select-Object ProcessId, CommandLine | "
+                "Format-List -HideTableHeaders"
+            )
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                capture_output=True, text=True, timeout=8,
+            )
+            # Also try Get-CimInstance via pwsh fallback
+            if result.returncode != 0 or not result.stdout.strip():
+                result = subprocess.run(
+                    ["pwsh", "-NoProfile", "-Command", ps_script],
+                    capture_output=True, text=True, timeout=8,
+                )
+            output = result.stdout.lower()
+
+            # Parse ProcessId + CommandLine from PowerShell Format-List output
+            # Each process block looks like: ProcessId : 1234 \n CommandLine : ...
+            blocks = output.split("processid")[1:]  # skip header, split by ProcessId
+            for block in blocks:
+                lines = block.strip().splitlines()
+                pid_line = lines[0] if lines else ""
+                # Extract numeric PID
+                pid_match = re.search(r"(\d+)", pid_line)
+                if not pid_match:
                     continue
-                # CSV format: Node,ProcessId,CommandLine
-                parts = line.split(",")
-                if len(parts) < 3:
-                    continue
-                pid = parts[1].strip()
-                cmd = parts[2].lower() if len(parts) > 2 else ""
+                pid = pid_match.group(1)
+                # CommandLine is everything after "commandline :"
+                cmd_match = re.search(r"commandline\s*:\s*(.*)", block, re.DOTALL)
+                cmd = (cmd_match.group(1).strip() if cmd_match else "").lower()
                 if ("streamlit" in cmd or "app.py" in cmd) and pid.isdigit():
                     _info(f"Killing process PID={pid} ...")
                     subprocess.run(["taskkill", "/F", "/PID", pid],

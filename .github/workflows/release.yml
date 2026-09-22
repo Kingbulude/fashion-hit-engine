@@ -24,6 +24,11 @@ jobs:
         id: version
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+      - name: 同步 VERSION 文件（与 tag 一致）
+        run: |
+          echo "${{ steps.version.outputs.tag }}" > VERSION
+          cat VERSION
+
       - name: 整理发布包（剔除开发文件）
         run: |
           mkdir -p dist/fashion-hit-engine
