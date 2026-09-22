@@ -635,11 +635,29 @@ div[data-baseweb="slider"] > div > div:first-child {
 .gauge-delta.pos { color: var(--sage-deep); }
 .gauge-delta.neg { color: var(--rose-deep); }
 
-/* ---------- Hide Streamlit chrome ---------- */
-#MainMenu, header { visibility: hidden; }
+/* ---------- Hide Streamlit chrome（保留 hamburger 以便折叠后可重开侧边栏）---------- */
+/* #MainMenu 是 Streamlit 左上的 hamburger 按钮，侧边栏收起后唯一重开入口 → 保留 */
+header { visibility: hidden; }
 footer { visibility: hidden; }
 [data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; }
 [data-testid="stToolbar"] { visibility: hidden; }
+#MainMenu button, #MainMenu [role="button"],
+button[data-testid="baseButton-headerNoPadding"],
+[data-testid="collapsedControl"] button {
+  color: var(--text-muted) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  width: 36px !important;
+  height: 36px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+#MainMenu button:hover, [data-testid="collapsedControl"] button:hover {
+  color: var(--accent-deep) !important;
+  border-color: var(--accent) !important;
+}
 
 /* ---------- Scrollbar ---------- */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
