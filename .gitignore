@@ -34,3 +34,4 @@ desktop.ini
 data/*.xlsx
 data/*.csv
 data/images/
+.uploads/
