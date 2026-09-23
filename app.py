@@ -635,15 +635,19 @@ div[data-baseweb="slider"] > div > div:first-child {
 .gauge-delta.pos { color: var(--sage-deep); }
 .gauge-delta.neg { color: var(--rose-deep); }
 
-/* ---------- Hide Streamlit chrome（保留 hamburger 以便折叠后可重开侧边栏）---------- */
-/* #MainMenu 是 Streamlit 左上的 hamburger 按钮，侧边栏收起后唯一重开入口 → 保留 */
+/* ---------- Hide Streamlit chrome（但**绝对不能**藏工具栏容器！）---------- */
+/* 只隐藏：Streamlit 品牌 header、底部 footer、stHeader 背景线 */
+/* 工具栏容器 stToolbar 必须保留 — hamburger 和侧边栏折叠按钮都在里面 */
 header { visibility: hidden; }
 footer { visibility: hidden; }
-[data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; }
-[data-testid="stToolbar"] { visibility: hidden; }
-#MainMenu button, #MainMenu [role="button"],
-button[data-testid="baseButton-headerNoPadding"],
-[data-testid="collapsedControl"] button {
+[data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; padding: 0 !important; }
+/* ⚠️ 删掉了 [data-testid="stToolbar"] { visibility: hidden; } — 这行会把 hamburger 一起藏掉！*/
+
+/* ---------- Hamburger 按钮（左上，侧边栏折叠后的唯一重开入口）---------- */
+#MainMenu,
+#MainMenu button {
+  visibility: visible !important;
+  opacity: 1 !important;
   color: var(--text-muted) !important;
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
@@ -653,8 +657,33 @@ button[data-testid="baseButton-headerNoPadding"],
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+  padding: 0 !important;
+  position: relative !important;
+  z-index: 9999 !important;
 }
-#MainMenu button:hover, [data-testid="collapsedControl"] button:hover {
+#MainMenu button:hover {
+  color: var(--accent-deep) !important;
+  border-color: var(--accent) !important;
+}
+
+/* ---------- 侧边栏折叠/展开按钮（侧边栏右上）---------- */
+/* Streamlit 1.64+ 的真实 data-testid 是 stSidebarCollapsedControl */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarCollapsedControl"] button,
+button[data-testid="baseButton-headerNoPadding"] {
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: var(--text-muted) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  width: 36px !important;
+  height: 36px !important;
+  position: relative !important;
+  z-index: 9999 !important;
+}
+[data-testid="stSidebarCollapsedControl"]:hover,
+[data-testid="stSidebarCollapsedControl"] button:hover {
   color: var(--accent-deep) !important;
   border-color: var(--accent) !important;
 }
