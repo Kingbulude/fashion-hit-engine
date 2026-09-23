@@ -110,64 +110,39 @@ html, body, [class*="css"] {
 .block-container { padding-top: 2.5rem; padding-bottom: 3rem; max-width: 1280px; }
 
 /* ================================================================
-   ⚠️ Sidebar 强制可见 — 覆盖所有 Streamlit 版本的 DOM 结构
-   Streamlit 1.35-1.64 之间 sidebar 的 DOM 名改过多次：
-     - 旧版：data-testid="stSidebar"
-     - 新版：class 含 "stSidebar" 或 emotion 自动生成的 class
-   这里用通配符覆盖所有可能：
+   Sidebar — 只做软美化，**绝对不碰 Streamlit 的默认布局**
+   Streamlit 内部自己管 sidebar 的 display/width/flex，
+   我们只改颜色、边框、字体、内边距这些不影响布局的属性。
+   之前 [class*="sidebar" i] 通配符对所有嵌套层都强制 flex，
+   结果把 sidebar 内部内容容器的布局全炸了 —— 彻底删掉！
 ================================================================ */
-[class*="sidebar" i],
-[class*="Sidebar"],
-[data-testid*="Sidebar"],
-[data-testid*="sidebar"],
-aside[class*="sidebar"],
-section[class*="sidebar"],
-div[class*="sidebar"] {
-  display: flex !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-  width: 320px !important;
-  min-width: 280px !important;
-  max-width: 380px !important;
-  height: auto !important;
-  position: relative !important;
-  flex-shrink: 0 !important;
-  order: -1 !important;            /* 确保在 main 左边 */
-  float: left !important;
-  z-index: 10 !important;
-}
 
-/* App 主容器必须用 flex 布局，sidebar 才能在 main 旁边 */
-[data-testid="stAppViewContainer"],
-.stAppViewContainer,
-.appview-container,
-[data-testid="stApp"] {
-  display: flex !important;
-  flex-direction: row !important;
-  width: 100% !important;
-  min-height: 100vh !important;
-}
-
-/* main 区域占满剩余空间 */
-[data-testid="stMain"],
-.stMain,
-main[data-testid*="Main"] {
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-  overflow-x: hidden !important;
-}
-
-/* ---------- Sidebar 美化（在 sidebar 已强制可见的基础上）---------- */
-[class*="sidebar" i], [class*="Sidebar"] {
+/* 1. 顶层 sidebar 容器 — 只改颜色/边框，不改布局 */
+[data-testid="stSidebar"],
+[class*="stSidebarContainer"],
+[class*="SidebarContainer"],
+.stSidebar {
   background: var(--surface) !important;
   border-right: 1px solid var(--border) !important;
 }
-[class*="sidebar" i] > div:first-child { padding-top: 2rem; }
-[class*="sidebar" i] .block-container { padding: 1.25rem 1.25rem 2rem; }
+
+/* 2. 旧版 Streamlit 的 sidebar testid（1.35~1.50）*/
+[data-testid="stSidebar"] > div:first-child { padding-top: 2rem; }
+[data-testid="stSidebar"] .block-container { padding: 1.25rem 1.25rem 2rem; }
 [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
   font-family: 'Inter', sans-serif !important;
   letter-spacing: -0.01em;
 }
+
+/* 3. 新版 Streamlit sidebar（1.55+）— 用 emotion class 匹配 */
+[class*="stSidebarContainer"] [class*="block-container"],
+[class*="SidebarContainer"] [class*="block-container"] {
+  padding: 1.25rem 1.25rem 2rem !important;
+}
+
+/* 4. 防止 sidebar 被误伤 — 全局重置（安全兜底）*/
+/* Streamlit 有时用 data-test-script-state="initial" 会给元素加 display:none
+   但我们不应该强制覆盖 sidebar 的 display，让 Streamlit 自己决定 */
 
 /* ---------- Typography ---------- */
 h1 {
@@ -683,57 +658,38 @@ div[data-baseweb="slider"] > div > div:first-child {
 .gauge-delta.pos { color: var(--sage-deep); }
 .gauge-delta.neg { color: var(--rose-deep); }
 
-/* ---------- Hide Streamlit chrome（但**绝对不能**藏工具栏容器！）---------- */
-/* 只隐藏：Streamlit 品牌 header、底部 footer、stHeader 背景线 */
-/* 工具栏容器 stToolbar 必须保留 — hamburger 和侧边栏折叠按钮都在里面 */
+/* ---------- Hide Streamlit chrome（最安全的最小干预）---------- */
+/* ⚠️ 只做纯 display:none / visibility:hidden — 只隐 Streamlit 品牌元素 */
+/* ⚠️ 绝对不要碰 stToolbar / sidebar toggle / hamburger — 会把交互入口一起藏掉 */
 header { visibility: hidden; }
 footer { visibility: hidden; }
-[data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; padding: 0 !important; }
-/* ⚠️ 删掉了 [data-testid="stToolbar"] { visibility: hidden; } — 这行会把 hamburger 一起藏掉！*/
+[data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; }
+/* 注：stHeader 是 Streamlit 自己的 header 容器，它在新版里可能包含 hamburger 区域
+   所以这里只去掉背景线和底边，绝对不设 visibility:hidden 或 display:none */
 
-/* ---------- Hamburger 按钮（左上，侧边栏折叠后的唯一重开入口）---------- */
-#MainMenu,
-#MainMenu button {
-  visibility: visible !important;
-  opacity: 1 !important;
-  color: var(--text-muted) !important;
-  background: var(--surface) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: 8px !important;
-  width: 36px !important;
-  height: 36px !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 0 !important;
-  position: relative !important;
-  z-index: 9999 !important;
-}
-#MainMenu button:hover {
-  color: var(--accent-deep) !important;
-  border-color: var(--accent) !important;
-}
-
-/* ---------- 侧边栏折叠/展开按钮（侧边栏右上）---------- */
-/* Streamlit 1.64+ 的真实 data-testid 是 stSidebarCollapsedControl */
-[data-testid="stSidebarCollapsedControl"],
+/* ---------- Hamburger + 折叠按钮 — 颜色美化（不碰布局/可见性）---------- */
+/* 多层 fallback 覆盖 Streamlit 1.35~1.64 的不同 DOM 结构。
+   只改颜色/背景/边框/圆角/hover — 完全不碰 display/visibility/position/width。
+   匹配不到就 skip（Streamlit 自己的按钮照样工作），匹配到就美化。 */
+#MainMenu button,
+button[data-testid="baseButton-headerNoPadding"],
+button[kind="icon"],
 [data-testid="stSidebarCollapsedControl"] button,
-button[data-testid="baseButton-headerNoPadding"] {
-  visibility: visible !important;
-  opacity: 1 !important;
+[data-testid="stSidebarButton"] button,
+[data-testid="stMainMenu"] button,
+.stSidebarToggle button {
   color: var(--text-muted) !important;
-  background: var(--surface) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: 8px !important;
-  width: 36px !important;
-  height: 36px !important;
-  position: relative !important;
-  z-index: 9999 !important;
+  background: transparent !important;
+  border-radius: 6px !important;
+  transition: all 0.15s ease !important;
 }
-[data-testid="stSidebarCollapsedControl"]:hover,
-[data-testid="stSidebarCollapsedControl"] button:hover {
+#MainMenu button:hover,
+button[data-testid="baseButton-headerNoPadding"]:hover,
+button[kind="icon"]:hover,
+[data-testid="stSidebarCollapsedControl"] button:hover,
+[data-testid="stSidebarButton"] button:hover {
   color: var(--accent-deep) !important;
-  border-color: var(--accent) !important;
+  background: var(--surface-soft) !important;
 }
 
 /* ---------- Scrollbar ---------- */
