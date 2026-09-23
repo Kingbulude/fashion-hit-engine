@@ -109,13 +109,61 @@ html, body, [class*="css"] {
 .stApp { background: var(--bg); }
 .block-container { padding-top: 2.5rem; padding-bottom: 3rem; max-width: 1280px; }
 
-/* ---------- Sidebar ---------- */
-[data-testid="stSidebar"] {
+/* ================================================================
+   ⚠️ Sidebar 强制可见 — 覆盖所有 Streamlit 版本的 DOM 结构
+   Streamlit 1.35-1.64 之间 sidebar 的 DOM 名改过多次：
+     - 旧版：data-testid="stSidebar"
+     - 新版：class 含 "stSidebar" 或 emotion 自动生成的 class
+   这里用通配符覆盖所有可能：
+================================================================ */
+[class*="sidebar" i],
+[class*="Sidebar"],
+[data-testid*="Sidebar"],
+[data-testid*="sidebar"],
+aside[class*="sidebar"],
+section[class*="sidebar"],
+div[class*="sidebar"] {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: 320px !important;
+  min-width: 280px !important;
+  max-width: 380px !important;
+  height: auto !important;
+  position: relative !important;
+  flex-shrink: 0 !important;
+  order: -1 !important;            /* 确保在 main 左边 */
+  float: left !important;
+  z-index: 10 !important;
+}
+
+/* App 主容器必须用 flex 布局，sidebar 才能在 main 旁边 */
+[data-testid="stAppViewContainer"],
+.stAppViewContainer,
+.appview-container,
+[data-testid="stApp"] {
+  display: flex !important;
+  flex-direction: row !important;
+  width: 100% !important;
+  min-height: 100vh !important;
+}
+
+/* main 区域占满剩余空间 */
+[data-testid="stMain"],
+.stMain,
+main[data-testid*="Main"] {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow-x: hidden !important;
+}
+
+/* ---------- Sidebar 美化（在 sidebar 已强制可见的基础上）---------- */
+[class*="sidebar" i], [class*="Sidebar"] {
   background: var(--surface) !important;
   border-right: 1px solid var(--border) !important;
 }
-[data-testid="stSidebar"] > div:first-child { padding-top: 2rem; }
-[data-testid="stSidebar"] .block-container { padding: 1.25rem 1.25rem 2rem; }
+[class*="sidebar" i] > div:first-child { padding-top: 2rem; }
+[class*="sidebar" i] .block-container { padding: 1.25rem 1.25rem 2rem; }
 [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
   font-family: 'Inter', sans-serif !important;
   letter-spacing: -0.01em;
