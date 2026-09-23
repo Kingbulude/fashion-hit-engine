@@ -659,13 +659,25 @@ div[data-baseweb="slider"] > div > div:first-child {
 .gauge-delta.neg { color: var(--rose-deep); }
 
 /* ---------- Hide Streamlit chrome（最安全的最小干预）---------- */
-/* ⚠️ 只做纯 display:none / visibility:hidden — 只隐 Streamlit 品牌元素 */
-/* ⚠️ 绝对不要碰 stToolbar / sidebar toggle / hamburger — 会把交互入口一起藏掉 */
-header { visibility: hidden; }
-footer { visibility: hidden; }
-[data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; }
-/* 注：stHeader 是 Streamlit 自己的 header 容器，它在新版里可能包含 hamburger 区域
-   所以这里只去掉背景线和底边，绝对不设 visibility:hidden 或 display:none */
+/*
+   ⚠️ 绝对不能碰的元素（Streamlit 新版把交互入口都放在 header 里了）：
+     - <header> 元素          → 里面有 hamburger + sidebar toggle
+     - [data-testid="stHeader"] → 同上
+     - [data-testid="stToolbar"]
+     - #MainMenu
+   之前写过 header { visibility: hidden } 结果把 hamburger 和折叠按钮一起藏了！
+*/
+footer { visibility: hidden; }              /* 安全 — 底部 "Made with Streamlit" */
+[data-testid="stHeader"] {
+  background: transparent !important;       /* 安全 — 只去背景色 */
+  border-bottom: none !important;          /* 安全 — 只去底边线 */
+}
+/* 也去掉 Streamlit 默认的顶栏内边距，让 sidebar toggle 贴顶 */
+[data-testid="stAppViewContainer"] > div:first-child > header,
+[data-testid="stHeader"] > div {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
 
 /* ---------- Hamburger + 折叠按钮 — 颜色美化（不碰布局/可见性）---------- */
 /* 多层 fallback 覆盖 Streamlit 1.35~1.64 的不同 DOM 结构。
