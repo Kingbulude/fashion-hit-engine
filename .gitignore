@@ -35,3 +35,4 @@ data/*.xlsx
 data/*.csv
 data/images/
 .uploads/
+.trae/token
