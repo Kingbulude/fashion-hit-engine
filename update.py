@@ -102,7 +102,11 @@ def _pause() -> None:
 
 
 def _parse_version(tag: str) -> tuple[int, ...]:
-    """Convert 'v1.2.3' → (1, 2, 3). Non-numeric parts treated as 0."""
+    """Convert 'v1.2.3.4' → (1, 2, 3, 4). Non-numeric parts treated as 0.
+
+    支持 4 段版本号：MAJOR.MINOR.PATCH.HOTFIX
+    旧格式 3 段自动补 0 到 4 位。
+    """
     tag = tag.lstrip("vV")
     parts = []
     for p in tag.split("."):
@@ -110,9 +114,9 @@ def _parse_version(tag: str) -> tuple[int, ...]:
             parts.append(int(p))
         except ValueError:
             parts.append(0)
-    while len(parts) < 3:
+    while len(parts) < 4:
         parts.append(0)
-    return tuple(parts[:3])
+    return tuple(parts[:4])
 
 
 # ---------------------------------------------------------------------------
