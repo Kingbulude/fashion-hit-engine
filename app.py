@@ -41,7 +41,8 @@ from src.pipeline import PredictionPipeline
 from src.report import render_single_report_markdown
 from src.types import (
     StyleInfo, FullPrediction, GradeResult, BrandConfig,
-    SALES_QTY_COL_ALIASES, SELL_THROUGH_COL_ALIASES, MANUAL_GRADE_COL_ALIASES,
+    SALES_QTY_COL_ALIASES, SALES_LABEL_COL_ALIASES,
+    SELL_THROUGH_COL_ALIASES, MANUAL_GRADE_COL_ALIASES,
     MAIN_PUSH_COL_ALIASES, LIVE_STREAM_COL_ALIASES, STYLE_ID_COL_ALIASES,
     find_aliased_column, parse_sales_value, safe_float,
 )
@@ -1966,12 +1967,31 @@ def render_page_calibration():
 
             # 用统一别名匹配（支持 "真实销量结果" / "真实销售结果" / "真实销量" / ...）
             col_truth = find_aliased_column(list(df_truth.columns), SALES_QTY_COL_ALIASES)
+            col_label = find_aliased_column(list(df_truth.columns), SALES_LABEL_COL_ALIASES)
+
+            # ---- 展示层重命名：让表头语义更清晰 ----
+            # 只改 display 名，不改 df_truth 实际列名（后续 iterrows 还在用原列名）
+            _rename_map: dict[str, str] = {}
+            if col_truth:
+                # 用户 Excel 可能写 "真实销售结果" / "销量" / "累计销量" → 统一展示成 "累计销量结果"
+                if col_truth != "累计销量结果":
+                    _rename_map[col_truth] = "累计销量结果"
+            if col_label:
+                # 用户 Excel 可能写 "销售情况" / "爆旺平滞" → 统一展示成 "上架30天销售情况"
+                if col_label != "上架30天销售情况":
+                    _rename_map[col_label] = "上架30天销售情况"
+
             if not col_truth:
                 st.error(f"❌ 未找到销量列（支持的别名：{SALES_QTY_COL_ALIASES}）")
             else:
                 st.success(f"✅ 识别到销量列「{col_truth}」，共{len(df_truth)}行")
+                if col_label:
+                    st.info(f"🏷️ 识别到销售标签列「{col_label}」（爆/旺/平/滞）")
+
+                # 预览用副本（重命名只影响展示）
+                _df_preview = df_truth.rename(columns=_rename_map) if _rename_map else df_truth
                 with st.expander("预览（前5行）"):
-                    st.dataframe(df_truth.head(5), use_container_width=True)
+                    st.dataframe(_df_preview.head(5), use_container_width=True)
 
                 truth_map_ready = {}
                 for _, r in df_truth.iterrows():
