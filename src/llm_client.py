@@ -901,13 +901,20 @@ class OllamaClient:
     }
 
     def _resolve_model(self, model: str, *, is_vlm: bool) -> str:
-        """把上游传来的百炼/智谱模型名映射为 Ollama 实际可用名。"""
+        """把上游传来的百炼/智谱模型名映射为 Ollama 实际可用名。
+
+        三层处理：
+          1. 空 → 返回构造时已匹配好的 self.vlm_model / self.text_model（已走磁盘匹配）
+          2. 在 _MODEL_ALIAS 里 → 映射到 Ollama 短名 → 再走磁盘匹配
+          3. 不在 alias → 原样通过 → 再走磁盘匹配
+        最终一定返回磁盘上真实存在的完整模型名（如 qwen2.5:14b-instruct-q4_K_M）
+        """
         if not model:
             return self.vlm_model if is_vlm else self.text_model
-        # 已经是 Ollama 模型名（含 : 或在本地 ollama list 里）
-        if model in self._MODEL_ALIAS:
-            return self._MODEL_ALIAS[model]
-        return model
+        # 先做 alias 映射
+        raw = self._MODEL_ALIAS.get(model, model)
+        # 再走磁盘匹配，解决 qwen2.5:14b vs qwen2.5:14b-instruct-q4_K_M 不匹配
+        return self._match_on_disk(raw, self._disk_models, is_vlm=is_vlm)
 
     # ---- 文本生成（人设投票用）----
     def generate_text(
