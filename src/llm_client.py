@@ -687,14 +687,105 @@ class OllamaClient:
         keep_alive: str = "10s",
     ) -> None:
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
-        self.vlm_model = vlm_model or self.DEFAULT_VLM_MODEL
-        self.text_model = text_model or self.DEFAULT_TEXT_MODEL
         self.num_ctx = num_ctx
         self.keep_alive = keep_alive
         self.usage_tracker = UsageTracker()
 
         import requests  # 延迟导入
         self._requests = requests
+
+        # ---- 自动探测磁盘上的实际模型名（解决 qwen2.5:14b vs qwen2.5:14b-instruct-q4_K_M 不匹配）----
+        disk_models = self._fetch_disk_models()
+        self._disk_models = disk_models
+
+        # VLM 模型：先看用户有没有显式传，再查磁盘，最后 fallback 默认
+        if vlm_model:
+            self.vlm_model = self._match_on_disk(vlm_model, disk_models, is_vlm=True)
+        else:
+            self.vlm_model = self._auto_pick_disk_model(
+                disk_models, default=self.DEFAULT_VLM_MODEL, is_vlm=True
+            )
+
+        # 文本模型：同上
+        if text_model:
+            self.text_model = self._match_on_disk(text_model, disk_models, is_vlm=False)
+        else:
+            self.text_model = self._auto_pick_disk_model(
+                disk_models, default=self.DEFAULT_TEXT_MODEL, is_vlm=False
+            )
+
+    # ---- 内部：从 /api/tags 拉磁盘上所有模型名 ----
+    def _fetch_disk_models(self) -> list[str]:
+        try:
+            base = self.base_url.replace("/api", "")
+            resp = self._requests.get(f"{base}/api/tags", timeout=3)
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            entries: list[dict]
+            if isinstance(data, list):
+                entries = data
+            else:
+                entries = data.get("models", [])
+            return [
+                m.get("name") or m.get("model") or ""
+                for m in entries
+                if m.get("name") or m.get("model")
+            ]
+        except Exception:
+            return []
+
+    # ---- 内部：把一个模型名（可能是短名）匹配到磁盘上最接近的实际名 ----
+    # 匹配规则：精确 → startswith → 冒号前的 tag 前缀匹配
+    def _match_on_disk(self, name: str, disk_models: list[str], *, is_vlm: bool) -> str:
+        if not disk_models:
+            return name
+        # 1. 精确匹配
+        if name in disk_models:
+            return name
+        # 2. startswith（用户写 qwen2.5:14b，磁盘是 qwen2.5:14b-instruct-q4_K_M）
+        for dm in disk_models:
+            if dm.startswith(name):
+                return dm
+        # 3. 反过来：磁盘名开头匹配用户短名的冒号前缀（如 qwen2.5:14b 前缀是 qwen2.5）
+        name_prefix = name.rsplit(":", 1)[0] if ":" in name else name
+        # 同时还要匹配 VLM（含 vl） vs 文本（不含 vl）
+        for dm in disk_models:
+            dm_prefix = dm.rsplit(":", 1)[0] if ":" in dm else dm
+            if dm_prefix == name_prefix:
+                # VLM 必须有 vl，文本不能有 vl
+                has_vl = "vl" in dm_prefix.lower() or "vl" in dm.lower()
+                if is_vlm and has_vl:
+                    return dm
+                if not is_vlm and not has_vl:
+                    return dm
+        # 4. 兜底：不管 VLM/文本，只要冒号前缀一样就返回第一个
+        for dm in disk_models:
+            dm_prefix = dm.rsplit(":", 1)[0] if ":" in dm else dm
+            if dm_prefix == name_prefix:
+                return dm
+        return name  # 真找不到就返回原名（让 Ollama 自己报错）
+
+    # ---- 内部：自动挑一个磁盘上存在的 VLM/文本模型 ----
+    def _auto_pick_disk_model(self, disk_models: list[str], *, default: str, is_vlm: bool) -> str:
+        if not disk_models:
+            return default  # Ollama 还没启动，返回默认名，等 health_check 时再报
+        # 先试精确/前缀匹配默认名
+        matched = self._match_on_disk(default, disk_models, is_vlm=is_vlm)
+        if matched != default:
+            return matched  # 找到了磁盘上匹配的
+        # 默认名在磁盘上找不到 → 按 is_vlm 规则挑一个
+        has_vl_tag = lambda n: "vl" in n.lower().split(":")[0] or "vl" in n.lower()
+        if is_vlm:
+            vl_models = [m for m in disk_models if has_vl_tag(m)]
+            if vl_models:
+                return vl_models[0]
+        else:
+            text_models = [m for m in disk_models if not has_vl_tag(m)]
+            if text_models:
+                return text_models[0]
+        # 最后兜底返回第一个
+        return disk_models[0]
 
     # ---- Ollama 健康检查（快速诊断服务是否在线）----
     # do_probe=True 时会发一次真实推理请求，验证模型真的能跑
