@@ -894,14 +894,46 @@ class OllamaClient:
         }
         if extracted_images:
             payload["images"] = extracted_images
+
+        # === 第一步：试 /api/chat（Ollama 0.1.33+ 原生支持）===
+        endpoint = f"{self.base_url}/chat"
+        use_generate_fallback = False
         try:
-            resp = self._requests.post(
-                f"{self.base_url}/chat",
-                json=payload,
-                timeout=300,  # VLM 首 token 可能慢，留足时间
-            )
+            resp = self._requests.post(endpoint, json=payload, timeout=300)
         except Exception as e:
             return LLMResponse(content="", model=model, error=f"Ollama 网络错误: {e}")
+
+        # === 第二步：如果 chat endpoint 不存在（老版本 Ollama < 0.1.33），降级到 /api/generate ===
+        if resp.status_code in (404, 405):
+            # Ollama < 0.1.33 只有 /api/generate（completion 模式，没有 messages）
+            use_generate_fallback = True
+            # 把 messages 拼成 prompt
+            prompt_lines = []
+            for msg in normalized_messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    prompt_lines.append(f"[System] {content}")
+                elif role == "assistant":
+                    prompt_lines.append(f"[Assistant] {content}")
+                else:
+                    prompt_lines.append(f"[User] {content}")
+            if extracted_images:
+                prompt_lines.append("(images attached via top-level `images` field)")
+            prompt_text = "\n".join(prompt_lines)
+
+            gen_payload: dict[str, Any] = {
+                "model": model,
+                "prompt": prompt_text,
+                "stream": False,
+                "options": payload.get("options", {}),
+                "keep_alive": self.keep_alive,
+            }
+            if extracted_images:
+                gen_payload["images"] = extracted_images
+
+            endpoint = f"{self.base_url}/generate"
+            resp = self._requests.post(endpoint, json=gen_payload, timeout=300)
 
         if resp.status_code != 200:
             err_text = resp.text[:300]
@@ -913,7 +945,7 @@ class OllamaClient:
                 return LLMResponse(content="", model=model, error=hint)
             return LLMResponse(
                 content="", model=model,
-                error=f"Ollama HTTP {resp.status_code}: {err_text}",
+                error=f"Ollama HTTP {resp.status_code} ({endpoint}): {err_text}",
             )
 
         try:
@@ -923,18 +955,22 @@ class OllamaClient:
 
         # === 防御：Ollama 响应可能不是 dict（理论上不会，但以防万一）===
         if isinstance(data, list):
-            # 偶尔 Ollama 会返回数组（不该发生）
             data = data[0] if data else {}
         elif not isinstance(data, dict):
-            data = {"message": {"content": str(data)}}
+            data = {"response": str(data)}
 
-        message_field = data.get("message", {})
-        if isinstance(message_field, list):
-            message_field = message_field[0] if message_field else {}
-        elif not isinstance(message_field, dict):
-            message_field = {"content": str(message_field) if message_field else ""}
+        # === 同时支持 chat 和 generate 两种 Ollama 响应格式 ===
+        # chat 格式:  data["message"]["content"] = "..."
+        # generate 格式: data["response"] = "..."
+        content_out = ""
+        if "message" in data and isinstance(data.get("message"), dict):
+            # chat 模式
+            message_field = data["message"]
+            content_out = message_field.get("content", "") or ""
+        elif "response" in data:
+            # generate 模式（老版本 Ollama < 0.1.33）
+            content_out = data.get("response", "") or ""
 
-        content_out = message_field.get("content", "") or ""
         if isinstance(content_out, list):
             text_parts = [
                 c.get("text", "") if isinstance(c, dict) else str(c)
