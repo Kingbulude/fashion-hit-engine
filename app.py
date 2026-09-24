@@ -1063,7 +1063,7 @@ def validate_inputs(
 ) -> list[str]:
     """校验Excel必需列 + 款号图片文件夹匹配，返回警告列表"""
     warnings: list[str] = []
-    required_cols = ["款式编号", "面料成分", "版型/设计描述", "售价"]
+    required_cols = ["款式编号", "版型/设计描述", "售价"]   # 面料成分是可选的，VLM 能从版型/设计描述里识别
     for col in required_cols:
         if col not in df.columns:
             warnings.append(f"❌ Excel缺少必需列：{col}")
@@ -1198,8 +1198,10 @@ def render_page_upload():
 
     st.markdown("**款式信息表 Excel / CSV**")
     st.caption(
-        "列参考：款式编号、面料成分、版型/设计描述、售价 必填；"
-        "建议加一列「品类」；可最后追加「真实销售结果」列供后续回测。"
+        "列参考：款式编号、版型/设计描述、售价 必填；"
+        "面料成分、品类、尺码、颜色、上架季节可选；"
+        "可最后追加「真实销售结果」列供后续回测。"
+        "（面料成分 VLM 能从版型/设计描述里识别，不需要专门一列）"
     )
     xlsx_file = st.file_uploader("拖放或选择 .xlsx / .csv", type=["xlsx", "csv"])
 
@@ -1388,10 +1390,17 @@ def render_page_upload():
                     size = str(row["尺码"]) if "尺码" in df.columns else ""
                     color = str(row["颜色"]) if "颜色" in df.columns else ""
                     season = str(row["上架季节"]) if "上架季节" in df.columns else ""
-                    fab_text = (
-                        f"尺码：{size}\n面料：{row.get('面料成分','')}\n"
-                        f"版型/设计：{row.get('版型/设计描述','')}\n颜色：{color}\n季节：{season}"
-                    )
+                    fab_parts = []
+                    if size: fab_parts.append(f"尺码：{size}")
+                    fab_content = str(row.get("面料成分", "")).strip() if "面料成分" in df.columns else ""
+                    if fab_content and fab_content != "nan":
+                        fab_parts.append(f"面料成分：{fab_content}")
+                    design_desc = str(row.get("版型/设计描述", "")).strip()
+                    if design_desc and design_desc != "nan":
+                        fab_parts.append(f"版型/设计：{design_desc}")
+                    if color: fab_parts.append(f"颜色：{color}")
+                    if season: fab_parts.append(f"季节：{season}")
+                    fab_text = "\n".join(fab_parts) if fab_parts else ""
                     # 可选的回测字段（如果 Excel 里存在就带上）
                     sales = int(parse_sales_value(row[sales_col])) if sales_col else 0
                     m_grade = str(row[grade_col]).strip() if grade_col and pd.notna(row.get(grade_col)) else ""
