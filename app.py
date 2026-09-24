@@ -894,7 +894,7 @@ if _llm_backend != "mock":
         from src.llm_client import ZhipuClient as _ZC, BailianClient as _BC, OllamaClient as _OC
         _hc_ok, _hc_msg = True, ""
         if _llm_backend == "hybrid":
-            _hc_ok, _hc_msg = _OC().health_check()
+            _hc_ok, _hc_msg = _OC().health_check(do_probe=True)
         if _llm_backend != "hybrid" and not _key_for_backend:
             st.sidebar.error("❌ 请先粘贴 API Key")
         else:
@@ -904,23 +904,13 @@ if _llm_backend != "mock":
                 _parts_err: list[str] = []
 
                 # ① 本地 Ollama 健康检查（local / hybrid 都要）
+                # do_probe=True 会发一次真实推理请求，验证模型真的能跑
                 if _llm_backend in ("local", "hybrid"):
-                    _hc_ok, _hc_msg = _OC().health_check()
+                    _hc_ok, _hc_msg = _OC().health_check(do_probe=True)
                     if not _hc_ok:
                         _parts_err.append(f"🖥️ Ollama: {_hc_msg}（请先安装 Ollama + ollama pull qwen2.5vl:7b + qwen2.5:7b）")
                     else:
-                        _parts_ok.append(f"🖥️ Ollama 本地正常 ({_hc_msg})")
-                    # local 模式额外发一次真实推理确认模型能跑
-                    if _llm_backend == "local" and _hc_ok:
-                        try:
-                            _l_client = _OC()
-                            _t_resp = _l_client.generate_text("回复：OK", max_tokens=8)
-                            if _t_resp.ok:
-                                _parts_ok.append(f"🖥️ Ollama 文本推理 OK ({_t_resp.model})")
-                            else:
-                                _parts_err.append(f"🖥️ Ollama 推理失败: {_t_resp.error[:120]}")
-                        except Exception as e:
-                            _parts_err.append(f"🖥️ Ollama 推理异常: {e}")
+                        _parts_ok.append(f"🖥️ Ollama 正常 ({_hc_msg})")
                     if _llm_backend == "hybrid" and not _key_for_backend:
                         _parts_err.append("☁️ 智谱 API Key 未填（文本端需要）")
 

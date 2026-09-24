@@ -697,7 +697,8 @@ class OllamaClient:
         self._requests = requests
 
     # ---- Ollama 健康检查（快速诊断服务是否在线）----
-    def health_check(self) -> tuple[bool, str]:
+    # do_probe=True 时会发一次真实推理请求，验证模型真的能跑
+    def health_check(self, *, do_probe: bool = False) -> tuple[bool, str]:
         """返回 (是否在线, 诊断信息)。"""
         try:
             # 1. 先试 /api/tags（列出已下载的所有模型，不论是否在显存）
@@ -741,22 +742,51 @@ class OllamaClient:
                 pass  # /api/ps 不关键，失败不阻塞
 
             # 3. 拼结果
-            if disk_models:
-                msg = f"在线，磁盘上有 {len(disk_models)} 个模型: {', '.join(disk_models)}"
-                if running_models:
-                    msg += f"（当前显存加载中: {', '.join(running_models)}）"
-                return True, msg
-            else:
-                # Ollama 在线但没找到任何模型 → 很可能是 OLLAMA_MODELS 配置问题
+            if not disk_models:
                 return True, (
                     "Ollama 在线，但磁盘上没找到任何模型。\n"
                     "可能原因：OLLAMA_MODELS 环境变量没生效，或模型还在 C 盘。\n"
                     "请在本机 PowerShell 执行：ollama list 确认模型存在。"
                 )
+
+            msg = f"在线，磁盘上有 {len(disk_models)} 个模型: {', '.join(disk_models)}"
+            if running_models:
+                msg += f"（当前显存加载中: {', '.join(running_models)}）"
+
+            # 4. 如果要真实推理 probe，找一个磁盘上存在的模型试跑
+            if do_probe:
+                probe_model = self.text_model
+                # 如果配置的 text_model 不在磁盘上，挑第一个磁盘模型
+                if probe_model not in disk_models and disk_models:
+                    probe_model = disk_models[0]
+                probe_result = self._probe_inference(probe_model)
+                if not probe_result[0]:
+                    return False, f"{msg}\n❌ 真实推理失败（{probe_model}）: {probe_result[1]}"
+                msg += f" ✅ {probe_model} 推理 OK ({probe_result[1]})"
+
+            return True, msg
+
         except self._requests.ConnectionError:
             return False, "Ollama 未启动（localhost:11434 连接被拒）"
         except Exception as e:
             return False, f"检查失败: {e}"
+
+    # ---- 内部：发一次真实推理请求，验证 Ollama 真能跑 ----
+    def _probe_inference(self, model: str) -> tuple[bool, str]:
+        """返回 (是否成功, 简要说明)。"""
+        try:
+            result = self.generate_text(
+                "只回复: OK",
+                model=model,
+                max_tokens=16,
+                temperature=0.0,
+            )
+            if result.ok:
+                return True, f"{len(result.content.strip())} tokens 输出"
+            else:
+                return False, result.error[:200]
+        except Exception as e:
+            return False, str(e)[:200]
 
     # ---- 内部：百炼/智谱模型名 → Ollama 模型名自动映射 ----
     _MODEL_ALIAS: dict[str, str] = {
