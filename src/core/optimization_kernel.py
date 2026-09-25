@@ -880,6 +880,8 @@ def run_all_loops(
     history_df: pd.DataFrame,
     prediction_artifacts_dir: Path,
     sales_col: str = "sales",
+    *,
+    auto_apply: bool = False,
 ) -> RunAllLoopsResult:
     """顺序执行 Loop1 → Loop2 → Loop3 → 残差分解。
 
@@ -896,6 +898,11 @@ def run_all_loops(
             prediction_artifacts_dir.parent / calibration 或直接
             prediction_artifacts_dir / calibration。
         sales_col: 销量列名（默认 sales）。
+        auto_apply: 是否把校准产物直接写入 calibrated_dir 让 pipeline
+            下次启动自动加载。⚠️ 默认 False — 校准是在用于拟合的
+            同一批数据上检验 Spearman 提升（in-sample），不是真正的
+            跨季 out-of-sample 验证。建议人类审核校准报告后再决定
+            是否应用（调用 approve_pending_calibration）。
 
     Returns:
         RunAllLoopsResult，含各步骤结果 + 落盘文件路径列表。
@@ -910,7 +917,18 @@ def run_all_loops(
                 output_dir = getattr(paths, "output_dir", prediction_artifacts_dir)
                 calibrated_dir = Path(output_dir) / "calibration"
         calibrated_dir = Path(calibrated_dir)
-        calibrated_dir.mkdir(parents=True, exist_ok=True)
+
+        # === 人工审核门 ===
+        # auto_apply=False（默认）→ 产物写到 calibrated_dir/_pending/，
+        # pipeline 启动时不会自动加载。人类审核校准报告确认后，
+        # 调用 approve_pending_calibration() 把 _pending 里的文件
+        # 移到 calibrated_dir 根目录生效。
+        # 这避免了 in-sample Spearman 提升过拟合风险。
+        if not auto_apply:
+            effective_dir = calibrated_dir / "_pending"
+            effective_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            effective_dir = calibrated_dir
 
         if isinstance(prediction_artifacts_dir, Path):
             artifact_parent = prediction_artifacts_dir.parent
@@ -922,9 +940,9 @@ def run_all_loops(
         output_files: list[Path] = []
 
         # ---------- Loop1 ----------
-        log.info("=== Loop1: VLMFeatureCalibrator ===")
+        log.info("=== Loop1: VLMFeatureCalibrator (auto_apply=%s) ===", auto_apply)
         r1 = VLMFeatureCalibrator.calibrate(history_df, sales_col=sales_col)
-        l1_path = calibrated_dir / "loop1_vlm_feature_biases.yaml"
+        l1_path = effective_dir / "loop1_vlm_feature_biases.yaml"
         _write_yaml(l1_path, {
             "applied": r1.applied,
             "old_spearman_avg": r1.old_spearman_avg,
@@ -935,9 +953,9 @@ def run_all_loops(
         output_files.append(l1_path)
 
         # ---------- Loop2 ----------
-        log.info("=== Loop2: PersonaDistributionFitter ===")
+        log.info("=== Loop2: PersonaDistributionFitter (auto_apply=%s) ===", auto_apply)
         r2 = PersonaDistributionFitter.fit(history_df, sales_col=sales_col)
-        l2_path = calibrated_dir / "loop2_persona_distribution_weights.yaml"
+        l2_path = effective_dir / "loop2_persona_distribution_weights.yaml"
         _write_yaml(l2_path, {
             "applied": r2.applied,
             "old_spearman": r2.old_spearman,
@@ -949,9 +967,9 @@ def run_all_loops(
         output_files.append(l2_path)
 
         # ---------- Loop3 ----------
-        log.info("=== Loop3: EnsembleWeightTuner ===")
+        log.info("=== Loop3: EnsembleWeightTuner (auto_apply=%s) ===", auto_apply)
         r3 = EnsembleWeightTuner.tune(history_df, sales_col=sales_col)
-        l3_path = calibrated_dir / "loop3_ensemble_weights.yaml"
+        l3_path = effective_dir / "loop3_ensemble_weights.yaml"
         _write_yaml(l3_path, {
             "applied": r3.applied,
             "engine": {
@@ -981,7 +999,7 @@ def run_all_loops(
         y_pred_norm = _rank_percentile(y_pred_series)
         y_true_norm = _rank_percentile(y_true_series)
         r4 = ResidualDecomposer.decompose(y_true_norm, y_pred_norm, history_df)
-        residual_path = calibrated_dir / "residual_decompose.yaml"
+        residual_path = effective_dir / "residual_decompose.yaml"
         _write_yaml(residual_path, {
             "residual_mean": r4.residual_mean,
             "residual_std": r4.residual_std,
@@ -1001,10 +1019,30 @@ def run_all_loops(
 
         # ---------- Markdown 校准报告 ----------
         md_lines: list[str] = []
+
+        # === 人工审核门：报告顶部横幅 ===
+        if not auto_apply:
+            md_lines.append("> ⚠️ **人工审核门 — 本轮校准待确认**")
+            md_lines.append(">")
+            md_lines.append("> 本轮校准产物已写入 `_pending/` 目录，**尚未生效**。")
+            md_lines.append("> 原因：校准是在用于拟合的同一批历史数据上检验 Spearman 提升")
+            md_lines.append("> （in-sample），小样本下几乎必然提升，不是真正的跨季 out-of-sample 验证。")
+            md_lines.append(">")
+            md_lines.append("> **应用前请检查：**")
+            md_lines.append("> 1. 各 Loop 的 Spearman 提升是否足够（≥0.01）、方向是否一致")
+            md_lines.append("> 2. 残差分解里的超预期款/不及预期款是否有运营复盘可以解释")
+            md_lines.append("> 3. 是否有新一季销量数据可以做真正的跨季回测")
+            md_lines.append(">")
+            md_lines.append("> 确认后调用 `approve_pending_calibration('" + str(calibrated_dir) + "')`")
+            md_lines.append("> 把 `_pending/` 里的文件移到 `calibrated_dir` 根目录生效。")
+            md_lines.append("")
+
         md_lines.append("# 校准循环报告 (Calibration Report)")
         md_lines.append("")
         md_lines.append(f"- 样本数: {len(history_df)}")
         md_lines.append(f"- 校准目录: `{calibrated_dir}`")
+        md_lines.append(f"- 产物目录: `{effective_dir}`")
+        md_lines.append(f"- auto_apply: {auto_apply}")
         md_lines.append(f"- 销量列: `{sales_col}`")
         md_lines.append("")
 
@@ -1197,3 +1235,71 @@ def run_all_loops(
     except Exception as exc:
         log.exception("run_all_loops 异常退出: %s", exc)
         raise
+
+
+# ======================================================================
+# 人工审核门 · 辅助函数
+# ======================================================================
+
+def approve_pending_calibration(calibrated_dir: str | Path) -> list[Path]:
+    """把 `calibrated_dir/_pending/` 里的校准产物移到 `calibrated_dir` 根目录生效。
+
+    这是人工审核门的"开门"操作：run_all_loops(auto_apply=False) 默认把
+    Loop1/2/3 + 残差分解的 YAML 写到 `_pending/` 子目录，pipeline 启动时
+    calibration_loader 只扫描 calibrated_dir 根目录的 yaml，不会加载
+    `_pending/`。人类审核校准报告确认本轮权重值得应用后，调用本函数
+    把文件移动，下次 pipeline 重启自动生效。
+
+    冲突保护：目标位置已有同名文件时会先保留备份（加 .bak 后缀）。
+
+    Args:
+        calibrated_dir: brand_cfg.calibrated_dir 或显式路径。
+
+    Returns:
+        已移动的文件列表。
+
+    Raises:
+        FileNotFoundError: `_pending/` 目录不存在。
+    """
+    import shutil
+
+    cal_dir = Path(calibrated_dir)
+    pending = cal_dir / "_pending"
+    if not pending.is_dir():
+        raise FileNotFoundError(
+            f"找不到待审核目录 {pending}。"
+            f"请确认 run_all_loops(auto_apply=False) 已执行。"
+        )
+
+    moved: list[Path] = []
+    for src in sorted(pending.iterdir()):
+        if not src.is_file():
+            continue
+        dst = cal_dir / src.name
+        # 冲突保护：已有同名文件 → 备份旧版本
+        if dst.exists():
+            bak = dst.with_suffix(dst.suffix + ".bak")
+            dst.rename(bak)
+            log.warning("目标已存在 %s → 备份为 %s", dst.name, bak.name)
+        shutil.move(str(src), str(dst))
+        moved.append(dst)
+        log.info("已应用校准产物: %s", dst.name)
+
+    return moved
+
+
+def reject_pending_calibration(calibrated_dir: str | Path) -> None:
+    """废弃本轮 _pending/ 校准产物（直接删除）。
+
+    人类审核后如果认为本轮 Spearman 提升不足或权重方向不合理，
+    调用此函数清理掉 _pending/ 目录，重新积累更多历史数据后再跑。
+    """
+    import shutil
+
+    cal_dir = Path(calibrated_dir)
+    pending = cal_dir / "_pending"
+    if pending.is_dir():
+        shutil.rmtree(pending)
+        log.info("已废弃待审核校准产物: %s", pending)
+    else:
+        log.warning("待审核目录不存在，无需清理: %s", pending)

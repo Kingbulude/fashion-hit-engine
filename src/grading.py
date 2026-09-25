@@ -336,12 +336,11 @@ def assign_relative_grades(
             result[p.info.style_id] = g
 
     # ========== P 款主动识别（后处理，在相对分级之后）==========
-    # 数据验证发现：S款 F03=4.4 F09=7.2；P款 F03=5.3 F09=8.0
-    # 最强区分信号是 F03 色彩风险，其次 F09 调性
+    # 数据验证：S款色彩安全度≈5.6，P款≈4.7 — 最强区分特征（色彩安全度越低越可能是P款）
     # 触发条件：
-    #   (F03≥6 AND F09≥7.5) → 高调性 + 拼色/撞色 → P款
-    #   (F10≥7.5 AND 双渠道弱) → 原逻辑
-    COLOR_RISK_HIGH = 6.0
+    #   (F03≤color_safety_low AND F09≥BRAND_TONE_HIGH) — 高调性 + 低色彩安全 → P款（设计好看但颜色太花）
+    #   (F10≥UNIQUENESS_HIGH AND 双渠道弱) → 品牌展示款
+    COLOR_SAFETY_LOW = 4.0   # F03 色彩安全度 ≤ 4 → 高饱和/撞色/高风险
     BRAND_TONE_HIGH = 7.5
     UNIQUENESS_HIGH = 7.5
     for p in preds:
@@ -354,16 +353,20 @@ def assign_relative_grades(
             continue
         feat_scores = {k: float(getattr(f, "score", 5.0))
                       for k, f in getattr(feats, "features", {}).items()}
-        f03 = feat_scores.get("F03_color_risk", 5.0)
+        # 兼容新旧 key（F03_color_safety 新 / F03_color_risk 旧）
+        f03 = feat_scores.get(
+            "F03_color_safety",
+            10.0 - feat_scores.get("F03_color_risk", 5.0),
+        )
         f09 = feat_scores.get("F09_brand_tone", 5.0)
         f10 = feat_scores.get("F10_uniqueness", 5.0)
-        p_showcase = (f09 >= BRAND_TONE_HIGH) and (f03 >= COLOR_RISK_HIGH)
+        p_showcase = (f09 >= BRAND_TONE_HIGH) and (f03 <= COLOR_SAFETY_LOW)
         channels_weak = (channels.natural_score < 6.5) or (channels.live_score < 6.0)
         p_unique = (f10 >= UNIQUENESS_HIGH) and channels_weak
         if p_showcase or p_unique:
             result[sid] = "P"
             p.grade.grade = "P"
-            log.debug("P款识别：%s (F03=%.1f F09=%.1f F10=%.1f → showcase=%s unique=%s)",
+            log.debug("P款识别：%s (F03_safety=%.1f F09=%.1f F10=%.1f → showcase=%s unique=%s)",
                       sid, f03, f09, f10, p_showcase, p_unique)
 
     log.info("相对分级完成：%s（绝对档快照存 metadata.absolute_grade）",

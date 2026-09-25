@@ -40,7 +40,12 @@ def _resolve_bars_cfg(brand_cfg: BrandConfig | None, cfg: AppConfig | None) -> d
 
 # ========== BARS量表渲染 ==========
 def _render_bars_prompt(features_cfg: dict[str, Any]) -> str:
-    """把YAML中的10个BARS量表渲染为LLM可读的prompt"""
+    """把YAML中的10个BARS量表渲染为LLM可读的prompt
+
+    设计哲学：视觉观察（System1 描述）和销量影响判断（System2 推断）是两个
+    独立认知任务，拆开让 VLM 先专注客观观察、再基于量表做价值推断，减少
+    "凭感觉直接打分"的系统性偏差。
+    """
     features = features_cfg["features"]
     lines = ["【10个服装特征BARS评分量表】", ""]
     for key, feat in features.items():
@@ -54,46 +59,61 @@ def _render_bars_prompt(features_cfg: dict[str, Any]) -> str:
             )
         lines.append("")
     val_cfg = features_cfg.get("feature_validation", {})
-    lines.append("【评分规则（关键！请严格遵守）】")
-    lines.append("1. 第一步：观察图片+FAB描述，匹配每个特征最接近的锚定档（客观描述阶段）")
-    lines.append("2. 第二步：该锚定档的「对品牌目标客群销量暗示」是什么？高分档=对销量是显著加分项，低分档=对销量是减分项/风险")
-    lines.append("3. 第三步：综合判断后给出最终分（1-10）。可以跨档取分，比如客观在4档但你认为销量贡献低于锚定暗示，可以打到5分而不是7分")
-    lines.append("4. confidence: 0-1，你对这个评分的把握度")
-    lines.append("5. reason: 必须分两段写，格式是「[视觉判断]...；[销量影响]...」。")
-    lines.append("   - [视觉判断] 要引用图片里的具体细节（如'明显oversize、腰头松紧平整、魔术贴调节'）")
-    lines.append("   - [销量影响] 要直接说「这款放在本品牌是加分项/减分项/中性，为什么」（如'宽松廓形对10岁男孩是主推款型→加分'；'低饱和基础色在直播间缺乏记忆点→减分'）")
-    lines.append("6. 区分度要求：10款在同一批次的同一特征上，分数分布要有明显差异（标准差≥1.5），不能都打7-8分")
-    lines.append(f"7. 多模型分歧>{val_cfg.get('divergence_threshold',2.0)}或confidence<{val_cfg.get('confidence_threshold',0.6)}需人工复核")
-    lines.append("8. 【多图颜色场景识别·最高优先级】如果输入了多张图且衣服颜色不同，先执行：")
-    lines.append("   8a. 判断：不同颜色是「同一件衣服上的拼接/撞色设计」还是「同一款的不同SKU分色」")
-    lines.append("       · 判断依据：拼接/撞色=不同色块在同一件衣服上（一张图里同时出现多色，或各图颜色差异是同一件衣服的不同部位）")
-    lines.append("       · SKU分色=各图是不同件衣服但剪裁/款式完全相同（颜色不同是选色问题，不是设计问题）")
-    lines.append("   8b. 如果是 SKU 分色：F03/F05/F09 只评主推色（通常是第一张/主图的颜色），其他 SKU 颜色只用于看款式剪裁/功能/面料细节")
-    lines.append("   8c. 如果是同一件衣服的撞色设计：F03 按 anchor 描述的撞色档正常评分")
-    lines.append("   8d. 其他特征（F01廓形/F02利落/F04功能/F06实穿/F07搭配/F08面料/F10独特）不受颜色影响，各图取最清晰的视角判断")
+    lines.append("【评分规则 — 严格按三步执行，切勿跳过】")
+    lines.append("")
+    lines.append("=== 第一步：视觉观察（System1 · 描述阶段）===")
+    lines.append("先只看图片，对每个特征做**纯客观视觉描述**，不要涉及销量判断。")
+    lines.append('  格式：[视觉观察] + 你看到的具体细节（如"明显oversize、裤腿有魔术贴调节、面料看起来是速干材质"）')
+    lines.append("  如果图片/角度/清晰度导致某特征**无法可靠判断**（如F08面料质感、F04防水条是否真的存在），写：")
+    lines.append('    [视觉观察] 无法判断 — 理由：xxx（如"图片模糊看不出面料纹理"、"没有帽子所以无法判断帽檐功能"）')
+    lines.append("  无法判断时该特征输出 score=null, confidence=0.0")
+    lines.append("")
+    lines.append("=== 第二步：锚定档匹配 ===")
+    lines.append("将第一步的视觉观察结果，与上表最接近的 BARS 锚定档做匹配。")
+    lines.append("  匹配原则：先选最接近的档，再判断是否需要跨档微调（如客观在3档但某维度明显偏弱/偏强）")
+    lines.append("  分数 1-10，方向：**所有特征统一「高分=对品牌目标客群销量有正向贡献」**")
+    lines.append("  → F03 色彩安全度：基础色受众广=高分(9-10)，撞色/荧光受众窄=低分(1-4)")
+    lines.append("  → F04 功能可见性：硬核功能外显=高分(9-10)，完全无功能元素=低分(1-2)")
+    lines.append("  （完整方向见上方各特征的 anchors 描述）")
+    lines.append("")
+    lines.append("=== 第三步：综合给分 + 理由 ===")
+    lines.append("  score: 1-10（或 null 表示无法判断）")
+    lines.append("  confidence: 0-1（或 0.0 表示无法判断）")
+    lines.append("  reason: 必须分两段，格式「[视觉观察]...；[销量影响]...」")
+    lines.append("    - [视觉观察]：引用图片具体细节（如'oversize版型、魔术贴调节'）")
+    lines.append("    - [销量影响]：直接说「这款放在本品牌是加分项/减分项/中性」+ 为什么（如'基础中性色受众广→搜索端稳销加分'）")
+    lines.append("")
+    lines.append("【附加规则】")
+    lines.append(f"- 多模型分歧>{val_cfg.get('divergence_threshold',2.0)}或confidence<{val_cfg.get('confidence_threshold',0.6)}需人工复核")
+    lines.append("- 区分度：同一批次同一特征分数标准差尽量≥1.5，避免都打7-8分的中庸分")
+    lines.append("")
+    lines.append("【多图颜色场景识别·最高优先级】如果输入了多张图且衣服颜色不同：")
+    lines.append("  1. 先判断颜色差异是「同一件衣服的拼接/撞色设计」还是「同一款的不同SKU分色」")
+    lines.append("     · 拼接/撞色 = 不同色块在同一件衣服上（一张图同时出现多色，或各图是同一件的不同部位）")
+    lines.append("     · SKU分色 = 各图是不同件衣服但剪裁/款式完全相同（颜色是选色问题，不是设计问题）")
+    lines.append("  2. 若为 SKU 分色：F03（色彩安全度）只评主推色（通常是第一张/主图的颜色）")
+    lines.append("  3. 若为同一件衣服的撞色设计：F03 按 anchor 正常评分（撞色 → 安全度偏低）")
+    lines.append("  4. F05/F09/F10 同理，SKU分色时只评主推色")
+    lines.append("  5. 其他特征（F01/F02/F04/F06/F07/F08）不受颜色影响")
     lines.append("")
     lines.append("【颜色澄清反例】")
-    lines.append("- ❌ 错误：'图片里有深灰和黄色两种颜色→F03高饱和撞色 7分'（如果深灰和黄色是同一款两个SKU，不是撞色设计）")
-    lines.append("- ✅ 正确：'多图颜色识别：深灰和黄色是同一款不同SKU→以主推深灰色为准，属于低饱和基础色→F03 2分'")
-    lines.append("- ❌ 错误：'黄色那张更上镜→F05 9分'（黄色是SKU，主推是深灰）")
-    lines.append("- ✅ 正确：'黄色SKU细节清楚但主推是深灰，深灰上镜感适中→F05 5分'")
+    lines.append("- ❌ 错误：'图片有深灰和黄色两种颜色→F03高饱和撞色 3分'（如果深灰和黄色是同一款两个SKU）")
+    lines.append("- ✅ 正确：'多图颜色识别：深灰和黄色是同一款不同SKU→以主推深灰色为准，属于安全基础色→F03 9分'")
+    lines.append("- ❌ 错误：'宽松版型，有垂坠感'（只有视觉描述，缺销量影响判断）")
+    lines.append("- ✅ 正确理由：'宽松oversize版型，比正常大1个码，有魔术贴调节；对目标客群是主推款型，直播间能引流→加分'")
     lines.append("")
-    lines.append("【反例警告】")
-    lines.append("- ❌ 错误理由：'宽松版型，有垂坠感'（只有视觉描述，没有销量影响判断）")
-    lines.append("- ✅ 正确理由：'宽松oversize版型，比正常大1个码，有魔术贴调节；对目标客群是主推款型，直播间能引流→高销加分'")
-    lines.append("")
-    lines.append("【输出格式】纯JSON，不要额外文字")
+    lines.append("【输出格式】纯JSON，不要额外文字。score 字段允许为 null 表示无法判断：")
     lines.append('''{
-  "F01_silhouette":     {"score": X, "confidence": X, "reason": "..."},
-  "F02_clean_look":     {"score": X, "confidence": X, "reason": "..."},
-  "F03_color_risk":     {"score": X, "confidence": X, "reason": "..."},
-  "F04_function_visibility": {"score": X, "confidence": X, "reason": "..."},
-  "F05_photogenic":     {"score": X, "confidence": X, "reason": "..."},
-  "F06_wearability":    {"score": X, "confidence": X, "reason": "..."},
-  "F07_pairing":        {"score": X, "confidence": X, "reason": "..."},
-  "F08_fabric_perception": {"score": X, "confidence": X, "reason": "..."},
-  "F09_brand_tone":     {"score": X, "confidence": X, "reason": "..."},
-  "F10_uniqueness":     {"score": X, "confidence": X, "reason": "..."}
+  "F01_silhouette":     {"score": X或null, "confidence": X, "reason": "[视觉观察]...；[销量影响]..."},
+  "F02_clean_look":     {"score": X或null, "confidence": X, "reason": "..."},
+  "F03_color_safety":   {"score": X或null, "confidence": X, "reason": "..."},
+  "F04_function_visibility": {"score": X或null, "confidence": X, "reason": "..."},
+  "F05_photogenic":     {"score": X或null, "confidence": X, "reason": "..."},
+  "F06_wearability":    {"score": X或null, "confidence": X, "reason": "..."},
+  "F07_pairing":        {"score": X或null, "confidence": X, "reason": "..."},
+  "F08_fabric_perception": {"score": X或null, "confidence": X, "reason": "..."},
+  "F09_brand_tone":     {"score": X或null, "confidence": X, "reason": "..."},
+  "F10_uniqueness":     {"score": X或null, "confidence": X, "reason": "..."}
 }''')
     return "\n".join(lines)
 

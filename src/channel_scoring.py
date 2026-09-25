@@ -151,15 +151,19 @@ def calc_natural_score(
     formula_w: dict[str, float],
     bonus_cfg: dict[str, float],
 ) -> tuple[float, dict[str, float]]:
-    """自然流量分"""
+    """自然流量分（渠道适配假设：实穿度+搭配度+色彩安全 → 搜索端易走量）"""
     wearability = feats.features["F06_wearability"].score
     pairing = feats.features["F07_pairing"].score
-    color_safety = 10.0 - feats.features["F03_color_risk"].score
+    color_safety = feats.features["F03_color_safety"].score
     photogenic = feats.features["F05_photogenic"].score
 
     w_wear = formula_w.get("F06_wearability", formula_w.get("F06", 0.40))
     w_pair = formula_w.get("F07_pairing", formula_w.get("F07", 0.30))
-    w_color = formula_w.get("F03_color_risk_inv", formula_w.get("F03_color_risk", 0.15))
+    # 同时兼容新旧 key（F03_color_safety 新 / F03_color_risk_inv 旧）
+    w_color = formula_w.get(
+        "F03_color_safety",
+        formula_w.get("F03_color_risk_inv", formula_w.get("F03_color_risk", 0.15)),
+    )
     w_photo_natural = formula_w.get("F05_photogenic", 0.15)
 
     bonus_clean = (feats.features["F02_clean_look"].score - 5.0) * bonus_cfg.get("bonus_clean_sensitivity", 0.3)
@@ -190,32 +194,44 @@ def calc_live_score(
     live_cfg: dict[str, Any],
     voting: VotingResult,
 ) -> tuple[float, dict[str, float]]:
-    """直播带货分（保留色彩双向调节逻辑）"""
+    """直播带货分（渠道适配假设：上镜感+功能可见+独特性 → 画面吸睛+有料可讲）"""
     photogenic = feats.features["F05_photogenic"].score
     func_vis = feats.features["F04_function_visibility"].score
     uniqueness = feats.features["F10_uniqueness"].score
     silhouette = feats.features["F01_silhouette"].score
-    color_risk = feats.features["F03_color_risk"].score
+    # 色彩安全度：高分=基础色（稳定转化），低分=撞色/高饱和（视觉吸睛但转化打折）
+    # 兼容新旧 key
+    feats_dict = feats.features
+    if "F03_color_safety" in feats_dict:
+        color_safety = feats_dict["F03_color_safety"].score
+    else:
+        color_safety = 10.0 - feats_dict["F03_color_risk"].score
 
     w_ph = formula_w.get("F05_photogenic", formula_w.get("F05", 0.35))
     w_fv = formula_w.get("F04_function_visibility", formula_w.get("F04", 0.35))
     w_un = formula_w.get("F10_uniqueness", formula_w.get("F10", 0.30))
     w_si = formula_w.get("F01_silhouette", formula_w.get("F01", 0.0))
+    w_color = formula_w.get(
+        "F03_color_safety",
+        formula_w.get("F03_color_risk_inv", formula_w.get("F03_color_risk", 0.0)),
+    )
 
     raw = (
         photogenic * w_ph
         + func_vis * w_fv
         + uniqueness * w_un
         + silhouette * w_si
+        + color_safety * w_color
     )
 
-    # 色彩吸睛奖励（双向调节保留）
+    # 色彩吸睛 bonus（撞色/高饱和才触发，即 color_safety < 5 时）：
+    # 直播间视觉冲突能加分，但只加一点点，不反超基础色款
     color_appeal_sensitivity = live_cfg.get("color_appeal_sensitivity")
     if color_appeal_sensitivity is None:
         sw = load_brand_profile("mipo").scoring_weights
         formula_wrapper = _get_channel_formula_w(sw)
         color_appeal_sensitivity = formula_wrapper.get("live_channel", {}).get("color_appeal_sensitivity", 0.5)
-    color_appeal_bonus = max(0.0, (color_risk - 5.0)) * float(color_appeal_sensitivity)
+    color_appeal_bonus = max(0.0, (5.0 - color_safety)) * float(color_appeal_sensitivity)
     raw += color_appeal_bonus
 
     interact = (func_vis / 10.0) * (uniqueness / 10.0) * live_cfg.get("interact_factor", 2.0)
@@ -233,7 +249,7 @@ def calc_live_score(
         "photogenic": photogenic,
         "func_visibility": func_vis,
         "uniqueness": uniqueness,
-        "color_risk_raw": color_risk,
+        "color_safety": color_safety,
         "color_appeal_bonus": color_appeal_bonus,
         "silhouette": silhouette,
         "interact_term": interact,
@@ -365,9 +381,17 @@ def calculate_channel_scores(
     brand_cfg: BrandConfig | None = None,
     category_id: str | None = None,
 ) -> tuple[ChannelScores, dict[str, Any]]:
-    """双渠道评分 + 价格价值评分（v2.0 BrandConfig 注入版）
+    """双渠道评分 + 价格价值评分
 
-    完全向后兼容：
+    ⚠️ 渠道分的本质：**特征推断的渠道适配假设**，不是渠道销量预测。
+    公式是从特征空间推断"该款在 XX 渠道的经营情境下大概率适配程度"——
+    拿到分渠道曝光/成交历史数据后，可把它升级为真正的预测。
+
+    两种经营情境的假设：
+    - 自然流量分 → 搜索/收藏/复购型购买：实穿度高+搭配度高+色彩安全=搜索端易走量
+    - 直播带货分 → 冲动转化：上镜感+功能可见（有话术钩子）+独特性=画面吸睛
+
+    向后兼容：
     - 只传旧 cfg: AppConfig → 走旧 evaluate_channels 路径
     - 传 brand_cfg → 从 brand_cfg 取 channel_formula / price_value_model / category_registry
     - 都不传 → 默认 load_brand_profile('mipo')
@@ -457,5 +481,20 @@ def calculate_channel_scores(
         "natural_breakdown": nat_breakdown,
         "live_breakdown": live_breakdown,
         "pv_raw": perceived_value,
+        # 渠道适配假设说明（明确这是假设而非销量预测）
+        "natural_hypothesis": (
+            "特征推断的自然渠道适配假设（搜索/收藏/复购型购买情境）："
+            f"实穿度{nat_breakdown.get('wearability',0):.1f}/搭配度{nat_breakdown.get('pairing',0):.1f}/"
+            f"色彩安全{nat_breakdown.get('color_safety',0):.1f} → "
+            f"综合{natural_score:.1f}/10。"
+            "此分数为规则引擎从特征推断，非销量预测。"
+        ),
+        "live_hypothesis": (
+            "特征推断的直播渠道适配假设（冲动转化情境）："
+            f"上镜感{live_breakdown.get('photogenic',0):.1f}/功能可见{live_breakdown.get('func_visibility',0):.1f}/"
+            f"独特性{live_breakdown.get('uniqueness',0):.1f} → "
+            f"综合{live_score:.1f}/10。"
+            "此分数为规则引擎从特征推断，非销量预测。"
+        ),
     }
     return channels, debug
