@@ -104,6 +104,124 @@ _FINAL_SCORE_WEIGHTS_DEFAULT: dict[str, float] = {
     "engine3_value":    0.20,   # 价格价值匹配度
 }
 
+# 双维度分级矩阵阈值（0-100 制）
+_DEMAND_POTENTIAL_THRESHOLD = 75.0   # ≥75 → 需求潜力高（大概率能走量）
+_BRAND_PORTFOLIO_THRESHOLD = 70.0    # ≥70 → 品牌组合价值高（有品牌表达贡献）
+
+
+# ========== 双维度分计算 ==========
+def _calc_demand_potential(
+    feats: StyleFeatures,
+    voting: VotingResult,
+    channels: ChannelScores,
+    scoring_cfg: dict[str, Any],
+) -> float:
+    """需求潜力分（0-100）：代表这款的走量能力
+
+    为什么和 final_score 独立：final_score 混了"品牌组合价值"（F09/F10 调性/独特性），
+    而需求潜力只关心——假设品牌矩阵里这款是最普通的跑量定位，它能卖多少？
+
+    权重：人设加权 + 自然流量 + 直播 + 价值匹配（和 _default_aggregate 基分相同）
+    调节项：反对率惩罚 + 渠道 boost（和 final_score 完全一致）
+    0-10 制 → 0-100 线性映射。
+    """
+    w = scoring_cfg.get("final_score_weights", _FINAL_SCORE_WEIGHTS_DEFAULT)
+
+    e1 = clamp(voting.weighted_score, 0.0, 10.0)
+    e2n = clamp(channels.natural_score, 0.0, 10.0)
+    e2l = clamp(channels.live_score, 0.0, 10.0)
+    e3 = (channels.value_match + 1.0) * 5.0
+
+    base_0_10 = (
+        e1 * w["engine1_persona"]
+        + e2n * w["engine2_natural"]
+        + e2l * w["engine2_live"]
+        + e3 * w["engine3_value"]
+    )
+
+    opp_factor = scoring_cfg.get("opposition_penalty_per_10pct", 0.5)
+    oppose_penalty_0_10 = voting.opposition_rate / 0.10 * opp_factor
+    base_0_10 -= oppose_penalty_0_10
+
+    best_channel = max(e2n, e2l)
+    channel_boost_0_10 = max(0.0, (best_channel - 7.0)) * scoring_cfg.get("channel_boost_sensitivity", 0.3)
+    base_0_10 += channel_boost_0_10
+
+    return round(clamp(base_0_10, 0.0, 10.0) * 10.0, 1)
+
+
+def _calc_brand_portfolio_value(
+    feats: StyleFeatures,
+    channels: ChannelScores,
+    scoring_cfg: dict[str, Any] | None = None,
+) -> float:
+    """品牌组合价值分（0-100）：代表这款在品牌矩阵里的独特贡献
+
+    为什么和需求潜力独立："品牌表达款"（P 款）可能走量不行但调性极强，
+    和"难卖"（风险款）是两回事。品牌价值 = F09 品牌调性贡献 + F10 设计独特性，
+    再叠加品类策略信号（价格处于本品牌上沿且 VM 为正 → 品牌溢价确认）。
+
+    权重固定（不被校准覆盖），因为品牌价值判断是相对稳定的品类策略。
+    """
+    feat_scores = {k: f.score for k, f in feats.features.items()}
+    f09 = feat_scores.get("F09_brand_tone", 5.0)
+    f10 = feat_scores.get("F10_uniqueness", 5.0)
+
+    base_0_10 = f09 * 0.5 + f10 * 0.5
+
+    # 品类策略信号：价格百分位高 + VM 为正 → 品牌溢价款，加一点
+    if channels.price_percentile >= 0.7 and channels.value_match >= 0.1:
+        base_0_10 += 0.5
+
+    # 兜底：如果 F09/F10 都在 feat 里找不到 → 安全回退 5.0
+    base_0_10 = clamp(base_0_10, 0.0, 10.0)
+    return round(base_0_10 * 10.0, 1)
+
+
+def _grade_from_dual_dimension(
+    demand_potential: float,
+    brand_value: float,
+    channels: ChannelScores,
+    voting: VotingResult,
+    *,
+    demand_thr: float = _DEMAND_POTENTIAL_THRESHOLD,
+    brand_thr: float = _BRAND_PORTFOLIO_THRESHOLD,
+) -> tuple[str, str]:
+    """双维度矩阵 → (grade, grade_note)
+
+    矩阵：
+      ┌────────────┬──────────────┬──────────────┐
+      │            │ 品牌价值 ≥70  │ 品牌价值 <70  │
+      ├────────────┼──────────────┼──────────────┤
+      │ 需求 ≥75   │ S 主推款     │ A 跑量款      │
+      │ 需求 <75   │ P 品牌表达款 │ 风险款       │
+      └────────────┴──────────────┴──────────────┘
+
+    注：需求和品牌价值是两个独立维度，故意不互斥。
+    P 款 = 需求潜力低但品牌价值高（设计好看但颜色太花、受众窄），
+    和"难卖/风险款"不再混为一档。
+    """
+    # 风险款绝对判定优先（双渠道极弱或反对率极高）
+    risk_nat = channels.natural_score <= 5.0 and channels.live_score <= 5.0
+    risk_oppose = voting.opposition_rate > 0.30
+    if risk_nat or risk_oppose:
+        if demand_potential >= demand_thr and brand_value >= brand_thr:
+            # 极端矛盾：矩阵判 S 但双渠道极弱，保留矩阵结论 + 加备注
+            return "S", "双渠道均低于5分但双维度综合仍高"
+        if demand_potential >= demand_thr and brand_value < brand_thr:
+            return "风险", "双渠道极弱或反对率高"
+        if demand_potential < demand_thr and brand_value >= brand_thr:
+            return "P", "双渠道极弱，品牌价值保留"
+        return "风险", "双维度均偏低"
+
+    if demand_potential >= demand_thr and brand_value >= brand_thr:
+        return "S", "双维度均高 — 主推款 + 品牌标杆"
+    if demand_potential >= demand_thr and brand_value < brand_thr:
+        return "A", "需求潜力高但品牌价值低 — 跑量款"
+    if demand_potential < demand_thr and brand_value >= brand_thr:
+        return "P", "需求潜力低但品牌价值高 — 品牌表达款"
+    return "风险", "双维度均偏低 — 谨慎推进"
+
 
 def _default_aggregate(
     info: StyleInfo,
@@ -440,10 +558,10 @@ def decide_grade(
     brand_cfg: BrandConfig | None = None,
 ) -> GradeResult:
     """
-    单款综合 → 最终分 → 分级 → 改款建议 → 报告要素
+    单款综合 → 双维度分 → 矩阵分级 → 改款建议 → 报告要素
 
-    新接口建议：传 brand_cfg。
-    向后兼容：只传 cfg（AppConfig）或都不传（默认 mipo）。
+    v1.4.42.2 起改为双维度分级：需求潜力（走量能力）× 品牌组合价值（品牌表达贡献），
+    P 款（品牌表达款）不再和"难卖/风险款"混为一档。
     """
     if brand_cfg is None and cfg is None:
         fallback = load_brand_profile("mipo")
@@ -455,32 +573,36 @@ def decide_grade(
         scoring_cfg = cfg.scoring  # type: ignore[union-attr]
         features_cfg = cfg.features  # type: ignore[union-attr]
 
-    # 置信度估算：
-    #   特征分歧低 + 人设投票方差小 + 多模型一致 = 高置信
+    # —— 置信度估算 ——
     feat_divs = [f.divergence for f in feats.features.values()]
     avg_feat_div = sum(feat_divs) / max(1, len(feat_divs))
     confidence_raw = (
-        0.35 * (1.0 - min(avg_feat_div / 3.0, 1.0))   # 特征一致性
-        + 0.35 * (1.0 - min(voting.score_std / 3.0, 1.0))  # 人设投票一致性
-        + 0.30 * (sum(f.confidence for f in feats.features.values()) / max(1, len(feats.features)))  # 模型自估置信
+        0.35 * (1.0 - min(avg_feat_div / 3.0, 1.0))
+        + 0.35 * (1.0 - min(voting.score_std / 3.0, 1.0))
+        + 0.30 * (sum(f.confidence for f in feats.features.values()) / max(1, len(feats.features)))
     )
     confidence = clamp(confidence_raw, 0.0, 1.0)
 
+    # —— 双维度分（0-100）——
     if calibrated_weights is not None:
         vec = build_feature_vector(info, feats, voting, channels)
-        base = sum(vec.get(k, 0.0) * v for k, v in calibrated_weights.items())
-        final_score = clamp(base * 10.0, 0.0, 100.0)
+        demand_potential = clamp(sum(vec.get(k, 0.0) * v for k, v in calibrated_weights.items()) * 10.0, 0.0, 100.0)
         _, strengths, weaknesses = _default_aggregate(info, feats, voting, channels, scoring_cfg)
     else:
-        final_score, strengths, weaknesses = _default_aggregate(info, feats, voting, channels, scoring_cfg)
+        demand_potential = _calc_demand_potential(feats, voting, channels, scoring_cfg)
+        _, strengths, weaknesses = _default_aggregate(info, feats, voting, channels, scoring_cfg)
 
-    grade = assign_grade(
-        final_score, confidence, scoring_cfg,
-        channels=channels, voting=voting, feats=feats, brand_cfg=brand_cfg,
-    )
+    brand_value = _calc_brand_portfolio_value(feats, channels, scoring_cfg)
+
+    # —— final_score 是双维度综合（0.7*demand + 0.3*brand）——
+    # 向后兼容：0.7 权重因为走量是主要决策依据，品牌价值 0.3 是组合调优
+    final_score = round(demand_potential * 0.7 + brand_value * 0.3, 1)
+
+    # —— 双维度矩阵分级 ——
+    grade, grade_note = _grade_from_dual_dimension(demand_potential, brand_value, channels, voting)
+
     improvements = _improvement_suggestions(feats, channels, features_cfg, info_price=info.price)
 
-    # 消费者洞察：把人设投票的Top理由汇总成一段话
     insight_parts = []
     if voting.support_rate >= 0.4:
         insight_parts.append(f"约{voting.support_rate:.0%}的核心客群明确愿意购买")
@@ -495,8 +617,11 @@ def decide_grade(
     return GradeResult(
         style_id=info.style_id,
         grade=grade,
-        final_score=round(final_score, 1),
+        final_score=final_score,
         confidence=round(confidence, 2),
+        demand_potential=demand_potential,
+        brand_portfolio_value=brand_value,
+        grade_note=grade_note,
         strengths=strengths,
         weaknesses=weaknesses,
         improvements=improvements,

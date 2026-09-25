@@ -532,6 +532,9 @@ class PredictionPipeline:
             final_0_10, _breakdown = self.synthesise_final(voting, channels)
             final_0_100 = round(clamp(final_0_10 * 10.0, 0.0, 100.0), 1)
             grade = GradeResult(
+                demand_potential=grade.demand_potential,
+                brand_portfolio_value=grade.brand_portfolio_value,
+                grade_note=grade.grade_note,
                 style_id=grade.style_id,
                 grade=grade.grade,
                 final_score=final_0_100,
@@ -598,6 +601,9 @@ class PredictionPipeline:
             grade=grade.grade,
             final_score=final_0_100,
             confidence=grade.confidence,
+            demand_potential=grade.demand_potential,
+            brand_portfolio_value=grade.brand_portfolio_value,
+            grade_note=grade.grade_note,
             strengths=grade.strengths,
             weaknesses=grade.weaknesses,
             improvements=grade.improvements,

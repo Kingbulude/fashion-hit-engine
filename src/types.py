@@ -91,6 +91,10 @@ class PersonaVote:
     vetoed: bool = False  # 任一否决层（role=veto）触发
     # 模型
     model_scores: dict[str, float] = field(default_factory=dict)
+    # —— 三阶段评审（v1.4.42.2+）——
+    initial_layer_scores: dict[str, float] = field(default_factory=dict)  # Phase1 初评各层分
+    review_delta: dict[str, float] = field(default_factory=dict)          # Phase3 复评调整幅度（各层）
+    review_adopted_feedback: str = ""                                     # Phase3 人设采纳的专家质疑摘要
 
 
 @dataclass
@@ -107,6 +111,8 @@ class VotingResult:
     # 分歧度
     score_std: float = 0.0
     high_divergence_personas: list[str] = field(default_factory=list)
+    # 三阶段评审元数据
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -123,11 +129,20 @@ class ChannelScores:
 
 @dataclass
 class GradeResult:
-    """S/A+/A/P分级"""
+    """双维度分级：需求潜力 × 品牌组合价值
+
+    grade 字段保留 S/A+/A/P/风险 最终结论（向后兼容）。
+    新增两个维度分 + 分级置信度说明，让"能走量"和"有品牌表达价值"
+    不再混在同一个桶里。
+    """
     style_id: str
-    grade: str                      # S / A+ / A / P / 风险
-    final_score: float = 0.0        # 校准后最终分（0-100）
+    grade: str                      # S / A+ / A / P / 风险（双维度综合结论）
+    final_score: float = 0.0        # 校准后最终分（0-100，保留兼容）
     confidence: float = 0.0         # 0-1
+    # —— 双维度分（0-100）——
+    demand_potential: float = 0.0     # 需求潜力：走量能力（人设加权+自然+直播+价值匹配，去掉品牌类特征）
+    brand_portfolio_value: float = 0.0  # 品牌组合价值：品牌调性贡献+设计独特性+品类策略意义
+    grade_note: str = ""            # 分级说明（如"相对批次内排序 / 冷启动绝对分尺度未校准"）
     # 理由
     strengths: list[str] = field(default_factory=list)
     weaknesses: list[str] = field(default_factory=list)

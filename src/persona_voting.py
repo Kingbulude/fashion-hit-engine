@@ -636,6 +636,298 @@ def aggregate_votes(
 
 
 # ========== 批量人设投票 ==========
+
+# ======================================================================
+# 三阶段评审（v1.4.42.2+）
+# Phase1 初评：现有人设独立评分（vote_persona 不动）
+# Phase2 外部质疑：品类总监视角对 Phase1 结果做结构化挑战
+# Phase3 复评：每个人设基于专家质疑做二次判断（人设之间不互看，避免趋同）
+# 设计原则：人设独立性优先，外部质疑作为统一校准信号
+# ======================================================================
+
+def _persona_scores_summary(
+    votes_initial: list[PersonaVote],
+    layers: list[DecisionLayer],
+    *,
+    max_per_layer: int = 5,
+) -> str:
+    """把 Phase1 初评结果摘要成人类可读文本，喂给专家。
+    
+    格式：每个决策层 → 所有人设的分数分布 + TopN 理由摘要。
+    """
+    lines: list[str] = []
+    for layer in layers:
+        layer_scores = [
+            (v.persona_name, v.layer_scores.get(layer.id, 5.0), v.layer_reasons.get(layer.id, ""))
+            for v in votes_initial
+        ]
+        layer_scores.sort(key=lambda x: x[1], reverse=True)
+        lines.append(f"【{layer.name}（{layer.id}）层初评分布】")
+        for name, score, reason in layer_scores[:max_per_layer]:
+            reason_short = (reason or "无")[:60]
+            lines.append(f"  ↑ {score:.1f}/10 — {name}：{reason_short}")
+        lines.append(f"  （均值={sum(s for _,s,_ in layer_scores)/len(layer_scores):.1f}  反对数={sum(1 for _,s,_ in layer_scores if s<4)}）")
+        lines.append("")
+    return chr(10).join(lines)
+
+
+def _render_expert_challenge_prompt(
+    brand_name: str,
+    info: StyleInfo,
+    feats: StyleFeatures,
+    voting: VotingResult,
+    layers: list[DecisionLayer],
+    layers_summary: str,
+) -> tuple[str, str]:
+    """渲染品类专家 prompt — 独立于所有人设的外部质疑视角。
+    
+    专家不是"另一类人设"，而是"品类总监"——她不买衣服，但负责判断
+    这批人设的评估有没有系统性偏差。
+    """
+    layers_desc = "、".join(l.name for l in layers)
+    sys_prompt = f"""你是{brand_name}的品类总监，有10年服装电商经验。
+你的任务不是买衣服，而是审查一群模拟消费者人设的评估，找出他们的盲区和系统性偏差。"""
+
+    feat_brief = []
+    for key, f in sorted(feats.features.items(), key=lambda kv: -kv[1].score):
+        feat_brief.append(f"  {f.name}：{f.score:.1f}/10")
+
+    user_prompt = f"""
+请审查以下评估：
+
+【款式】{info.style_id} · {info.category} · ¥{info.price} · {info.fab_description or ''}
+【核心特征】
+{chr(10).join(feat_brief)}
+【当前批次整体状态】加权分={voting.weighted_score:.1f}/10  反对率={voting.opposition_rate:.0%}  支持率={voting.support_rate:.0%}
+
+【{layers_desc}层的人设初评结果】
+{layers_summary}
+
+【你的任务】请严格按 JSON 输出，给出：
+{{
+  "systematic_bias": "最突出的系统性偏差是什么？（一句话，比如'所有人设都因为颜色打高分但都忽略了面料质感'）",
+  "challenges": [
+    {{"layer": "层名", "issue": "具体问题", "severity": "high/medium/low", "suggestion": "应该怎么修正"}}
+  ],
+  "highlighted_blind_spots": ["盲区1", "盲区2"],
+  "confidence_in_assessment": "float 0-1"
+}}
+
+规则：
+- 你的目标是找盲区，不是给这款打高分/低分
+- 如果人设评估没有明显偏差，可以说"无显著系统性偏差"
+- 不要重复所有人设已经说了的理由，只说他们没说的
+""".strip()
+    return sys_prompt, user_prompt
+
+
+def _expert_challenge(
+    client: Any,
+    *,
+    votes_initial: list[PersonaVote],
+    info: StyleInfo,
+    feats: StyleFeatures,
+    layers: list[DecisionLayer],
+    brand_cfg: BrandConfig | None = None,
+    voting_initial: VotingResult | None = None,
+    model: str = "qwen-max",
+) -> dict[str, Any] | None:
+    """Phase2：跑品类专家挑战。失败返回 None（优雅 fallback 到两阶段）。"""
+    try:
+        if brand_cfg is None:
+            brand_name = "品牌"
+        else:
+            brand_name = brand_cfg.brand_name
+
+        if voting_initial is None:
+            # 先用初评结果算一个临时的 VotingResult（只需要 summary）
+            voting_initial = aggregate_votes(votes_initial, None, brand_cfg=brand_cfg)
+
+        layers_summary = _persona_scores_summary(votes_initial, layers)
+        sys_p, usr_p = _render_expert_challenge_prompt(
+            brand_name, info, feats, voting_initial, layers, layers_summary,
+        )
+
+        resp = client.generate_text(
+            usr_p,
+            model=model,
+            system_prompt=sys_p,
+            temperature=0.3,  # 专家需要稳定的批评，不要创意发散
+            max_tokens=1200,
+        )
+        if not resp.ok:
+            log.warning("[%s] 专家挑战失败: %s", info.style_id, resp.error)
+            return None
+
+        from .types import extract_json
+        parsed = extract_json(resp.content, as_dict=True)
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed else None
+        if not isinstance(parsed, dict):
+            log.warning("[%s] 专家返回非 dict: %s", info.style_id, type(parsed))
+            return None
+        log.info("[%s] 专家挑战成功: %s", info.style_id, parsed.get("systematic_bias", "")[:60])
+        return parsed
+    except Exception as e:
+        log.warning("[%s] 专家挑战异常: %s", info.style_id, e)
+        return None
+
+
+def _render_review_prompt(
+    persona: dict[str, Any],
+    info: StyleInfo,
+    feats: StyleFeatures,
+    layers: list[DecisionLayer],
+    layer_weights: dict[str, float],
+    initial_layer_scores: dict[str, float],
+    initial_layer_reasons: dict[str, str],
+    expert_challenge: dict[str, Any],
+    brand_cfg: BrandConfig | None = None,
+) -> tuple[str, str]:
+    """渲染 Phase3 复评 prompt：初评分数 + 自己的理由 + 专家质疑 → 二次判断。"""
+    pid = _persona_key(persona)
+    brand_name = brand_cfg.brand_name if brand_cfg else "品牌"
+
+    # 专家质疑摘要（只取最相关的几个点）
+    challenges = expert_challenge.get("challenges", []) or []
+    bias = expert_challenge.get("systematic_bias", "")
+    if challenges:
+        chall_lines = []
+        for c in challenges[:3]:
+            layer_name = c.get("layer", "")
+            issue = c.get("issue", "")
+            suggestion = c.get("suggestion", "")
+            chall_lines.append(f"- 对{layer_name}层质疑：{issue} → 建议：{suggestion}")
+        expert_text = bias + chr(10) + chr(10).join(chall_lines)
+    else:
+        expert_text = bias or "专家认为初评无显著系统性偏差"
+
+    # 初评分数摘要
+    initial_brief = []
+    for l in layers:
+        score = initial_layer_scores.get(l.id, 5.0)
+        reason = initial_layer_reasons.get(l.id, "")
+        initial_brief.append(f"  {l.name}：{score:.1f}/10  原理由：{(reason or '无')[:60]}")
+
+    weight_lines = [
+        f"- {l.name}（权重{int(layer_weights.get(l.id, 1.0) * 100)}%）"
+        for l in layers
+    ]
+
+    fab_focus = "、".join(str(x) for x in persona.get("fab_focus", [])) or "不限"
+    color_pref = "、".join(str(x) for x in persona.get("color_preference", [])) or "不限"
+
+    sys_prompt = f"""你是{brand_name}的购买决策模拟器。你将扮演一个具体的人设，独立判断一件服装。
+重要规则：你可以参考专家的意见，但保持独立思考——专家也可能错。"""
+
+    user_prompt = f"""
+【你扮演的人设】{persona.get('name', pid)}
+购买关注点：{fab_focus}
+主推色偏好：{color_pref}
+【决策结构】{chr(10).join(weight_lines)}
+
+【款式】{info.style_id} · {info.category} · ¥{info.price}
+【核心特征摘要】
+{_feat_summary(feats)}
+
+【你的初评结果（Phase1）】
+{chr(10).join(initial_brief)}
+
+【品类总监质疑（Phase2）】
+{expert_text}
+
+【你的任务】
+1. 逐审阅你的初评——专家指出的盲区是否在你的评估里存在？
+2. 如果存在，最多可以调整 ±2 分（不要完全推翻你自己）。如果专家不对，坚持你的初评。
+3. 输出 JSON：
+
+{{
+{chr(10).join(
+    f'  "{l.id}_adj": {initial_layer_scores.get(l.id, 5.0):.1f}  // 调整后的新分，和初评相同表示不采纳专家意见'
+    for l in layers
+)},
+  "adopted_feedback": "你采纳了专家哪些意见？如果都不采纳说明理由",
+  "vetoed": true或false,
+  "opposing_reason": "反对原因"
+}}
+
+规则：
+- 每层调整幅度 ≤ 2 分（调整后分数 1-10）
+- 如果某层初评 8.0，专家说"面料问题被忽略"，你最多调到 6.0
+- 保持人设一致性，不要变成"品类总监"
+""".strip()
+    return sys_prompt, user_prompt
+
+
+def _run_persona_review(
+    client: Any,
+    *,
+    persona: dict[str, Any],
+    info: StyleInfo,
+    feats: StyleFeatures,
+    layers: list[DecisionLayer],
+    layer_weights: dict[str, float],
+    initial_layer_scores: dict[str, float],
+    initial_layer_reasons: dict[str, str],
+    expert_challenge: dict[str, Any],
+    brand_cfg: BrandConfig | None = None,
+    model: str = "qwen-max",
+    max_adjust: float = 2.0,
+) -> dict[str, Any]:
+    """Phase3 单人设复评。失败返回不调整的安全结果。"""
+    try:
+        sys_p, usr_p = _render_review_prompt(
+            persona, info, feats, layers, layer_weights,
+            initial_layer_scores, initial_layer_reasons,
+            expert_challenge, brand_cfg,
+        )
+        resp = client.generate_text(usr_p, model=model, system_prompt=sys_p, temperature=0.5, max_tokens=1000)
+        if not resp.ok:
+            raise RuntimeError(resp.error)
+
+        from .types import extract_json, clamp
+        parsed = extract_json(resp.content, as_dict=True)
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed else {}
+        if not isinstance(parsed, dict):
+            raise ValueError(f"review 返回 {type(parsed).__name__}")
+
+        new_layer_scores: dict[str, float] = {}
+        for l in layers:
+            new_key = f"{l.id}_adj"
+            new_val = parsed.get(new_key)
+            if new_val is None:
+                # 没给 → 不调整
+                new_layer_scores[l.id] = initial_layer_scores.get(l.id, 5.0)
+                continue
+            try:
+                new_f = float(new_val)
+            except (TypeError, ValueError):
+                new_layer_scores[l.id] = initial_layer_scores.get(l.id, 5.0)
+                continue
+            # 限制调整幅度
+            orig = initial_layer_scores.get(l.id, 5.0)
+            delta = new_f - orig
+            if abs(delta) > max_adjust:
+                new_f = orig + max_adjust * (1 if delta > 0 else -1)
+            new_layer_scores[l.id] = clamp(new_f, 1.0, 10.0)
+
+        return {
+            "layer_scores": new_layer_scores,
+            "adopted_feedback": str(parsed.get("adopted_feedback", "")),
+            "vetoed": bool(parsed.get("vetoed", False)),
+            "opposing_reason": str(parsed.get("opposing_reason", "")),
+        }
+    except Exception as e:
+        log.warning("[%s] 人设%s 复评失败，保留初评: %s", info.style_id, _persona_key(persona), e)
+        return {
+            "layer_scores": dict(initial_layer_scores),
+            "adopted_feedback": "",
+            "vetoed": False,
+            "opposing_reason": "",
+        }
+
+
 def run_persona_voting(
     client: BailianClient,
     info: StyleInfo,
@@ -645,10 +937,17 @@ def run_persona_voting(
     progress: bool = False,
     brand_cfg: BrandConfig | None = None,
     target_age: int | None = None,
+    three_phase: bool = True,
+    expert_model: str = "qwen-max",
 ) -> VotingResult:
-    """批量人设投票（决策层通用）
+    """批量人设投票（决策层通用）— 三阶段评审 v1.4.42.2
 
-    函数签名保持兼容：优先使用 brand_cfg（新架构），否则退化为单决策层。
+    Phase1 初评：所有人设独立评分（现有 vote_persona 逻辑不变）
+    Phase2 外部质疑：品类总监视角对 Phase1 结果做结构化挑战（1次调用）
+    Phase3 复评：每个人设基于统一的专家质疑做二次判断（±2分限制）
+
+    降级：expert_challenge 失败 → 自动 fallback 到两阶段（不阻塞）。
+    mock client 上自动降级。
     """
     if brand_cfg is not None:
         persona_list = brand_cfg.personas
@@ -657,42 +956,114 @@ def run_persona_voting(
     else:
         raise ValueError("run_persona_voting: cfg 和 brand_cfg 不能同时为 None")
 
+    layers = _resolve_layers(brand_cfg)
+    if brand_cfg is not None:
+        ds = brand_cfg.decision_structure
+        age_rule = _match_age_weight_rules(
+            ds.age_weight_rules,
+            target_age if target_age is not None else ds.default_target_age,
+        )
+        layer_weights = _layer_weights_for_age(ds, target_age)
+    else:
+        age_rule = {}
+        layer_weights = {layers[0].id: 1.0}
+
+    # Phase1: 初评
+    log.info("[%s] Phase1 人设初评（%d 人设）", info.style_id, len(persona_list))
     votes: list[PersonaVote] = []
-    pbar = tqdm(persona_list, desc=f"人设投票[{info.style_id}]", leave=False, disable=not progress)
+    pbar = tqdm(persona_list, desc=f"人设初评[{info.style_id}]", leave=False, disable=not progress)
     for p in pbar:
         pid = _persona_key(p)
         pbar.set_postfix_str(pid)
         try:
-            v = vote_persona(
-                client, p, info, feats, cfg,
-                brand_cfg=brand_cfg, target_age=target_age,
-            )
+            v = vote_persona(client, p, info, feats, cfg,
+                            brand_cfg=brand_cfg, target_age=target_age)
+            v.initial_layer_scores = dict(v.layer_scores)
             votes.append(v)
         except Exception as e:
             log.error("[%s] 人设%s 全部失败: %s", info.style_id, pid, e)
-            votes.append(PersonaVote(
-                persona_id=pid,
-                persona_name=str(p.get("name", pid)),
-                final_score=5.0,
-                opposing_reason="LLM调用失败",
-            ))
+            fallback = PersonaVote(
+                persona_id=pid, persona_name=str(p.get("name", pid)),
+                final_score=5.0, opposing_reason="LLM调用失败",
+            )
+            fallback.initial_layer_scores = {l.id: 5.0 for l in layers}
+            votes.append(fallback)
 
+    # Phase2: 外部质疑
+    expert_challenge: dict[str, Any] | None = None
+    if three_phase and len(persona_list) >= 3:
+        try:
+            voting_initial = aggregate_votes(
+                votes, None, brand_cfg=brand_cfg, feats=feats, info=info,
+                target_age=target_age,
+            )
+            expert_challenge = _expert_challenge(
+                client, votes_initial=votes, info=info, feats=feats,
+                layers=layers, brand_cfg=brand_cfg, voting_initial=voting_initial,
+                model=expert_model,
+            )
+            if expert_challenge:
+                log.info("[%s] Phase2 专家挑战: %s", info.style_id,
+                         expert_challenge.get("systematic_bias", "")[:80])
+            else:
+                log.info("[%s] Phase2 专家挑战跳过（返回空）", info.style_id)
+        except Exception as e:
+            log.warning("[%s] Phase2 专家挑战异常，降级为两阶段: %s", info.style_id, e)
+            expert_challenge = None
+
+    # Phase3: 复评
+    if expert_challenge is not None:
+        log.info("[%s] Phase3 人设复评", info.style_id)
+        for v in votes:
+            persona_dict = None
+            for p in persona_list:
+                if _persona_key(p) == v.persona_id:
+                    persona_dict = p
+                    break
+            if persona_dict is None:
+                continue
+
+            review = _run_persona_review(
+                client, persona=persona_dict, info=info, feats=feats,
+                layers=layers, layer_weights=layer_weights,
+                initial_layer_scores=v.initial_layer_scores,
+                initial_layer_reasons=v.layer_reasons,
+                expert_challenge=expert_challenge,
+                brand_cfg=brand_cfg, model=expert_model,
+            )
+
+            v.review_delta = {
+                lid: review["layer_scores"].get(lid, 5.0) - v.initial_layer_scores.get(lid, 5.0)
+                for lid in layers
+            }
+            v.layer_scores = review["layer_scores"]
+            v.review_adopted_feedback = review["adopted_feedback"]
+            if review.get("vetoed"):
+                v.vetoed = True
+                if review.get("opposing_reason"):
+                    v.opposing_reason = review["opposing_reason"]
+            v.final_score = clamp(
+                sum(v.layer_scores.get(l.id, 5.0) * layer_weights.get(l.id, 1.0) for l in layers),
+                1.0, 10.0,
+            )
+    else:
+        for v in votes:
+            v.review_delta = {lid: 0.0 for lid in layers}
+
+    # 聚合
     if brand_cfg is not None:
         result = aggregate_votes(
-            votes,
-            None,
-            brand_cfg=brand_cfg,
-            feats=feats,
-            info=info,
+            votes, None, brand_cfg=brand_cfg, feats=feats, info=info,
             target_age=target_age,
         )
     else:
         result = aggregate_votes(votes, cfg.personas if cfg else None)
     result.style_id = info.style_id
+    result.metadata = {
+        "three_phase": expert_challenge is not None,
+        "expert_bias": expert_challenge.get("systematic_bias", "") if expert_challenge else "",
+    }
     return result
-
-
-# ========== PersonaVotingEngine（BrandConfig构造注入）==========
 class PersonaVotingEngine:
     """人设投票引擎：构造函数接受 BrandConfig，内部按决策结构运行"""
 
