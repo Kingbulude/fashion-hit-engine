@@ -198,7 +198,7 @@ def stage_c_assertions(preds: list[FullPrediction]) -> dict[str, float]:
     print("=" * 100)
     print("✅ 阶段 C：关键指标断言")
     print("=" * 100)
-    gm = {"S": 4, "A+": 3, "A": 2, "P": 1}
+    gm = {"S": 4, "A+": 3, "A": 2, "P": 1, "风险": 0}
     truth_grade = [gm[p.info.manual_grade] for p in preds]
     pred_grade = [gm[p.grade.grade] for p in preds]
     truth_sales = [p.info.sales_qty or GRADE_SALES.get(p.info.style_id, 1000)

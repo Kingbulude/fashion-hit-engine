@@ -32,6 +32,8 @@ _LOOP3_ENGINE_KEY_MAP = {
     "persona_score": "persona_voting",
     "channel_score": "channel_scoring",
     "price_value_score": "price_value",
+    # v1.4.50+: grade_norm 是新引擎名，Loop3 产物 key 和 ensemble_engine 期望的 key 相同
+    "grade_norm": "grade_norm",
 }
 
 # Loop3 channel 产物 key  →  synthesise_final_score 需要的 key
@@ -91,23 +93,38 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
             eng = (data.get("engine") or {}).get("weights") or {}
             ch = (data.get("channel") or {}).get("weights") or {}
 
-            # 只在权重确实改变时才加载（避免覆盖默认均匀权重）
+            # v1.4.50+: 支持 3 或 4 引擎（grade_norm 可选）
             if eng:
                 mapped_eng = {
                     _LOOP3_ENGINE_KEY_MAP.get(k, k): float(v)
                     for k, v in eng.items()
                 }
-                # 确认三个 key 都有了
-                expected = {"persona_voting", "channel_scoring", "price_value"}
-                if expected.issubset(mapped_eng.keys()):
-                    # 只有当至少有一个权重偏离 1/3 时才算有效
-                    uniform = abs(mapped_eng.get("persona_voting", 0) - 1 / 3) < 0.001
-                    if not uniform:
+                # 必须的 3 个基础引擎
+                base_expected = {"persona_voting", "channel_scoring", "price_value"}
+                has_grade_norm = "grade_norm" in mapped_eng
+                expected_keys = base_expected | ({"grade_norm"} if has_grade_norm else set())
+
+                if base_expected.issubset(mapped_eng.keys()):
+                    # grade_norm 是新增引擎：即使权重均匀也必须加载
+                    # 否则预测阶段 ensemble_engine 看不到 grade_norm 权重
+                    n_engines = len(expected_keys)  # 3 or 4
+                    target_uniform = 1.0 / n_engines
+                    mapped_eng_has_grade = has_grade_norm
+
+                    # 判定"是否偏离均匀"（只看基础 3 引擎的分布）
+                    base_weights = [mapped_eng.get(k, 0) for k in base_expected]
+                    base_uniform = all(
+                        abs(w - 1.0 / 3) < 0.001 for w in base_weights
+                    )
+                    # grade_norm 均匀但存在 → 也算"有校准"，因为 4 引擎 vs 3 引擎是本质差异
+                    if (not base_uniform) or mapped_eng_has_grade:
                         result.engine_weights = mapped_eng
                         result.loaded_files.append("loop3_ensemble_weights.yaml")
-                        log.info("✅ Loop3 engine_weights 已加载: %s", mapped_eng)
+                        gn_hint = " + grade_norm" if has_grade_norm else ""
+                        log.info("✅ Loop3 engine_weights 已加载 (%d引擎%s): %s",
+                                 n_engines, gn_hint, mapped_eng)
                     else:
-                        log.info("Loop3 engine_weights 仍是均匀权重，跳过 (old_spearman 没变)")
+                        log.info("Loop3 engine_weights 仍是均匀权重且无 grade_norm，跳过")
 
             if ch:
                 mapped_ch = {

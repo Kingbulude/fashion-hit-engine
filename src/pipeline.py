@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .channel_scoring import calculate_channel_scores
 from .config import AppConfig, load_brand_profile, load_config
-from .core.ensemble_engine import synthesise_final_score
+from .core.ensemble_engine import synthesise_final_score, grade_norm_from_manual_grade
 from .data_io import load_styles_from_excel, read_styles_excel, save_predictions_xlsx
 from .feature_extraction import (
     FeatureExtractionEngine,
@@ -380,7 +380,15 @@ class PredictionPipeline:
         self,
         voting: VotingResult,
         channels: ChannelScores,
+        *,
+        manual_grade: str = "",
     ) -> tuple[float, dict[str, float]]:
+        """合成最终分
+
+        v1.4.50+: 支持传入 manual_grade → 自动计算 grade_norm_score 作为可选第 4 引擎。
+        如果 Loop3 校准产物里有 grade_norm 权重（4 引擎配置）且 manual_grade 非空 →
+        启用 grade_norm；否则回退到原来的 3 引擎。
+        """
         persona_score = clamp(voting.weighted_score, 0.0, 10.0)
         channel_scores = {
             "natural": channels.natural_score,
@@ -395,12 +403,17 @@ class PredictionPipeline:
         channel_split = dict(self.brand_cfg.default_channel_split or {"natural": 0.5, "live_stream": 0.5})
         if getattr(self.brand_cfg, "_calibrated_channel_split", None):
             channel_split = {**channel_split, **self.brand_cfg._calibrated_channel_split}
+
+        # v1.4.50+: grade_norm — 如果 manual_grade 非空且权重里有 grade_norm
+        grade_norm_score = grade_norm_from_manual_grade(manual_grade)
+
         return synthesise_final_score(
             persona_score,
             channel_scores,
             pv_norm,
             engine_weights=engine_weights,
             channel_split=channel_split,
+            grade_norm_score=grade_norm_score,
         )
 
     # ===== mock 人设投票（不依赖LLM，用于smoke test）=====
@@ -530,7 +543,7 @@ class PredictionPipeline:
                 cfg=None, brand_cfg=self.brand_cfg,
             )
             # 使用 v2.0 合成覆盖最终分（0-10→0-100）
-            final_0_10, _breakdown = self.synthesise_final(voting, channels)
+            final_0_10, _breakdown = self.synthesise_final(voting, channels, manual_grade=info.manual_grade)
             final_0_100 = round(clamp(final_0_10 * 10.0, 0.0, 100.0), 1)
             grade = GradeResult(
                 demand_potential=grade.demand_potential,
@@ -596,7 +609,7 @@ class PredictionPipeline:
         # （分级规则里的 S/A+/A/P 阈值和反对率/渠道硬规则仍然有价值），
         # 只替换 final_score 这个数值。
         # 注意：mock 路径已有此覆盖，真实 LLM 路径之前缺失。
-        final_0_10, _breakdown = self.synthesise_final(voting, channels)
+        final_0_10, _breakdown = self.synthesise_final(voting, channels, manual_grade=info.manual_grade)
         final_0_100 = round(clamp(final_0_10 * 10.0, 0.0, 100.0), 1)
         grade = GradeResult(
             style_id=grade.style_id,
