@@ -714,10 +714,9 @@ button[kind="icon"]:hover,
 """, unsafe_allow_html=True)
 
 # --- 侧边栏顶部：莫兰迪品牌 Header ---
-# 硬编码只显示这两个品牌（不管本地 brand_profiles/ 下还有什么其他目录）
-available_brands = ["mipo", "papa"]
+available_brands = list_available_brands()
 if "brand_id" not in st.session_state:
-    st.session_state.brand_id = "mipo"
+    st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
 
 # 品牌 selectbox 只显示漂亮名（不带括号）
 @st.cache_data(show_spinner=False, ttl=3600)
