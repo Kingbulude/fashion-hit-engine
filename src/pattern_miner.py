@@ -420,54 +420,109 @@ def save_patterns(
 
 # ========== Few-shot 规则匹配（供 P1 注入 prompt 用）==========
 
+# --- YAML 解析 LRU 缓存（文件 mtime 变了自动失效）---
+import functools
+_yaml_cache: dict[tuple[str, float], dict] = {}
+
+
+def _load_patterns_yaml(path: Path) -> dict | None:
+    """带缓存的 YAML 加载，key=(path_str, mtime)。"""
+    import yaml
+    key = (str(path.resolve()), path.stat().st_mtime)
+    if key in _yaml_cache:
+        return _yaml_cache[key]
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        _yaml_cache[key] = data
+        return data
+    except Exception:
+        return None
+
+
+def clear_patterns_cache() -> None:
+    """清缓存（测试用）。"""
+    _yaml_cache.clear()
+
+
 def match_rules_for_style(
     patterns_yaml_path: str | Path,
     style_features: dict[str, float],
     top_k: int = 3,
+    min_score: float = 0.25,
 ) -> list[dict[str, Any]]:
     """根据规则 YAML，为一款新 style 匹配最相关的历史模式。
+
+    v1.4.45+ 改进：
+      - YAML 解析 LRU 缓存（文件 mtime 变了自动失效）
+      - match_strength 权重：远离阈值的匹配比擦边匹配分更高
+        (例 "F06 > 7.2": val=9.0 → strength=0.25, val=7.3 → strength=0.014)
+      - 匹配分数 = confidence × coverage × mean_strength
 
     Args:
         patterns_yaml_path: save_patterns 生成的 YAML 文件路径
         style_features: 这款的特征分 {"F06": 7.8, "P15": 0.62, ...}
         top_k: 最多返回几条匹配的规则
+        min_score: 最低综合分阈值（默认 0.25）
 
     Returns:
-        匹配到的规则列表（按相关度排序），每条附加 matched_condition 说明
+        匹配到的规则列表（按相关度排序），每条附加：
+          - match_score: confidence × coverage × strength（综合分）
+          - matched_count: "k/n" 命中数
+          - mean_strength: 平均条件强度（0-1，1=完全不相关，越高越明确）
     """
-    import yaml
-
     path = Path(patterns_yaml_path)
     if not path.exists():
         return []
 
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    all_rules = data.get("all_rules", []) or data.get("s_rules", []) + data.get("p_rules", [])
+    data = _load_patterns_yaml(path)
+    if not data:
+        return []
+
+    all_rules = data.get("all_rules") or []
+    if not all_rules:
+        s_rules = data.get("s_rules", []) or []
+        p_rules = data.get("p_rules", []) or []
+        all_rules = s_rules + p_rules
 
     scored: list[tuple[float, dict]] = []
     for rule in all_rules:
-        matched = 0
-        total = len(rule.get("feature_cols", []))
-        if total == 0:
+        cols = rule.get("feature_cols", [])
+        ops = rule.get("operators", [])
+        threshs = rule.get("thresholds", [])
+        if not cols or not ops or not threshs:
             continue
-        for col, op, thresh in zip(
-            rule.get("feature_cols", []),
-            rule.get("operators", []),
-            rule.get("thresholds", []),
-        ):
+
+        matched = 0
+        strength_sum = 0.0
+        for col, op, thresh in zip(cols, ops, threshs):
             val = style_features.get(col)
             if val is None:
+                strength_sum += 0.5   # 特征缺失 → 中性 strength
                 continue
             ok = (val <= thresh) if op == "<=" else (val > thresh)
             if ok:
                 matched += 1
-        coverage = matched / total
-        # 综合分：规则置信度 × 覆盖率
-        score = rule.get("confidence", 0) * coverage
-        if score > 0.2:   # 最低匹配度阈值
+            # strength：离阈值越远越大
+            # 归一化到 [0,1] 用 thresh 作分母（防止大数特征扭曲）
+            denom = max(abs(thresh), 1e-6)
+            raw_dist = abs(val - thresh) / denom   # 相对距离
+            strength_sum += min(raw_dist, 1.0)     # 上限 1.0 防异常值
+
+        n_total = len(cols)
+        coverage = matched / n_total
+        mean_strength = strength_sum / n_total
+        # 只在至少命中一条规则时给高 coverage 规则优先
+        if matched == 0:
+            continue
+
+        conf = rule.get("confidence", 0)
+        # v1.4.45+: 综合分 = 置信度 × 覆盖率 × 条件强度均值
+        score = conf * coverage * mean_strength
+        if score > min_score:
             rule_copy = dict(rule)
-            rule_copy["match_score"] = round(score, 3)
-            rule_copy["matched_count"] = f"{matched}/{total}"
+            rule_copy["match_score"] = round(score, 4)
+            rule_copy["matched_count"] = f"{matched}/{n_total}"
+            rule_copy["mean_strength"] = round(mean_strength, 3)
             scored.append((score, rule_copy))
 
     scored.sort(key=lambda x: -x[0])
@@ -479,25 +534,73 @@ def build_fewshot_context(
     style_features: dict[str, float],
     *,
     brand_suffix: str = "",
+    top_k_rules: int = 3,
+    top_k_features_in_prompt: int = 6,
 ) -> str:
     """把匹配到的历史模式组装成 LLM prompt 可直接用的 few-shot 段落。
 
+    v1.4.45+ 改进：
+      - 明确列出当前款式的特征值（LLM 才能对比历史模式）
+      - 按 match_score 排序，只注入 top_k_rules
+      - 特征值按 FEATURE_NAME_MAP 翻译成中文名
+
     这是 P1 的核心函数 — persona voting prompt 调用时注入。
     """
-    matches = match_rules_for_style(patterns_yaml_path, style_features, top_k=3)
+    matches = match_rules_for_style(
+        patterns_yaml_path, style_features, top_k=top_k_rules,
+    )
     if not matches:
         return ""
 
-    lines = ["【历史市场模式参考】"]
+    lines: list[str] = []
+    lines.append("【历史市场模式参考】")
+    lines.append("")
+
+    # --- 当前款式特征快照（让 LLM 明确要评估的是什么）---
+    if style_features:
+        feat_display_items: list[tuple[str, float, float | None]] = []
+        for col, val in style_features.items():
+            name = FEATURE_NAME_MAP.get(col, col)
+            # 检查是否有规则引用这个特征（有规则引用的才是"关键"特征）
+            ref_thresh = None
+            for m in matches:
+                for mcol, mthresh in zip(
+                    m.get("feature_cols", []), m.get("thresholds", [])
+                ):
+                    if mcol == col:
+                        ref_thresh = mthresh
+                        break
+                if ref_thresh is not None:
+                    break
+            feat_display_items.append((name, float(val), ref_thresh))
+
+        # 有关键特征优先排前
+        feat_display_items.sort(key=lambda x: (x[2] is None), reverse=False)
+        shown = feat_display_items[:top_k_features_in_prompt]
+        feat_parts = [f"{name}={val:.1f}" for name, val, _ in shown]
+        lines.append(
+            f"→ 当前款式特征：{', '.join(feat_parts)}"
+            f"（共 {len(style_features)} 项）"
+        )
+        lines.append("")
+
     for m in matches:
         target = m.get("target_grade", "?")
         conf = m.get("confidence", 0)
+        score = m.get("match_score", conf * m.get("confidence", 0))
         conds = m.get("conditions", [])
-        lines.append(f"过去 {brand_suffix} 款中，符合以下特征的款式：")
+        matched_count = m.get("matched_count", "")
+        lines.append(
+            f"过去 {brand_suffix} 款中，符合以下特征组合的款式："
+            f"（命中 {matched_count}，模式分 {score:.2f}）"
+        )
         for c in conds:
             lines.append(f"  • {c}")
-        lines.append(f"  → 有 {conf:.0%} 概率成为 **{target}款**")
+        lines.append(f"  → 有 **{conf:.0%}** 概率成为 {target}款")
         lines.append("")
 
-    lines.append("请参考这些历史模式，给出你当前评估这款的评分。")
+    lines.append(
+        "请参考这些历史模式，对比当前款式的特征组合，"
+        "在评分和理由里体现你参考了哪些模式。"
+    )
     return "\n".join(lines)
