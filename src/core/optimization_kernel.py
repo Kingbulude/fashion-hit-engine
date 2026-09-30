@@ -1168,6 +1168,15 @@ def run_all_loops(
             "applied": r1.applied,
             "old_spearman_avg": r1.old_spearman_avg,
             "new_spearman_avg": r1.new_spearman_avg,
+            # v1.4.44+: 分类指标（与 Spearman 双轨并行）
+            "classification": {
+                "old_f1": r1.old_f1,
+                "new_f1": r1.new_f1,
+                "delta_f1": r1.new_f1 - r1.old_f1,
+                "old_precision_at_k": r1.old_p_at_k,
+                "new_precision_at_k": r1.new_p_at_k,
+                "delta_p_at_k": r1.new_p_at_k - r1.old_p_at_k,
+            },
             "per_feature_rho": r1.per_feature_rho,
             "feature_biases": r1.feature_biases,
         })
@@ -1182,6 +1191,15 @@ def run_all_loops(
             "old_spearman": r2.old_spearman,
             "new_spearman": r2.new_spearman,
             "delta_spearman": r2.new_spearman - r2.old_spearman,
+            # v1.4.44+: 分类指标
+            "classification": {
+                "old_f1": r2.old_f1,
+                "new_f1": r2.new_f1,
+                "delta_f1": r2.new_f1 - r2.old_f1,
+                "old_precision_at_k": r2.old_p_at_k,
+                "new_precision_at_k": r2.new_p_at_k,
+                "delta_p_at_k": r2.new_p_at_k - r2.old_p_at_k,
+            },
             "lasso_raw_coef": r2.lasso_raw_coef,
             "persona_weights": r2.persona_weights,
         })
@@ -1196,12 +1214,29 @@ def run_all_loops(
             "engine": {
                 "old_spearman": r3.old_engine_spearman,
                 "new_spearman": r3.new_engine_spearman,
+                # v1.4.44+: 分类指标（与 Loop1/2 一致嵌套）
+                "classification": {
+                    "old_f1": r3.old_engine_f1,
+                    "new_f1": r3.new_engine_f1,
+                    "delta_f1": r3.new_engine_f1 - r3.old_engine_f1,
+                    "old_precision_at_k": r3.old_engine_p_at_k,
+                    "new_precision_at_k": r3.new_engine_p_at_k,
+                    "delta_p_at_k": r3.new_engine_p_at_k - r3.old_engine_p_at_k,
+                },
                 "rho": r3.engine_rho,
                 "weights": r3.engine_weights,
             },
             "channel": {
                 "old_spearman": r3.old_channel_spearman,
                 "new_spearman": r3.new_channel_spearman,
+                "classification": {
+                    "old_f1": r3.old_chan_f1,
+                    "new_f1": r3.new_chan_f1,
+                    "delta_f1": r3.new_chan_f1 - r3.old_chan_f1,
+                    "old_precision_at_k": r3.old_chan_p_at_k,
+                    "new_precision_at_k": r3.new_chan_p_at_k,
+                    "delta_p_at_k": r3.new_chan_p_at_k - r3.old_chan_p_at_k,
+                },
                 "rho": r3.channel_rho,
                 "weights": r3.channel_weights,
             },
@@ -1238,6 +1273,63 @@ def run_all_loops(
         })
         output_files.append(residual_path)
 
+        # ---------- PatternMiner：从历史数据提炼爆款/败款模式（v1.4.44+）----------
+        pattern_result = None
+        pattern_yaml_path: Path | None = None
+        pattern_md_path: Path | None = None
+        try:
+            from ..pattern_miner import mine_patterns, save_patterns
+
+            # 品牌名 & 季度标识
+            brand_name = ""
+            quarter = ""
+            if hasattr(brand_cfg, "brand_id"):
+                brand_name = str(getattr(brand_cfg, "brand_id", "") or "")
+            if hasattr(brand_cfg, "brand_name"):
+                brand_name = brand_name or str(getattr(brand_cfg, "brand_name", "") or "")
+            # 季度：尝试从 history_df 或 brand_cfg 提取
+            if "quarter" in history_df.columns:
+                q_vals = history_df["quarter"].dropna().astype(str).unique()
+                if len(q_vals) > 0:
+                    quarter = str(q_vals[-1])[:16]
+            elif hasattr(brand_cfg, "quarter"):
+                quarter = str(getattr(brand_cfg, "quarter", "") or "")[:16]
+
+            pattern_memory_dir = calibrated_dir / "memory"
+            log.info(
+                "=== PatternMiner: mine_patterns (%d samples, brand=%s, quarter=%s) ===",
+                len(history_df), brand_name or "?", quarter or "?",
+            )
+            pattern_result = mine_patterns(history_df, sales_col=sales_col)
+            if pattern_result.n_samples_total > 0 and (pattern_result.s_rules or pattern_result.p_rules):
+                paths = save_patterns(
+                    pattern_result, pattern_memory_dir,
+                    brand_name=brand_name, quarter=quarter,
+                )
+                pattern_yaml_path = paths[0]
+                pattern_md_path = paths[1] if len(paths) > 1 else None
+                output_files.extend([p for p in paths if p is not None])
+                log.info(
+                    "✅ PatternMiner: %d 条规则 (S=%d, P=%d), accuracy=%.1%% → %s",
+                    len(pattern_result.rules),
+                    len(pattern_result.s_rules),
+                    len(pattern_result.p_rules),
+                    pattern_result.tree_accuracy,
+                    pattern_yaml_path,
+                )
+            else:
+                log.info(
+                    "PatternMiner 样本不足或无区分度（accuracy=%.1%%, S=%d, P=%d），跳过落盘",
+                    pattern_result.tree_accuracy,
+                    len(pattern_result.s_rules),
+                    len(pattern_result.p_rules),
+                )
+        except ImportError:
+            log.info("pattern_miner 未安装，跳过 PatternMiner（v1.4.44+ 特性）")
+        except Exception as exc:
+            log.warning("PatternMiner 执行异常（不阻塞校准）: %s", exc)
+            pattern_result = None
+
         # ---------- Markdown 校准报告 ----------
         md_lines: list[str] = []
 
@@ -1272,6 +1364,9 @@ def run_all_loops(
         md_lines.append(f"- 生效: **{r1.applied}**")
         md_lines.append(f"- 旧Spearman均值: {r1.old_spearman_avg:.4f}")
         md_lines.append(f"- 新Spearman: {r1.new_spearman_avg:.4f}")
+        # v1.4.44+: 分类指标
+        md_lines.append(f"- **旧F1**: {r1.old_f1:.3f} → **新F1**: {r1.new_f1:.3f} (Δ {r1.new_f1 - r1.old_f1:+.3f})")
+        md_lines.append(f"- **旧P@k**: {r1.old_p_at_k:.3f} → **新P@k**: {r1.new_p_at_k:.3f} (Δ {r1.new_p_at_k - r1.old_p_at_k:+.3f})")
         md_lines.append("")
         md_lines.append("| 特征 | ρ(销量) | 偏置系数 |")
         md_lines.append("|------|---------|----------|")
@@ -1288,6 +1383,9 @@ def run_all_loops(
         md_lines.append(f"- 旧Spearman: {r2.old_spearman:.4f}")
         md_lines.append(f"- 新Spearman: {r2.new_spearman:.4f}")
         md_lines.append(f"- Δ: {r2.new_spearman - r2.old_spearman:.4f}")
+        # v1.4.44+: 分类指标
+        md_lines.append(f"- **旧F1**: {r2.old_f1:.3f} → **新F1**: {r2.new_f1:.3f} (Δ {r2.new_f1 - r2.old_f1:+.3f})")
+        md_lines.append(f"- **旧P@k**: {r2.old_p_at_k:.3f} → **新P@k**: {r2.new_p_at_k:.3f} (Δ {r2.new_p_at_k - r2.old_p_at_k:+.3f})")
         w_min = PersonaDistributionFitter.W_MIN
         md_lines.append(f"- 多样性下限 w_min = 1/(2×30) ≈ {w_min:.6f}")
         md_lines.append(
@@ -1329,6 +1427,9 @@ def run_all_loops(
         md_lines.append("### 三大引擎")
         md_lines.append(f"- 旧Spearman: {r3.old_engine_spearman:.4f}")
         md_lines.append(f"- 新Spearman: {r3.new_engine_spearman:.4f}")
+        # v1.4.44+: 分类指标
+        md_lines.append(f"- **旧F1**: {r3.old_engine_f1:.3f} → **新F1**: {r3.new_engine_f1:.3f} (Δ {r3.new_engine_f1 - r3.old_engine_f1:+.3f})")
+        md_lines.append(f"- **旧P@k**: {r3.old_engine_p_at_k:.3f} → **新P@k**: {r3.new_engine_p_at_k:.3f} (Δ {r3.new_engine_p_at_k - r3.old_engine_p_at_k:+.3f})")
         md_lines.append("")
         md_lines.append("| 引擎 | ρ(销量) | 权重 |")
         md_lines.append("|------|---------|------|")
@@ -1341,6 +1442,9 @@ def run_all_loops(
         md_lines.append("### 双渠道")
         md_lines.append(f"- 旧Spearman: {r3.old_channel_spearman:.4f}")
         md_lines.append(f"- 新Spearman: {r3.new_channel_spearman:.4f}")
+        # v1.4.44+: 分类指标
+        md_lines.append(f"- **旧F1**: {r3.old_chan_f1:.3f} → **新F1**: {r3.new_chan_f1:.3f} (Δ {r3.new_chan_f1 - r3.old_chan_f1:+.3f})")
+        md_lines.append(f"- **旧P@k**: {r3.old_chan_p_at_k:.3f} → **新P@k**: {r3.new_chan_p_at_k:.3f} (Δ {r3.new_chan_p_at_k - r3.old_chan_p_at_k:+.3f})")
         md_lines.append("")
         md_lines.append("| 渠道 | ρ(销量) | 权重 |")
         md_lines.append("|------|---------|------|")
@@ -1433,6 +1537,49 @@ def run_all_loops(
         else:
             md_lines.append("（无）")
         md_lines.append("")
+
+        # v1.4.44+: PatternMiner 章节
+        md_lines.append("## 🧠 模式提炼（PatternMiner · v1.4.44+）")
+        md_lines.append("")
+        if pattern_result is None:
+            md_lines.append("> PatternMiner 未执行（ImportError/异常/样本不足）。")
+            md_lines.append("")
+        elif pattern_result.n_samples_total == 0:
+            md_lines.append("> 有效样本不足，未提炼出规则。建议增加带真实销量的款式。")
+            md_lines.append("")
+        else:
+            md_lines.append(f"- **有效样本**: {pattern_result.n_samples_total}")
+            md_lines.append(f"- **Decision Tree 准确率**: {pattern_result.tree_accuracy:.1%}")
+            top_feats = sorted(pattern_result.feature_importance.items(), key=lambda x: -x[1])[:5]
+            if top_feats:
+                md_lines.append(f"- **关键特征 Top 5**: " + " / ".join(f"`{k}`(v={v:.3f})" for k, v in top_feats))
+            md_lines.append(f"- **规则总数**: {len(pattern_result.rules)}（S={len(pattern_result.s_rules)}, P={len(pattern_result.p_rules)}）")
+            md_lines.append("")
+
+            if pattern_result.s_rules:
+                md_lines.append("### 🏆 S款 爆款基因（top 3 rules）")
+                md_lines.append("")
+                for r in pattern_result.s_rules[:3]:
+                    md_lines.append(f"- {r.to_text()}")
+                md_lines.append("")
+
+            if pattern_result.p_rules:
+                md_lines.append("### ⚠️ P款 避坑指南（top 3 rules）")
+                md_lines.append("")
+                for r in pattern_result.p_rules[:3]:
+                    md_lines.append(f"- {r.to_text()}")
+                md_lines.append("")
+
+            if pattern_yaml_path:
+                md_lines.append(f"- **规则 YAML**: `{pattern_yaml_path}`")
+            if pattern_md_path:
+                md_lines.append(f"- **完整 Markdown 报告**: `{pattern_md_path}`")
+            md_lines.append("")
+            md_lines.append(
+                "> 💡 这些规则会自动注入到下次 Persona Voting 的 LLM prompt 中做 few-shot，"
+                "让新款式评分参考历史爆款/败款的特征组合。"
+            )
+            md_lines.append("")
 
         md_lines.append("## 产出文件")
         md_lines.append("")

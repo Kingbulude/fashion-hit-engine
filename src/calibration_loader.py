@@ -51,6 +51,9 @@ class CalibrationResult:
         self.feature_biases: dict[str, float] | None = None
         self.loaded_files: list[str] = []
         self.spearman_gains: dict[str, float] = {}
+        # v1.4.44+: 分类增益 + PatternMiner 路径
+        self.classification_gains: dict[str, dict[str, float]] = {}
+        self.pattern_yaml_path: str | None = None   # calibrated_dir/memory/*_patterns.yaml
 
     def __repr__(self) -> str:
         parts = []
@@ -64,6 +67,8 @@ class CalibrationResult:
         if self.feature_biases:
             non_one = sum(1 for v in self.feature_biases.values() if abs(v - 1.0) > 0.01)
             parts.append(f"biases({non_one}/10有调整)")
+        if self.pattern_yaml_path:
+            parts.append(f"pattern={Path(self.pattern_yaml_path).name}")
         if not parts:
             return "CalibrationResult(empty)"
         return "CalibrationResult(" + ", ".join(parts) + ")"
@@ -173,10 +178,61 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
         except Exception as e:
             log.warning("加载 loop1_vlm_feature_biases.yaml 失败: %s", e)
 
+    # ===== v1.4.44+: 分类增益（从各 loop YAML 的 classification 字段提取）=====
+    for loop_name, yaml_name in [
+        ("loop1_vlm", "loop1_vlm_feature_biases.yaml"),
+        ("loop2_persona", "loop2_persona_distribution_weights.yaml"),
+    ]:
+        p = calibrated_dir / yaml_name
+        if p.exists():
+            try:
+                data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                cls = data.get("classification") or {}
+                if cls:
+                    result.classification_gains[loop_name] = {
+                        "f1_delta": float(cls.get("delta_f1", 0.0)),
+                        "p_at_k_delta": float(cls.get("delta_p_at_k", 0.0)),
+                    }
+            except Exception as e:
+                log.debug("读取 %s 分类增益失败: %s", yaml_name, e)
+
+    # Loop3 分类增益（嵌套在 engine/channel 里）
+    l3 = calibrated_dir / "loop3_ensemble_weights.yaml"
+    if l3.exists():
+        try:
+            data = yaml.safe_load(l3.read_text(encoding="utf-8")) or {}
+            for sub in ("engine", "channel"):
+                cls = (data.get(sub) or {}).get("classification") or {}
+                if cls:
+                    key = f"loop3_{sub}"
+                    result.classification_gains[key] = {
+                        "f1_delta": float(cls.get("delta_f1", 0.0)),
+                        "p_at_k_delta": float(cls.get("delta_p_at_k", 0.0)),
+                    }
+        except Exception as e:
+            log.debug("读取 loop3 分类增益失败: %s", e)
+
+    # ===== v1.4.44+: PatternMiner YAML（calibrated_dir/memory/ 下最新的）=====
+    memory_dir = calibrated_dir / "memory"
+    if memory_dir.is_dir():
+        yamls = sorted(
+            memory_dir.glob("*_patterns.yaml"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if yamls:
+            result.pattern_yaml_path = str(yamls[0])
+            result.loaded_files.append(yamls[0].name)
+            log.info("🧠 PatternMiner YAML 已发现: %s", yamls[0].name)
+
     if result.loaded_files:
         log.info("📥 共加载 %d 个校准产物: %s",
                  len(result.loaded_files), result.loaded_files)
         log.info("📈 Spearman 增益: %s", result.spearman_gains)
+        if result.classification_gains:
+            log.info("🎯 分类增益(F1/P@k Δ): %s", result.classification_gains)
+        if result.pattern_yaml_path:
+            log.info("🧠 PatternMiner: %s", result.pattern_yaml_path)
     else:
         log.info("calibrated 目录没有有效产物，使用默认权重")
 

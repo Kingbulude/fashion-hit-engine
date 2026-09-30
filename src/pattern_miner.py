@@ -66,7 +66,7 @@ class PatternRule:
 
 @dataclass
 class PatternMineResult:
-    rules: list[PatternRule]
+    rules: list[PatternRule] = field(default_factory=list)
     s_rules: list[PatternRule] = field(default_factory=list)
     p_rules: list[PatternRule] = field(default_factory=list)
     n_samples_total: int = 0
