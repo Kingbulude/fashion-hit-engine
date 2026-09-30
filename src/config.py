@@ -133,8 +133,9 @@ def _parse_decision_structure(raw: dict[str, Any]) -> BrandDecisionStructure:
 def load_brand_profile(brand_id: str) -> BrandConfig:
     """按品牌ID读取 brand_profiles/<id>/ 下的5yaml并组装BrandConfig
 
-    若 calibrated_dir 下存在 features_biases.yaml / personas_weights.yaml / engine_weights.yaml
-    则自动覆盖 BrandConfig 对应字段。
+    若 calibrated_dir 下存在 loop1_vlm_feature_biases.yaml / loop2_persona_distribution_weights.yaml /
+    loop3_ensemble_weights.yaml，则自动覆盖 BrandConfig 对应字段（3Loop 校准产物）。
+    同时兼容旧文件名 features_biases.yaml / personas_weights.yaml / engine_weights.yaml（v1.4.44 前）。
 
     若 brand_profiles/<id>/ 不存在，则回退到旧 config/ 目录的3yaml构造兼容结构。
     """
@@ -238,17 +239,44 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
     personas_weights = None
     engine_weights = None
 
-    fb_path = calibrated_dir / "features_biases.yaml"
+    # ===== v1.4.52+: 优先读 3Loop 新文件名，fallback 旧文件名 =====
+    # Loop1 → feature_biases (F01~F10 特征偏置)
+    fb_path = calibrated_dir / "loop1_vlm_feature_biases.yaml"
+    if not fb_path.exists():
+        fb_path = calibrated_dir / "features_biases.yaml"   # fallback v1.4.44 前
     if fb_path.exists():
-        features_biases = _load_yaml(fb_path)
+        fb_raw = _load_yaml(fb_path)
+        if isinstance(fb_raw, dict):
+            features_biases = fb_raw.get("feature_biases") or fb_raw
 
-    pw_path = calibrated_dir / "personas_weights.yaml"
+    # Loop2 → persona_weights (P01~P30 人设分布)
+    pw_path = calibrated_dir / "loop2_persona_distribution_weights.yaml"
+    if not pw_path.exists():
+        pw_path = calibrated_dir / "personas_weights.yaml"   # fallback v1.4.44 前
     if pw_path.exists():
-        personas_weights = _load_yaml(pw_path)
+        pw_raw = _load_yaml(pw_path)
+        if isinstance(pw_raw, dict):
+            personas_weights = pw_raw.get("persona_weights") or pw_raw
 
-    ew_path = calibrated_dir / "engine_weights.yaml"
+    # Loop3 → engine_weights (四引擎权重)
+    ew_path = calibrated_dir / "loop3_ensemble_weights.yaml"
+    if not ew_path.exists():
+        ew_path = calibrated_dir / "engine_weights.yaml"   # fallback v1.4.44 前
     if ew_path.exists():
-        engine_weights = _load_yaml(ew_path)
+        ew_raw = _load_yaml(ew_path)
+        if isinstance(ew_raw, dict):
+            eng = ew_raw.get("engine") or {}
+            w = eng.get("weights") or ew_raw.get("weights")
+            if w:
+                # Loop3 YAML: {persona_score, channel_score, price_value_score}
+                # BrandConfig.engine_weights: {persona_voting, channel_scoring, price_value}
+                engine_weights = {
+                    "persona_voting": float(w.get("persona_score", 0.35)),
+                    "channel_scoring": float(w.get("channel_score", 0.30)),
+                    "price_value": float(w.get("price_value_score", 0.35)),
+                }
+            else:
+                engine_weights = ew_raw
 
     return BrandConfig(
         brand_id=brand_id,
