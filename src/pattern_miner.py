@@ -217,7 +217,7 @@ def mine_patterns(
         return PatternMineResult()
 
     if df.empty:
-        log.warning("PatternMiner: 空 DataFrame")
+        log.info("PatternMiner: 空 DataFrame")
         return PatternMineResult()
 
     n = len(df)
@@ -230,7 +230,7 @@ def mine_patterns(
 
     all_cols = feature_cols + persona_cols
     if not all_cols:
-        log.warning("PatternMiner: 没有可用的特征列")
+        log.info("PatternMiner: 没有可用的特征列")
         return PatternMineResult()
 
     # --- 构造标签 ---
@@ -249,7 +249,7 @@ def mine_patterns(
     df_work["_label"] = grade_labels
     df_work = df_work.dropna()
     if len(df_work) < min_samples_leaf * 4:
-        log.warning(f"PatternMiner: 有效样本不足 ({len(df_work)} < {min_samples_leaf * 4})")
+        log.info(f"PatternMiner: 有效样本不足 ({len(df_work)} < {min_samples_leaf * 4})")
         return PatternMineResult()
 
     X = df_work[all_cols].values.astype(float)

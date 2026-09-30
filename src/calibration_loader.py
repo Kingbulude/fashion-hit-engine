@@ -76,6 +76,22 @@ class CalibrationResult:
         return "CalibrationResult(" + ", ".join(parts) + ")"
 
 
+def _resolve_yaml_path(calibrated_dir: Path, filename: str) -> Path | None:
+    """v1.4.51+: 优先从 calibrated_dir 根目录找，找不到 fallback 到 _pending/ 子目录。
+
+    run_all_loops(auto_apply=True)  → 产物在根目录（已批准生效）
+    run_all_loops(auto_apply=False) → 产物在 _pending/（待人工审核）
+    calibration_loader 两个都要能读到。
+    """
+    direct = calibrated_dir / filename
+    if direct.exists():
+        return direct
+    pending = calibrated_dir / "_pending" / filename
+    if pending.exists():
+        return pending
+    return None
+
+
 def load_calibration(calibrated_dir) -> CalibrationResult:
     """从 calibrated_dir 加载所有 3Loop 校准产物。"""
     result = CalibrationResult()
@@ -86,8 +102,12 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
         return result
 
     # ===== Loop3: engine weights + channel split =====
-    l3_path = calibrated_dir / "loop3_ensemble_weights.yaml"
-    if l3_path.exists():
+    l3_path = _resolve_yaml_path(calibrated_dir, "loop3_ensemble_weights.yaml")
+    if l3_path is None:
+        log.info("Loop3 YAML 不存在（根目录和 _pending/ 都没找到）")
+    else:
+        log.info("Loop3 YAML 路径: %s (%s)",
+                 l3_path, "待审核_pending" if "_pending" in str(l3_path) else "已应用")
         try:
             data = yaml.safe_load(l3_path.read_text(encoding="utf-8"))
             eng = (data.get("engine") or {}).get("weights") or {}
@@ -148,8 +168,8 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
             log.warning("加载 loop3_ensemble_weights.yaml 失败: %s", e)
 
     # ===== Loop2: persona 分布权重 =====
-    l2_path = calibrated_dir / "loop2_persona_distribution_weights.yaml"
-    if l2_path.exists():
+    l2_path = _resolve_yaml_path(calibrated_dir, "loop2_persona_distribution_weights.yaml")
+    if l2_path is not None:
         try:
             data = yaml.safe_load(l2_path.read_text(encoding="utf-8"))
             pw = data.get("persona_weights") or {}
@@ -172,8 +192,8 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
             log.warning("加载 loop2_persona_distribution_weights.yaml 失败: %s", e)
 
     # ===== Loop1: feature biases =====
-    l1_path = calibrated_dir / "loop1_vlm_feature_biases.yaml"
-    if l1_path.exists():
+    l1_path = _resolve_yaml_path(calibrated_dir, "loop1_vlm_feature_biases.yaml")
+    if l1_path is not None:
         try:
             data = yaml.safe_load(l1_path.read_text(encoding="utf-8"))
             biases = data.get("feature_biases") or {}
@@ -213,11 +233,10 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
             except Exception as e:
                 log.debug("读取 %s 分类增益失败: %s", yaml_name, e)
 
-    # Loop3 分类增益（嵌套在 engine/channel 里）
-    l3 = calibrated_dir / "loop3_ensemble_weights.yaml"
-    if l3.exists():
+    # Loop3 分类增益（复用上面已解析的 l3_path）
+    if l3_path is not None:
         try:
-            data = yaml.safe_load(l3.read_text(encoding="utf-8")) or {}
+            data = yaml.safe_load(l3_path.read_text(encoding="utf-8")) or {}
             for sub in ("engine", "channel"):
                 cls = (data.get(sub) or {}).get("classification") or {}
                 if cls:
