@@ -1,0 +1,20 @@
+residual_mean: 0.0
+residual_std: 0.27666443551086073
+system_bias_flag: NO_SIGNIFICANT_BIAS
+marketing_available: true
+attribution_summary:
+  资源错配：投放了仍不及预期: 2
+overperformers: []
+underperformers:
+- style_id: T251001
+  residual: -0.4444444444444444
+  was_pushed: true
+  y_true: 0.0
+  y_pred: 0.4444444444444444
+  attribution: 资源错配：投放了仍不及预期
+- style_id: T251006
+  residual: -0.4444444444444444
+  was_pushed: true
+  y_true: 0.5555555555555556
+  y_pred: 1.0
+  attribution: 资源错配：投放了仍不及预期

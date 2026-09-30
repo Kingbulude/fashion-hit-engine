@@ -108,7 +108,7 @@ html, body, [class*="css"] {
 
 /* ---------- Streamlit container overrides ---------- */
 .stApp { background: var(--bg); }
-.block-container { padding-top: 2.5rem; padding-bottom: 3rem; max-width: 1280px; }
+.block-container { padding-top: 2.5rem; padding-bottom: 3rem; max-width: none; }
 
 /* ================================================================
    Sidebar — 只做软美化，**绝对不碰 Streamlit 的默认布局**
@@ -720,6 +720,15 @@ if not available_brands:
 if "brand_id" not in st.session_state:
     st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
 
+# 品牌 selectbox 显示漂亮名（profile.yaml 的 brand_name）
+@st.cache_data(show_spinner=False, ttl=3600)
+def _brand_label(bid: str) -> str:
+    try:
+        bc = load_brand_profile(bid)
+        return f"{bc.brand_name}  ({bid})"
+    except Exception:
+        return bid
+
 # 加载 BrandConfig（贯穿整个会话共享）
 @st.cache_data(show_spinner=False, ttl=3600)
 def _cached_load_brand(_bid: str) -> BrandConfig:
@@ -749,13 +758,14 @@ st.sidebar.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 品牌切换 selectbox（保持功能）
+# 品牌切换 selectbox（显示 profile.yaml 里的品牌名 + 目录名）
 brand_id = st.sidebar.selectbox(
     "品牌",
     options=available_brands,
     index=available_brands.index(st.session_state.brand_id)
     if st.session_state.brand_id in available_brands else 0,
     label_visibility="collapsed",
+    format_func=_brand_label,
     help="每个品牌独立维护：30人设+BARS量表+品类价格带+S/A/P阈值+3Loop校准产物"
 )
 if brand_id != st.session_state.brand_id:
