@@ -1730,48 +1730,45 @@ def render_page_detail():
         unsafe_allow_html=True,
     )
 
-    left, right = st.columns([1, 1.3])
+    left, right = st.columns([1, 1.5])
     with left:
         st.subheader("📷 款式图片")
         image_paths = st.session_state.get("image_paths_map", {}).get(p.info.style_id, [])
         if image_paths:
-            tabs = st.tabs([f"图{i+1}" for i in range(len(image_paths))])
-            for tab, ipath in zip(tabs, image_paths):
-                try:
-                    tab.image(ipath, use_container_width=True, caption=Path(ipath).name)
-                except Exception:
-                    tab.caption(f"无法加载: {ipath}")
+            _thumbs = st.columns(min(len(image_paths), 3))
+            for i, ipath in enumerate(image_paths[:3]):
+                with _thumbs[i % 3]:
+                    try:
+                        st.image(ipath, width=150, caption=f"图{i+1}")
+                    except Exception:
+                        st.caption(f"无法加载")
+            if len(image_paths) > 3:
+                st.caption(f"（共 {len(image_paths)} 张，仅显示前 3 张）")
         else:
             st.caption("（无图片）")
 
-        # —— 优势 / 劣势（来自 GradeResult.strengths / weaknesses）——
-        st.subheader("🏆 优劣势速览")
+        # —— 优势 / 劣势（紧凑 inline，不展开就看到核心）——
+        st.markdown("**🏆 优劣势速览**")
         strength_items = g.strengths or []
         weakness_items = g.weaknesses or []
         if strength_items:
-            with st.expander(f"✅ 优势（{len(strength_items)}）", expanded=True):
-                for s in strength_items[:5]:
-                    st.markdown(f"- {s}")
-        else:
-            st.caption("（暂无突出优势）")
+            st.caption("✅ 优势：" + " · ".join(strength_items[:3]))
         if weakness_items:
-            with st.expander(f"⚠️ 劣势（{len(weakness_items)}）", expanded=True):
-                for w in weakness_items[:5]:
-                    st.markdown(f"- {w}")
-        else:
-            st.caption("（暂无明显劣势）")
+            st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:3]))
+        if not strength_items and not weakness_items:
+            st.caption("（暂无明显优劣势）")
 
     with right:
-        with st.expander("📝 基本信息", expanded=False):
-            st.write(f"品类：{p.info.category}   售价：¥{p.info.price:.0f}   季节：{p.info.season}")
-            st.write(f"FAB：{str(p.info.fab_description or '（无FAB描述）')[:300]}…")
+        st.expander("📝 基本信息", expanded=True).markdown(
+            f"**品类**：{p.info.category} ｜ **售价**：¥{p.info.price:.0f} ｜ **季节**：{p.info.season}"
+        )
 
         st.subheader("🎯 10特征BARS评分")
         feat_rows = []
         for key, f in p.features.features.items():
             feat_rows.append({"特征": f.name, "分数": f.score, "理由": f.reason or "（无）"})
         df_feat = pd.DataFrame(feat_rows).sort_values("分数")
-        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#a8b5c4", height=360)
+        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#a8b5c4", height=220)
 
         with st.expander("🔍 查看每个特征的 VLM 判断理由", expanded=False):
             for _, row in df_feat.iterrows():
