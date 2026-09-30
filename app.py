@@ -716,7 +716,7 @@ button[kind="icon"]:hover,
 </style>
 """, unsafe_allow_html=True)
 
-# --- 侧边栏顶部：莫兰迪品牌 Header ---
+# --- 侧边栏：品牌选择 & Header ---
 available_brands = list_available_brands()
 if "brand_id" not in st.session_state:
     st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
@@ -738,6 +738,16 @@ def _brand_label(bid: str) -> str:
 def _cached_load_brand(_bid: str) -> BrandConfig:
     return load_brand_profile(_bid)
 
+# 品牌变更 → 清空旧品牌绑定的缓存状态（在 Streamlit 更新 session_state 后、rerun 前触发）
+def _on_brand_change():
+    for k in ("preds", "df_input", "style_to_images", "progress_info",
+              "style_infos", "image_paths_map", "batch_name",
+              "selected_style_id"):
+        st.session_state.pop(k, None)
+
+# ===== Header 先渲染（视觉上在下拉框上方）=====
+# brand_cfg 从 session_state.brand_id 加载 —— 当用户改下拉时 Streamlit 先更新 session_state 再 rerun，
+# 所以 header 在下一次 rerun 一开始就拿到正确的品牌名，不存在中间态错位
 brand_cfg: BrandConfig = _cached_load_brand(st.session_state.brand_id)
 n_calibration: int = _count_calibration_rounds(brand_cfg)
 
@@ -762,23 +772,18 @@ st.sidebar.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 品牌切换 selectbox（显示 profile.yaml 里的品牌名 + 目录名）
+# ===== 品牌切换 selectbox（带 key="brand_id" → Streamlit 自动同步 session_state 再 rerun）=====
 brand_id = st.sidebar.selectbox(
     "品牌",
     options=available_brands,
-    index=available_brands.index(st.session_state.brand_id)
-    if st.session_state.brand_id in available_brands else 0,
-    label_visibility="collapsed",
+    key="brand_id",  # 关键：让 Streamlit 把 selectbox 值自动写回 session_state.brand_id
     format_func=_brand_label,
+    on_change=_on_brand_change,
+    label_visibility="collapsed",
     help="每个品牌独立维护：30人设+BARS量表+品类价格带+S/A/P阈值+3Loop校准产物"
 )
-if brand_id != st.session_state.brand_id:
-    st.session_state.brand_id = brand_id
-    for k in ("preds", "df_input", "style_to_images", "progress_info",
-              "style_infos", "image_paths_map", "batch_name",
-              "selected_style_id"):
-        st.session_state.pop(k, None)
-    st.rerun()
+# 注：不再需要手动 if brand_id != st.session_state.brand_id 比较，
+# 带 key 的 selectbox 已保证二者恒等；品牌变更由 on_change 回调 + 自动 rerun 完成
 
 st.sidebar.divider()
 
