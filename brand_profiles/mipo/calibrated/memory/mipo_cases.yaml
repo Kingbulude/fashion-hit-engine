@@ -1,0 +1,129 @@
+total_cases: 6
+grades:
+- A
+- A+
+- P
+- S
+cases:
+- target_grade: A
+  conditions:
+  - P11 <= 7.9
+  - P11 > 4.6
+  - P05 > 5.4
+  - P08 > 5.3
+  feature_cols:
+  - P11
+  - P11
+  - P05
+  - P08
+  thresholds:
+  - 7.875
+  - 4.565000057220459
+  - 5.4049999713897705
+  - 5.259999990463257
+  operators:
+  - <=
+  - '>'
+  - '>'
+  - '>'
+  confidence: 0.8889
+  coverage: 0.54
+  n_samples: 27
+  case_id: A-01
+- target_grade: A+
+  conditions:
+  - P11 > 7.9
+  - P13 <= 7.1
+  feature_cols:
+  - P11
+  - P13
+  thresholds:
+  - 7.875
+  - 7.079999923706055
+  operators:
+  - '>'
+  - <=
+  confidence: 1.0
+  coverage: 0.1
+  n_samples: 5
+  case_id: A+-01
+- target_grade: P
+  conditions:
+  - P11 <= 7.9
+  - P11 <= 4.6
+  feature_cols:
+  - P11
+  - P11
+  thresholds:
+  - 7.875
+  - 4.565000057220459
+  operators:
+  - <=
+  - <=
+  confidence: 1.0
+  coverage: 0.12
+  n_samples: 6
+  case_id: P-01
+- target_grade: P
+  conditions:
+  - P11 <= 7.9
+  - P11 > 4.6
+  - P05 <= 5.4
+  feature_cols:
+  - P11
+  - P11
+  - P05
+  thresholds:
+  - 7.875
+  - 4.565000057220459
+  - 5.4049999713897705
+  operators:
+  - <=
+  - '>'
+  - <=
+  confidence: 1.0
+  coverage: 0.06
+  n_samples: 3
+  case_id: P-02
+- target_grade: P
+  conditions:
+  - P11 <= 7.9
+  - P11 > 4.6
+  - P05 > 5.4
+  - P08 <= 5.3
+  feature_cols:
+  - P11
+  - P11
+  - P05
+  - P08
+  thresholds:
+  - 7.875
+  - 4.565000057220459
+  - 5.4049999713897705
+  - 5.259999990463257
+  operators:
+  - <=
+  - '>'
+  - '>'
+  - <=
+  confidence: 0.75
+  coverage: 0.08
+  n_samples: 4
+  case_id: P-03
+- target_grade: S
+  conditions:
+  - P11 > 7.9
+  - P13 > 7.1
+  feature_cols:
+  - P11
+  - P13
+  thresholds:
+  - 7.875
+  - 7.079999923706055
+  operators:
+  - '>'
+  - '>'
+  confidence: 0.8
+  coverage: 0.1
+  n_samples: 5
+  case_id: S-01

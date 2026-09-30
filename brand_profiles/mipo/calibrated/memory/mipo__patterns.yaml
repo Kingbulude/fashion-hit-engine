@@ -1,0 +1,169 @@
+n_samples: 50
+tree_accuracy: 0.9
+season: ''
+feature_importance:
+  P05: 0.1654
+  P08: 0.1399
+  P11: 0.5632
+  P13: 0.1315
+s_rules:
+- target_grade: S
+  conditions: &id005
+  - P11 > 7.9
+  - P13 > 7.1
+  feature_cols: &id006
+  - P11
+  - P13
+  thresholds: &id007
+  - 7.875
+  - 7.079999923706055
+  operators: &id008
+  - '>'
+  - '>'
+  confidence: 0.8
+  coverage: 0.1
+  n_samples: 5
+  case_id: S-01
+p_rules:
+- target_grade: P
+  conditions: &id001
+  - P11 <= 7.9
+  - P11 <= 4.6
+  feature_cols: &id002
+  - P11
+  - P11
+  thresholds: &id003
+  - 7.875
+  - 4.565000057220459
+  operators: &id004
+  - <=
+  - <=
+  confidence: 1.0
+  coverage: 0.12
+  n_samples: 6
+  case_id: P-01
+- target_grade: P
+  conditions: &id009
+  - P11 <= 7.9
+  - P11 > 4.6
+  - P05 <= 5.4
+  feature_cols: &id010
+  - P11
+  - P11
+  - P05
+  thresholds: &id011
+  - 7.875
+  - 4.565000057220459
+  - 5.4049999713897705
+  operators: &id012
+  - <=
+  - '>'
+  - <=
+  confidence: 1.0
+  coverage: 0.06
+  n_samples: 3
+  case_id: P-02
+- target_grade: P
+  conditions: &id013
+  - P11 <= 7.9
+  - P11 > 4.6
+  - P05 > 5.4
+  - P08 <= 5.3
+  feature_cols: &id014
+  - P11
+  - P11
+  - P05
+  - P08
+  thresholds: &id015
+  - 7.875
+  - 4.565000057220459
+  - 5.4049999713897705
+  - 5.259999990463257
+  operators: &id016
+  - <=
+  - '>'
+  - '>'
+  - <=
+  confidence: 0.75
+  coverage: 0.08
+  n_samples: 4
+  case_id: P-03
+all_rules:
+- target_grade: A
+  conditions:
+  - P11 <= 7.9
+  - P11 > 4.6
+  - P05 > 5.4
+  - P08 > 5.3
+  feature_cols:
+  - P11
+  - P11
+  - P05
+  - P08
+  thresholds:
+  - 7.875
+  - 4.565000057220459
+  - 5.4049999713897705
+  - 5.259999990463257
+  operators:
+  - <=
+  - '>'
+  - '>'
+  - '>'
+  confidence: 0.8889
+  coverage: 0.54
+  n_samples: 27
+  case_id: A-01
+- target_grade: P
+  conditions: *id001
+  feature_cols: *id002
+  thresholds: *id003
+  operators: *id004
+  confidence: 1.0
+  coverage: 0.12
+  n_samples: 6
+  case_id: P-01
+- target_grade: A+
+  conditions:
+  - P11 > 7.9
+  - P13 <= 7.1
+  feature_cols:
+  - P11
+  - P13
+  thresholds:
+  - 7.875
+  - 7.079999923706055
+  operators:
+  - '>'
+  - <=
+  confidence: 1.0
+  coverage: 0.1
+  n_samples: 5
+  case_id: A+-01
+- target_grade: S
+  conditions: *id005
+  feature_cols: *id006
+  thresholds: *id007
+  operators: *id008
+  confidence: 0.8
+  coverage: 0.1
+  n_samples: 5
+  case_id: S-01
+- target_grade: P
+  conditions: *id009
+  feature_cols: *id010
+  thresholds: *id011
+  operators: *id012
+  confidence: 1.0
+  coverage: 0.06
+  n_samples: 3
+  case_id: P-02
+- target_grade: P
+  conditions: *id013
+  feature_cols: *id014
+  thresholds: *id015
+  operators: *id016
+  confidence: 0.75
+  coverage: 0.08
+  n_samples: 4
+  case_id: P-03
