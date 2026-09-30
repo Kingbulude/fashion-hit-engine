@@ -10,6 +10,7 @@ Streamlit Web应用入口
 """
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -22,6 +23,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from PIL import Image
 
 # ========== 让直接 streamlit run app.py 能 import src/ 模块 ==========
 ROOT = Path(__file__).resolve().parent
@@ -1730,7 +1732,43 @@ def render_page_detail():
         unsafe_allow_html=True,
     )
 
-    left, right = st.columns([1, 1.5])
+    # ===== 统一裁剪缩略图的 CSS（object-fit: cover 填满 160×200）=====
+    st.markdown("""
+    <style>
+    .thumb-wrap { display:flex; flex-direction:column; align-items:center; gap:4px; }
+    .thumb-box { width:160px; height:200px; overflow:hidden; border-radius:6px;
+                 display:flex; align-items:center; justify-content:center;
+                 background:#f5f2ec; }
+    .thumb-box img { width:100%; height:100%; object-fit:cover; }
+    .thumb-caption { font-size:12px; color:#8a857d; }
+    .info-kv { display:flex; gap:24px; flex-wrap:wrap; margin:4px 0 8px; }
+    .info-kv div { font-size:13px; }
+    .info-kv b { color:#8699ab; font-weight:500; margin-right:4px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ===== 上方：统一规格图片 + 基本信息（并排）=====
+    def _thumb_b64(ipath: str, size=(160, 200)) -> str:
+        """PIL 中心裁剪 + 缩放到统一规格 → base64 data URI（绕开 file:// 安全限制）"""
+        try:
+            img = Image.open(ipath).convert("RGB")
+            w, h = img.size
+            tw, th = size
+            ratio = tw / th
+            if w / h > ratio:
+                nw = int(h * ratio); left = (w - nw) // 2
+                img = img.crop((left, 0, left + nw, h))
+            else:
+                nh = int(w / ratio); top = (h - nh) // 2
+                img = img.crop((0, top, w, top + nh))
+            img = img.resize(size, Image.LANCZOS)
+            buf = io.BytesIO(); img.save(buf, format="JPEG", quality=82)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            return f'<img src="data:image/jpeg;base64,{b64}" />'
+        except Exception:
+            return ""
+
+    left, right = st.columns([1.1, 1.4])
     with left:
         st.subheader("📷 款式图片")
         image_paths = st.session_state.get("image_paths_map", {}).get(p.info.style_id, [])
@@ -1738,87 +1776,97 @@ def render_page_detail():
             _thumbs = st.columns(min(len(image_paths), 3))
             for i, ipath in enumerate(image_paths[:3]):
                 with _thumbs[i % 3]:
-                    try:
-                        st.image(ipath, width=150, caption=f"图{i+1}")
-                    except Exception:
-                        st.caption(f"无法加载")
+                    _img = _thumb_b64(str(ipath))
+                    if _img:
+                        st.markdown(
+                            f'<div class="thumb-wrap">'
+                            f'<div class="thumb-box">{_img}</div>'
+                            f'<div class="thumb-caption">图 {i+1}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.caption(f"无法加载图 {i+1}")
             if len(image_paths) > 3:
                 st.caption(f"（共 {len(image_paths)} 张，仅显示前 3 张）")
         else:
             st.caption("（无图片）")
 
-        # —— 优势 / 劣势（紧凑 inline，不展开就看到核心）——
-        st.markdown("**🏆 优劣势速览**")
+        # —— 优势 / 劣势（图片下方 inline）——
         strength_items = g.strengths or []
         weakness_items = g.weaknesses or []
-        if strength_items:
-            st.caption("✅ 优势：" + " · ".join(strength_items[:3]))
-        if weakness_items:
-            st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:3]))
-        if not strength_items and not weakness_items:
-            st.caption("（暂无明显优劣势）")
+        if strength_items or weakness_items:
+            st.markdown("**🏆 优劣势速览**")
+            if strength_items:
+                st.caption("✅ 优势：" + " · ".join(strength_items[:4]))
+            if weakness_items:
+                st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:4]))
 
     with right:
-        st.expander("📝 基本信息", expanded=True).markdown(
-            f"**品类**：{p.info.category} ｜ **售价**：¥{p.info.price:.0f} ｜ **季节**：{p.info.season}"
-        )
+        # —— 基本信息（补全所有可用字段）——
+        st.markdown("**📝 基本信息**")
+        info_items = [
+            ("款号", p.info.style_id),
+            ("品类", p.info.category or "—"),
+            ("售价", f"¥{p.info.price:.0f}" if p.info.price else "—"),
+            ("季节", p.info.season or "—"),
+            ("年份", p.info.year or "—"),
+        ]
+        kv_html = '<div class="info-kv">'
+        for k, v in info_items:
+            kv_html += f"<div><b>{k}</b>{v}</div>"
+        kv_html += "</div>"
+        st.markdown(kv_html, unsafe_allow_html=True)
+        if p.info.fab_description:
+            st.caption(f"**FAB**：{p.info.fab_description}")
+        st.divider()
 
+        # —— 10 特征 BARS 评分（右上）——
         st.subheader("🎯 10特征BARS评分")
         feat_rows = []
         for key, f in p.features.features.items():
             feat_rows.append({"特征": f.name, "分数": f.score, "理由": f.reason or "（无）"})
         df_feat = pd.DataFrame(feat_rows).sort_values("分数")
-        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#a8b5c4", height=220)
+        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#a8b5c4", height=260)
 
-        with st.expander("🔍 查看每个特征的 VLM 判断理由", expanded=False):
-            for _, row in df_feat.iterrows():
-                st.markdown(f"**{row['特征']} · {row['分数']:.1f}/10**")
-                st.caption(row['理由'])
-                st.divider()
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("👥 人设投票")
-            st.metric("加权总分", f"{p.voting.weighted_score:.2f}")
-            st.metric("支持率", f"{p.voting.support_rate:.0%}")
-            st.metric("反对率", f"{p.voting.opposition_rate:.0%}")
-            st.metric("分数标准差", f"{p.voting.score_std:.2f}")
-            with st.expander("支持/反对理由"):
-                if p.voting.top_buy_reasons:
-                    st.markdown("**支持理由 TOP：**")
-                    for r in p.voting.top_buy_reasons[:3]:
-                        st.write(f"  ✓ {r}")
-                if p.voting.top_oppose_reasons:
-                    st.markdown("**反对理由 TOP：**")
-                    for r in p.voting.top_oppose_reasons[:3]:
-                        st.write(f"  ✗ {r}")
-        with col2:
-            st.subheader("🛒 双渠道评分")
-            st.metric("自然流量分", f"{p.channels.natural_score:.1f}")
-            st.metric("直播带货分", f"{p.channels.live_score:.1f}")
-            st.metric("感知价值", f"{p.channels.perceived_value:.1f}")
-            st.metric("价值匹配",
-                      f"{p.channels.value_match:+.2f}（{p.channels.price_risk}）",
-                      delta=f"价格百分位 {p.channels.price_percentile:.0%}")
-
-        st.subheader("⚖️ 三大引擎综合")
+    # ===== 下方：四列指标（图片下方一屏看完）=====
+    c1, c2, c3, c4 = st.columns([1, 1, 1.2, 1.2])
+    with c1:
+        st.subheader("👥 人设投票")
+        st.metric("加权总分", f"{p.voting.weighted_score:.2f}")
+        st.metric("支持率", f"{p.voting.support_rate:.0%}")
+        st.metric("反对率", f"{p.voting.opposition_rate:.0%}")
+    with c2:
+        st.subheader("🛒 双渠道")
+        st.metric("自然分", f"{p.channels.natural_score:.1f}")
+        st.metric("直播分", f"{p.channels.live_score:.1f}")
+        st.metric("感知价值", f"{p.channels.perceived_value:.1f}")
+    with c3:
+        st.subheader("⚖️ 三引擎综合")
         engine_df = pd.DataFrame({
-            "引擎": ["人设投票", "双渠道评分(自然)", "双渠道评分(直播)", "价格价值"],
+            "引擎": ["人设", "自然", "直播", "价格"],
             "得分": [p.voting.weighted_score, p.channels.natural_score,
                      p.channels.live_score, p.channels.perceived_value],
         })
-        st.bar_chart(engine_df, x="引擎", y="得分", color="#9fb893", height=250, use_container_width=True)
+        st.bar_chart(engine_df, x="引擎", y="得分", color="#9fb893", height=160, use_container_width=True)
+        st.caption(f"价格风险：{p.channels.price_risk} ｜ 百分位 {p.channels.price_percentile:.0%}")
+    with c4:
+        st.subheader("💡 洞察")
+        st.info((g.consumer_insights or "暂无人设洞察")[:200])
 
-        # —— 消费者洞察 + 改款建议（来自 GradeResult）——
-        st.subheader("💡 消费者洞察")
-        st.info(g.consumer_insights or "暂无人设洞察")
+    # —— 改款建议 + 特征理由（底部）——
+    st.subheader("🔧 改款建议")
+    if g.improvements:
+        for i, s in enumerate(g.improvements[:5], 1):
+            st.write(f"{i}. {s}")
+    else:
+        st.caption("（暂无改款建议）")
 
-        st.subheader("🔧 改款建议")
-        if g.improvements:
-            for i, s in enumerate(g.improvements, 1):
-                st.write(f"{i}. {s}")
-        else:
-            st.caption("（暂无改款建议）")
+    with st.expander("🔍 查看每个特征的 VLM 判断理由", expanded=False):
+        for _, row in df_feat.iterrows():
+            st.markdown(f"**{row['特征']} · {row['分数']:.1f}/10**")
+            st.caption(row['理由'])
+            st.divider()
 
     st.divider()
     md_text = render_single_report_markdown(p)
