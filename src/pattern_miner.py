@@ -39,20 +39,25 @@ class PatternRule:
     confidence: float         # 置信度（命中规则的款里 target_grade 的比例）
     coverage: float           # 覆盖率（所有款里命中这条规则的比例）
     n_samples: int            # 样本量（规则覆盖的款数）
+    case_id: str = ""         # v1.4.47+: CBR 案例库唯一 ID，如 "S-01-2025Q3"
+    season: str = ""          # v1.4.47+: 案例所属季度/年份
 
     def to_text(self) -> str:
         """人类可读文本。"""
+        case_ref = f"#{self.case_id} " if self.case_id else ""
+        season_ref = f"（{self.season}）" if self.season else ""
         cond_str = " AND ".join(f"({c})" for c in self.conditions)
         return (
-            f"IF {cond_str} "
+            f"{case_ref}IF {cond_str} "
             f"→ 预测 {self.target_grade}款 "
+            f"{season_ref}"
             f"（置信度 {self.confidence:.0%}，"
             f"覆盖 {self.coverage:.0%}，"
             f"样本 {self.n_samples}款）"
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "target_grade": self.target_grade,
             "conditions": self.conditions,
             "feature_cols": self.feature_cols,
@@ -62,6 +67,11 @@ class PatternRule:
             "coverage": round(self.coverage, 4),
             "n_samples": self.n_samples,
         }
+        if self.case_id:
+            d["case_id"] = self.case_id
+        if self.season:
+            d["season"] = self.season
+        return d
 
 
 @dataclass
@@ -282,6 +292,16 @@ def mine_patterns(
     # 按置信度×覆盖率 排序
     rules.sort(key=lambda r: r.confidence * r.coverage, reverse=True)
 
+    # v1.4.47+: 分配 CBR case_id（S 款和 P 款分开编号）
+    _grade_idx: dict[str, int] = {}
+    for r in rules:
+        _grade_idx.setdefault(r.target_grade, 0)
+        _grade_idx[r.target_grade] += 1
+        idx = _grade_idx[r.target_grade]
+        suffix = f"-{season}" if season else ""
+        r.case_id = f"{r.target_grade}-{idx:02d}{suffix}"
+        r.season = season
+
     # 分开 S/P 规则，各保留 top_k
     s_rules = [r for r in rules if r.target_grade == "S"][:top_k_rules_per_grade]
     p_rules = [r for r in rules if r.target_grade == "P"][:top_k_rules_per_grade]
@@ -382,6 +402,176 @@ def _extract_rules_from_tree(
     return rules
 
 
+# ======================================================================
+# v1.4.47+: CBR 案例库（Case-Based Reasoning）
+# ======================================================================
+def _append_to_case_library(cases_yaml_path: Path, result: PatternMineResult) -> None:
+    """把新一季提炼的规则 append 到累积案例库。
+
+    案例库是跨季度累积的：
+      - 同 case_id 不重复（覆盖）
+      - 每条规则带 season 字段（来源季度）
+      - 输出 YAML 结构：
+          cases:
+            - case_id: S-01-2025Q3
+              target_grade: S
+              season: "2025Q3"
+              conditions: [...]
+              confidence: 0.82
+              ...
+    """
+    import yaml
+
+    existing: list[dict] = []
+    if cases_yaml_path.is_file():
+        try:
+            data = yaml.safe_load(cases_yaml_path.read_text(encoding="utf-8")) or {}
+            existing = list(data.get("cases", []))
+        except Exception as exc:
+            log.warning("读取旧案例库失败，从头开始: %s", exc)
+            existing = []
+
+    # 用 case_id 做去重 key（新季度的同 ID 规则覆盖旧的）
+    existing_by_id: dict[str, dict] = {c["case_id"]: c for c in existing if c.get("case_id")}
+
+    # 把新规则加进去
+    new_cases = [r.to_dict() for r in result.rules if r.case_id]
+    for c in new_cases:
+        existing_by_id[c["case_id"]] = c
+
+    # 按 grade → confidence 排序
+    all_cases = sorted(
+        existing_by_id.values(),
+        key=lambda c: (c.get("target_grade", ""), -c.get("confidence", 0)),
+    )
+
+    cases_yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    cases_yaml_path.write_text(
+        yaml.safe_dump(
+            {
+                "total_cases": len(all_cases),
+                "grades": sorted({c.get("target_grade", "") for c in all_cases}),
+                "cases": all_cases,
+            },
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def load_case_library(cases_yaml_path: str | Path) -> dict | None:
+    """读取累积 CBR 案例库。
+
+    Returns:
+        {"total_cases": N, "grades": [...], "cases": [case_dict, ...]} 或 None
+    """
+    import yaml as _yaml
+    p = Path(cases_yaml_path)
+    if not p.is_file():
+        return None
+    try:
+        return _yaml.safe_load(p.read_text(encoding="utf-8")) or None
+    except Exception:
+        return None
+
+
+def match_cbr_cases(
+    cases_yaml_path: str | Path,
+    style_features: dict[str, float],
+    top_k: int = 5,
+    min_score: float = 0.25,
+) -> list[dict[str, Any]]:
+    """在累积案例库中匹配最相关的历史案例。
+
+    与 match_rules_for_style 的区别：
+      - 读累积 cases.yaml（跨季度所有规则），不是单季度 patterns.yaml
+      - 返回的每条带 case_id，方便 prompt 引用
+      - 同样适用 season 衰减
+
+    Args:
+        cases_yaml_path: save_patterns 累积的 cases.yaml 路径
+        style_features: 这款的特征分 {"F06": 7.8, ...}
+        top_k: 最多返回几条案例
+        min_score: 最低综合分阈值
+
+    Returns:
+        匹配到的案例列表，每条带 case_id + match_score
+    """
+    lib = load_case_library(cases_yaml_path)
+    if not lib or not lib.get("cases"):
+        return []
+
+    # 用和 match_rules_for_style 一样的衰减逻辑
+    all_cases = lib["cases"]
+    # 从所有案例的 season 推断整体"新鲜度"基准
+    all_seasons = {c.get("season", "") for c in all_cases if c.get("season")}
+    # 衰减：用每条案例自己的 season
+    import re
+    _now_match = re.search(r"(\d{4})[-\s]?(Q[1-4])", "2026Q4")
+    now_qnum = int(_now_match.group(1)) * 4 + int(_now_match.group(2)[1])
+
+    scored: list[tuple[float, dict]] = []
+    for case in all_cases:
+        cols = case.get("feature_cols", [])
+        ops = case.get("operators", [])
+        threshs = case.get("thresholds", [])
+        if not cols or not ops or not threshs:
+            continue
+
+        matched = 0
+        strength_sum = 0.0
+        for col, op, thresh in zip(cols, ops, threshs):
+            val = style_features.get(col)
+            if val is None:
+                strength_sum += 0.5
+                continue
+            ok = (val <= thresh) if op == "<=" else (val > thresh)
+            if ok:
+                matched += 1
+            denom = max(abs(thresh), 1e-6)
+            strength_sum += min(abs(val - thresh) / denom, 1.0)
+
+        if matched == 0:
+            continue
+
+        n_total = len(cols)
+        coverage = matched / n_total
+        mean_strength = strength_sum / n_total
+
+        # 案例级 season 衰减
+        decay = 1.0
+        season_str = str(case.get("season", "") or "").upper()
+        _qm = re.search(r"(\d{4})[-\s]?(Q[1-4])", season_str)
+        if _qm:
+            qnum = int(_qm.group(1)) * 4 + int(_qm.group(2)[1])
+            q_gap = now_qnum - qnum
+            if q_gap <= 0:
+                decay = 1.0
+            elif q_gap == 1:
+                decay = 1.0
+            elif q_gap <= 2:
+                decay = 0.85
+            elif q_gap <= 4:
+                decay = 0.65
+            else:
+                decay = 0.45
+
+        conf = case.get("confidence", 0)
+        score = conf * coverage * mean_strength * decay
+        if score > min_score:
+            case_copy = dict(case)
+            case_copy["match_score"] = round(score, 4)
+            case_copy["matched_count"] = f"{matched}/{n_total}"
+            case_copy["mean_strength"] = round(mean_strength, 3)
+            case_copy["decay"] = round(decay, 2) if decay < 1.0 else 1.0
+            scored.append((score, case_copy))
+
+    scored.sort(key=lambda x: -x[0])
+    return [c for _, c in scored[:top_k]]
+
+
 def save_patterns(
     result: PatternMineResult,
     output_dir: str | Path,
@@ -419,7 +609,16 @@ def save_patterns(
     md_path.write_text(result.to_markdown(), encoding="utf-8")
 
     log.info("PatternMiner: 规则落盘 → %s + %s", yaml_path, md_path)
-    return [yaml_path, md_path]
+
+    # v1.4.47+: 累积到 CBR 案例库（cases.yaml）
+    cbr_path = out / f"{brand_name or 'brand'}_cases.yaml"
+    try:
+        _append_to_case_library(cbr_path, result)
+        log.info("📚 CBR 案例库已更新 → %s", cbr_path)
+    except Exception as exc:
+        log.warning("CBR 案例库累积失败（不阻塞）: %s", exc)
+
+    return [yaml_path, md_path, cbr_path]
 
 
 # ========== Few-shot 规则匹配（供 P1 注入 prompt 用）==========
@@ -575,6 +774,11 @@ def build_fewshot_context(
 ) -> str:
     """把匹配到的历史模式组装成 LLM prompt 可直接用的 few-shot 段落。
 
+    v1.4.47+ 改进（CBR 案例库优先）：
+      - 同目录存在 cases.yaml → 优先用 match_cbr_cases（跨季度累积案例库）
+      - 每条匹配结果带 case_id，prompt 引用 "#S-01-2025Q3"
+      - 无 cases.yaml → 回退到 match_rules_for_style（单季度 patterns.yaml）
+
     v1.4.45+ 改进：
       - 明确列出当前款式的特征值（LLM 才能对比历史模式）
       - 按 match_score 排序，只注入 top_k_rules
@@ -582,9 +786,25 @@ def build_fewshot_context(
 
     这是 P1 的核心函数 — persona voting prompt 调用时注入。
     """
-    matches = match_rules_for_style(
-        patterns_yaml_path, style_features, top_k=top_k_rules,
-    )
+    p = Path(patterns_yaml_path)
+
+    # v1.4.47+: CBR 案例库优先
+    cbr_cases_path = p.parent / (p.stem.replace("_patterns", "_cases") + ".yaml")
+    if not cbr_cases_path.is_file():
+        # 也尝试 brand_cases.yaml（save_patterns 里的命名）
+        for sibling in p.parent.glob("*_cases.yaml"):
+            cbr_cases_path = sibling
+            break
+
+    if cbr_cases_path.is_file():
+        matches = match_cbr_cases(
+            cbr_cases_path, style_features, top_k=top_k_rules,
+        )
+    else:
+        matches = match_rules_for_style(
+            patterns_yaml_path, style_features, top_k=top_k_rules,
+        )
+
     if not matches:
         return ""
 
@@ -597,7 +817,6 @@ def build_fewshot_context(
         feat_display_items: list[tuple[str, float, float | None]] = []
         for col, val in style_features.items():
             name = FEATURE_NAME_MAP.get(col, col)
-            # 检查是否有规则引用这个特征（有规则引用的才是"关键"特征）
             ref_thresh = None
             for m in matches:
                 for mcol, mthresh in zip(
@@ -610,7 +829,6 @@ def build_fewshot_context(
                     break
             feat_display_items.append((name, float(val), ref_thresh))
 
-        # 有关键特征优先排前
         feat_display_items.sort(key=lambda x: (x[2] is None), reverse=False)
         shown = feat_display_items[:top_k_features_in_prompt]
         feat_parts = [f"{name}={val:.1f}" for name, val, _ in shown]
@@ -626,17 +844,25 @@ def build_fewshot_context(
         score = m.get("match_score", conf * m.get("confidence", 0))
         conds = m.get("conditions", [])
         matched_count = m.get("matched_count", "")
+        # v1.4.47+: CBR 案例引用
+        case_id = m.get("case_id", "")
+        season = m.get("season", "")
+        case_ref = f"（📚 #{case_id}）" if case_id else ""
+        season_ref = f"（{season}）" if season else ""
+
         lines.append(
-            f"过去 {brand_suffix} 款中，符合以下特征组合的款式："
+            f"过去 {brand_suffix} 款中{case_ref}，符合以下特征组合的款式："
             f"（命中 {matched_count}，模式分 {score:.2f}）"
         )
         for c in conds:
             lines.append(f"  • {c}")
-        lines.append(f"  → 有 **{conf:.0%}** 概率成为 {target}款")
+        lines.append(
+            f"  {season_ref}→ 有 **{conf:.0%}** 概率成为 {target}款"
+        )
         lines.append("")
 
     lines.append(
         "请参考这些历史模式，对比当前款式的特征组合，"
-        "在评分和理由里体现你参考了哪些模式。"
+        "在评分和理由里体现你参考了哪些模式（引用案例编号如 #S-01）。"
     )
     return "\n".join(lines)
