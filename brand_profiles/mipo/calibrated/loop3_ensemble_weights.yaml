@@ -1,0 +1,35 @@
+applied: true
+engine:
+  old_spearman: 0.6848484848484848
+  new_spearman: 0.6848484848484848
+  classification:
+    old_f1: 0.2708333333333333
+    new_f1: 0.2708333333333333
+    delta_f1: 0.0
+    old_precision_at_k: 0.3333333333333333
+    new_precision_at_k: 0.3333333333333333
+    delta_p_at_k: 0.0
+  rho:
+    persona_score: 0.5151515151515151
+    channel_score: 0.12727272727272726
+    price_value_score: 0.6727272727272726
+  weights:
+    persona_score: 0.3333333333333333
+    channel_score: 0.3333333333333333
+    price_value_score: 0.3333333333333333
+channel:
+  old_spearman: 0.12727272727272726
+  new_spearman: 0.1515151515151515
+  classification:
+    old_f1: 0.2708333333333333
+    new_f1: 0.20833333333333331
+    delta_f1: -0.0625
+    old_precision_at_k: 0.0
+    new_precision_at_k: 0.0
+    delta_p_at_k: 0.0
+  rho:
+    natural_score: -0.0303030303030303
+    live_score: -0.05454545454545454
+  weights:
+    natural_score: 0.5235294117647059
+    live_score: 0.47647058823529415
