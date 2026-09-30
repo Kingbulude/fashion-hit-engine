@@ -1,0 +1,50 @@
+categories:
+  - id: jacket
+    name: 夹克外套
+    price_band: [199, 359]
+  - id: tshirt
+    name: T恤
+    price_band: [99, 199]
+  - id: shorts
+    name: 短裤
+    price_band: [79, 159]
+  - id: pants
+    name: 长裤
+    price_band: [119, 339]
+  - id: vest
+    name: 背心
+    price_band: [55, 89]
+  - id: down_jacket
+    name: 羽绒服
+    price_band: [400, 500]
+  - id: sun_protection
+    name: 防晒衣
+    price_band: [159, 199]
+  - id: shirt
+    name: 衬衫
+    price_band: [109, 199]
+  - id: hoodie
+    name: 卫衣
+    price_band: [99, 179]
+  - id: vest_padded
+    name: 马甲
+    price_band: [119, 259]
+category_aliases:
+  "外套": jacket
+  "冲锋衣": jacket
+  "冲锋外套": jacket
+  "三合一": jacket
+  "短袖": tshirt
+  "速干T": tshirt
+  "速干T恤": tshirt
+  "速干短裤": shorts
+  "机能裤": pants
+  "软壳裤": pants
+  "加绒裤": pants
+  "登山裤": pants
+  "加绒牛仔裤": pants
+  "羽绒": down_jacket
+  "三防羽绒": down_jacket
+  "冲锋羽绒服": down_jacket
+  "摇粒绒马甲": vest_padded
+  "校服神器": hoodie
