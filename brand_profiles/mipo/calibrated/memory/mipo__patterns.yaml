@@ -1,0 +1,148 @@
+n_samples: 50
+tree_accuracy: 0.68
+season: ''
+feature_importance:
+  F08: 0.1744
+  F10: 0.3459
+  P01: 0.0893
+  P06: 0.1279
+  P19: 0.0017
+  P23: 0.2608
+s_rules:
+- target_grade: S
+  conditions: &id001
+  - P23 <= 49.0
+  - 视觉冲击 <= 4.5
+  feature_cols: &id002
+  - P23
+  - F10
+  thresholds: &id003
+  - 49.04999923706055
+  - 4.5
+  operators: &id004
+  - <=
+  - <=
+  confidence: 0.6667
+  coverage: 0.06
+  n_samples: 3
+  case_id: S-01
+p_rules: []
+all_rules:
+- target_grade: A
+  conditions:
+  - P23 > 49.0
+  - 品质感 > 5.5
+  - 视觉冲击 > 4.5
+  - P06 <= 64.9
+  feature_cols:
+  - P23
+  - F08
+  - F10
+  - P06
+  thresholds:
+  - 49.04999923706055
+  - 5.5
+  - 4.5
+  - 64.94999694824219
+  operators:
+  - '>'
+  - '>'
+  - '>'
+  - <=
+  confidence: 0.75
+  coverage: 0.24
+  n_samples: 12
+  case_id: A-01
+- target_grade: A
+  conditions:
+  - P23 > 49.0
+  - 品质感 <= 5.5
+  feature_cols:
+  - P23
+  - F08
+  thresholds:
+  - 49.04999923706055
+  - 5.5
+  operators:
+  - '>'
+  - <=
+  confidence: 1.0
+  coverage: 0.14
+  n_samples: 7
+  case_id: A-02
+- target_grade: A+
+  conditions:
+  - P23 <= 49.0
+  - 视觉冲击 > 4.5
+  - P19 > 44.7
+  feature_cols:
+  - P23
+  - F10
+  - P19
+  thresholds:
+  - 49.04999923706055
+  - 4.5
+  - 44.69999885559082
+  operators:
+  - <=
+  - '>'
+  - '>'
+  confidence: 0.75
+  coverage: 0.08
+  n_samples: 4
+  case_id: A+-01
+- target_grade: A+
+  conditions:
+  - P23 > 49.0
+  - 品质感 > 5.5
+  - 视觉冲击 <= 4.5
+  - P01 <= 59.9
+  feature_cols:
+  - P23
+  - F08
+  - F10
+  - P01
+  thresholds:
+  - 49.04999923706055
+  - 5.5
+  - 4.5
+  - 59.89999961853027
+  operators:
+  - '>'
+  - '>'
+  - <=
+  - <=
+  confidence: 1.0
+  coverage: 0.06
+  n_samples: 3
+  case_id: A+-02
+- target_grade: S
+  conditions: *id001
+  feature_cols: *id002
+  thresholds: *id003
+  operators: *id004
+  confidence: 0.6667
+  coverage: 0.06
+  n_samples: 3
+  case_id: S-01
+- target_grade: A+
+  conditions:
+  - P23 <= 49.0
+  - 视觉冲击 > 4.5
+  - P19 <= 44.7
+  feature_cols:
+  - P23
+  - F10
+  - P19
+  thresholds:
+  - 49.04999923706055
+  - 4.5
+  - 44.69999885559082
+  operators:
+  - <=
+  - '>'
+  - <=
+  confidence: 0.6667
+  coverage: 0.06
+  n_samples: 3
+  case_id: A+-03

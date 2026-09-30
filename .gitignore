@@ -16,7 +16,7 @@ output/
 # 3Loop校准产物：根目录 YAML（loop1/2/3 权重 + cross_validation）进 git 版本化
 # 子目录（_pending/ 临时产物 + memory/ PatternMiner 产物）继续忽略
 brand_profiles/*/calibrated/_pending/
-brand_profiles/*/calibrated/memory/
+# memory/ 进 git（PatternMiner 经验规则 + CBR 案例库是校准核心）
 brand_profiles/*/calibrated/calibration_report.md
 calibration/
 !calibration/.gitkeep

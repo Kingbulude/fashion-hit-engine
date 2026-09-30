@@ -1,0 +1,132 @@
+total_cases: 6
+grades:
+- A
+- A+
+- S
+cases:
+- target_grade: A
+  conditions:
+  - P23 > 49.0
+  - 品质感 <= 5.5
+  feature_cols:
+  - P23
+  - F08
+  thresholds:
+  - 49.04999923706055
+  - 5.5
+  operators:
+  - '>'
+  - <=
+  confidence: 1.0
+  coverage: 0.14
+  n_samples: 7
+  case_id: A-02
+- target_grade: A
+  conditions:
+  - P23 > 49.0
+  - 品质感 > 5.5
+  - 视觉冲击 > 4.5
+  - P06 <= 64.9
+  feature_cols:
+  - P23
+  - F08
+  - F10
+  - P06
+  thresholds:
+  - 49.04999923706055
+  - 5.5
+  - 4.5
+  - 64.94999694824219
+  operators:
+  - '>'
+  - '>'
+  - '>'
+  - <=
+  confidence: 0.75
+  coverage: 0.24
+  n_samples: 12
+  case_id: A-01
+- target_grade: A+
+  conditions:
+  - P23 > 49.0
+  - 品质感 > 5.5
+  - 视觉冲击 <= 4.5
+  - P01 <= 59.9
+  feature_cols:
+  - P23
+  - F08
+  - F10
+  - P01
+  thresholds:
+  - 49.04999923706055
+  - 5.5
+  - 4.5
+  - 59.89999961853027
+  operators:
+  - '>'
+  - '>'
+  - <=
+  - <=
+  confidence: 1.0
+  coverage: 0.06
+  n_samples: 3
+  case_id: A+-02
+- target_grade: A+
+  conditions:
+  - P23 <= 49.0
+  - 视觉冲击 > 4.5
+  - P19 > 44.7
+  feature_cols:
+  - P23
+  - F10
+  - P19
+  thresholds:
+  - 49.04999923706055
+  - 4.5
+  - 44.69999885559082
+  operators:
+  - <=
+  - '>'
+  - '>'
+  confidence: 0.75
+  coverage: 0.08
+  n_samples: 4
+  case_id: A+-01
+- target_grade: A+
+  conditions:
+  - P23 <= 49.0
+  - 视觉冲击 > 4.5
+  - P19 <= 44.7
+  feature_cols:
+  - P23
+  - F10
+  - P19
+  thresholds:
+  - 49.04999923706055
+  - 4.5
+  - 44.69999885559082
+  operators:
+  - <=
+  - '>'
+  - <=
+  confidence: 0.6667
+  coverage: 0.06
+  n_samples: 3
+  case_id: A+-03
+- target_grade: S
+  conditions:
+  - P23 <= 49.0
+  - 视觉冲击 <= 4.5
+  feature_cols:
+  - P23
+  - F10
+  thresholds:
+  - 49.04999923706055
+  - 4.5
+  operators:
+  - <=
+  - <=
+  confidence: 0.6667
+  coverage: 0.06
+  n_samples: 3
+  case_id: S-01
