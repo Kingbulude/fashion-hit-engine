@@ -1190,8 +1190,8 @@ def render_page_upload():
     st.caption(
         "列参考：款式编号、版型/设计描述、售价 必填；"
         "面料成分、品类、尺码、颜色、上架季节可选；"
-        "可最后追加「真实销售结果」列供后续回测。"
         "（面料成分 VLM 能从版型/设计描述里识别，不需要专门一列）"
+        "<br>真实销量回填请在「📉 回测校准」页单独上传，内审分级可在批次总表手动填写。"
     )
     xlsx_file = st.file_uploader("拖放或选择 .xlsx / .csv", type=["xlsx", "csv"])
 
@@ -1322,38 +1322,13 @@ def render_page_upload():
                 style_infos: list[StyleInfo] = []
                 image_paths_map: dict[str, list[str]] = {}
 
-                # --- 用别名匹配找到可选的"真实销量/人工分级/售罄率/营销投放"列 ---
-                sales_col = find_aliased_column(list(df.columns), SALES_QTY_COL_ALIASES)
-                grade_col = find_aliased_column(list(df.columns), MANUAL_GRADE_COL_ALIASES)
-                st_col = find_aliased_column(list(df.columns), SELL_THROUGH_COL_ALIASES)
-                push_col = find_aliased_column(list(df.columns), MAIN_PUSH_COL_ALIASES)
-                live_col = find_aliased_column(list(df.columns), LIVE_STREAM_COL_ALIASES)
+                # 只匹配款号列（必填），其余回测字段（销量/内审分级/售罄率/主推/直播）
+                # 在「📉 回测校准」页单独上传，不在预测阶段解析
                 sid_col = find_aliased_column(list(df.columns), STYLE_ID_COL_ALIASES) or "款式编号"
                 if sid_col not in df.columns:
                     st.error(f"❌ 未找到款号列（支持：{' / '.join(STYLE_ID_COL_ALIASES)}），无法解析批次")
                     st.stop()
-                if sales_col:
-                    st.success(f"✅ 检测到销量列「{sales_col}」，将自动带入回测校准")
-                else:
-                    st.warning(
-                        f"⚠️ 未检测到销量列（支持别名：{' / '.join(SALES_QTY_COL_ALIASES[:4])}…）。"
-                        f"本批次只能跑预测，无法回测校准。"
-                    )
-                if grade_col:
-                    st.success(f"✅ 检测到人工分级列「{grade_col}」（仅作对照展示，不进校准）")
-                if st_col:
-                    st.success(f"✅ 检测到售罄率列「{st_col}」")
-                if push_col:
-                    st.success(f"✅ 检测到实际主推列「{push_col}」，将用于残差分离（款式 vs 投放）")
-                if live_col:
-                    st.success(f"✅ 检测到实际直播列「{live_col}」，将用于残差分离（款式 vs 投放）")
-                if not push_col and not live_col:
-                    st.info(
-                        "ℹ️ 未检测到营销投放列（是否主推/是否直播重点）。"
-                        "校准将无法区分「款式好」和「被推爆」，建议后续批次补上。"
-                    )
 
-                from src.types import _truthy_excel_value as _tv
                 for _, row in df.iterrows():
                     sid = str(row[sid_col])
                     cat_raw = row.get("品类")
@@ -1377,25 +1352,13 @@ def render_page_upload():
                     if color: fab_parts.append(f"颜色：{color}")
                     if season: fab_parts.append(f"季节：{season}")
                     fab_text = "\n".join(fab_parts) if fab_parts else ""
-                    # 可选的回测字段（如果 Excel 里存在就带上）
-                    sales = int(parse_sales_value(row[sales_col])) if sales_col else 0
-                    m_grade = str(row[grade_col]).strip() if grade_col and pd.notna(row.get(grade_col)) else ""
-                    if m_grade and m_grade not in ("S", "A+", "A", "P"):
-                        m_grade = ""  # 不是合法分级 → 丢弃
-                    st_pct = 0.0
-                    if st_col and pd.notna(row.get(st_col)):
-                        raw_st = str(row[st_col]).strip()
-                        if raw_st.endswith("%"):
-                            st_pct = safe_float(raw_st.rstrip("%"), 0.0) / 100.0
-                        else:
-                            st_pct = safe_float(raw_st, 0.0)
 
                     style_infos.append(StyleInfo(
                         style_id=sid, category=cat,
                         price=price, season=season, fab_description=fab_text,
-                        sales_qty=sales, manual_grade=m_grade, sell_through_pct=st_pct,
-                        is_main_push=_tv(row[push_col]) if push_col and pd.notna(row.get(push_col)) else False,
-                        is_live_stream=_tv(row[live_col]) if live_col and pd.notna(row.get(live_col)) else False,
+                        # 回测字段默认空值 — 在「📉 回测校准」页单独上传时填充
+                        sales_qty=0, manual_grade="", sell_through_pct=0.0,
+                        is_main_push=False, is_live_stream=False,
                     ))
                     imgs = style_to_images.get(sid, [])
                     image_paths_map[sid] = [str(p) for p in imgs]
