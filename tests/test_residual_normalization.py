@@ -144,6 +144,7 @@ def test_run_all_loops_residual_normalization_end_to_end():
         history_df=history_df,
         prediction_artifacts_dir=artifacts_dir,
         sales_col="sales",
+        auto_apply=True,  # 测试直接验证产物 → 直接生效
     )
 
     rd = result.residual

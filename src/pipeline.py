@@ -245,6 +245,7 @@ def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="mipo"):
                     history_df=history_df,
                     prediction_artifacts_dir=artifacts_dir,
                     sales_col=sales_col,
+                    auto_apply=True,  # v1 backtest 是用户主动入口 → 直接生效
                 )
                 log.info(
                     "✅ v2 3Loop 校准完成：写入 %d 个产物 → %s",
@@ -740,6 +741,7 @@ class PredictionPipeline:
                 history_df=history_df,
                 prediction_artifacts_dir=out_dir,
                 sales_col=sales_col,
+                auto_apply=True,  # run_backtest_calibration 是用户主动入口 → 直接生效
             )
             log.info(
                 "✅ 3Loop 校准完成：写入 %d 个产物文件 → %s",
