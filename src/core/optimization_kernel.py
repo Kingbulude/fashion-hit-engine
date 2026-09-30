@@ -500,12 +500,25 @@ class EnsembleWeightTuner:
     """对三大引擎（persona / channel / price_value）和双渠道
     （natural / live）分别计算 Spearman，权重 ∝ max(0.05, ρ+0.3)
     归一化。保护机制同前。
+
+    v1.4.49+: 如果 df 里有 grade_norm 列（从内审分级归一化来的 [0,100]），
+    自动作为第 4 个引擎。grade_norm 的 Spearman 通常在 0.7+，远高于
+    VLM 引擎的 0.1-0.2，会被自动赋予最大权重。
+    没有 grade_norm 的新款式预测阶段，用 3 个基础引擎 fallback。
     """
 
-    ENGINE_COLS = ["persona_score", "channel_score", "price_value_score"]
+    BASE_ENGINE_COLS = ["persona_score", "channel_score", "price_value_score"]
     CHANNEL_COLS = ["natural_score", "live_score"]
     FLOOR = 0.05
     SHIFT = 0.3
+
+    @classmethod
+    def _resolve_engine_cols(cls, df: pd.DataFrame) -> list[str]:
+        """v1.4.49+: 动态解析引擎列 — 有 grade_norm 就加进引擎列表"""
+        cols = list(cls.BASE_ENGINE_COLS)
+        if "grade_norm" in df.columns and df["grade_norm"].notna().sum() >= 3:
+            cols.append("grade_norm")
+        return cols
 
     @classmethod
     def tune(
@@ -517,6 +530,8 @@ class EnsembleWeightTuner:
         Args:
             df: 必须含 persona_score/channel_score/price_value_score
                 及 natural_score/live_score + 销量列
+                v1.4.49+: 可选 grade_norm（内审分级归一化 [0,100]），
+                有就当第 4 引擎 — 历史校准阶段用，预测阶段没有就跳过
         """
         try:
             from scipy.stats import spearmanr
@@ -526,20 +541,23 @@ class EnsembleWeightTuner:
             )
 
         try:
-            required = cls.ENGINE_COLS + cls.CHANNEL_COLS + [sales_col]
+            engine_cols = cls._resolve_engine_cols(df)
+            required = cls.BASE_ENGINE_COLS + cls.CHANNEL_COLS + [sales_col]
             missing = [c for c in required if c not in df.columns]
             if missing:
                 raise ValueError(f"df 缺少必需列: {missing}")
 
-            df_work = df[required].dropna().copy()
+            # 把动态引擎列也纳入 df_work（含可选的 grade_norm）
+            work_cols = list(set(engine_cols + cls.CHANNEL_COLS + [sales_col]))
+            df_work = df[work_cols].dropna(subset=cls.BASE_ENGINE_COLS + [sales_col]).copy()
             if len(df_work) < 3:
                 raise ValueError(f"样本量不足（{len(df_work)}<3）")
 
             y = df_work[sales_col].values
 
-            # --- 旧：三大引擎均匀权重 ---
+            # --- 旧：引擎均匀权重 ---
             engine_rho: dict[str, float] = {}
-            for col in cls.ENGINE_COLS:
+            for col in engine_cols:
                 try:
                     rho, _ = spearmanr(df_work[col].values, y)
                     rho = 0.0 if math.isnan(rho) else float(rho)
@@ -547,12 +565,17 @@ class EnsembleWeightTuner:
                     rho = 0.0
                 engine_rho[col] = rho
 
-            uniform_engine = {c: 1.0 / len(cls.ENGINE_COLS) for c in cls.ENGINE_COLS}
-            old_engine_score = (
-                df_work[cls.ENGINE_COLS[0]] * uniform_engine[cls.ENGINE_COLS[0]]
-                + df_work[cls.ENGINE_COLS[1]] * uniform_engine[cls.ENGINE_COLS[1]]
-                + df_work[cls.ENGINE_COLS[2]] * uniform_engine[cls.ENGINE_COLS[2]]
-            ).values
+            # v1.4.49+: grade_norm 自动加入引擎时记日志
+            if "grade_norm" in engine_cols:
+                log.info(
+                    "Loop3 引擎: grade_norm ρ=%.3f 加入引擎（共 %d 个，含内审分级）",
+                    engine_rho.get("grade_norm", 0.0), len(engine_cols),
+                )
+
+            uniform_engine = {c: 1.0 / len(engine_cols) for c in engine_cols}
+            old_engine_score = sum(
+                df_work[c].values * uniform_engine[c] for c in engine_cols
+            )
             try:
                 old_engine_sp, _ = spearmanr(old_engine_score, y)
                 old_engine_sp = 0.0 if math.isnan(old_engine_sp) else float(old_engine_sp)
@@ -560,15 +583,13 @@ class EnsembleWeightTuner:
                 old_engine_sp = 0.0
 
             # --- 新引擎权重 ∝ max(0.05, ρ+0.3) ---
-            raw_engine = {c: max(cls.FLOOR, engine_rho[c] + cls.SHIFT) for c in cls.ENGINE_COLS}
+            raw_engine = {c: max(cls.FLOOR, engine_rho[c] + cls.SHIFT) for c in engine_cols}
             tot = sum(raw_engine.values())
             new_engine_weights = {c: v / tot for c, v in raw_engine.items()}
 
-            new_engine_score = (
-                df_work[cls.ENGINE_COLS[0]] * new_engine_weights[cls.ENGINE_COLS[0]]
-                + df_work[cls.ENGINE_COLS[1]] * new_engine_weights[cls.ENGINE_COLS[1]]
-                + df_work[cls.ENGINE_COLS[2]] * new_engine_weights[cls.ENGINE_COLS[2]]
-            ).values
+            new_engine_score = sum(
+                df_work[c].values * new_engine_weights[c] for c in engine_cols
+            )
             try:
                 new_engine_sp, _ = spearmanr(new_engine_score, y)
                 new_engine_sp = 0.0 if math.isnan(new_engine_sp) else float(new_engine_sp)
@@ -666,7 +687,7 @@ class EnsembleWeightTuner:
             )
         except Exception as exc:
             log.exception("EnsembleWeightTuner 失败，降级均匀权重: %s", exc)
-            uniform_e = {c: 1.0 / len(cls.ENGINE_COLS) for c in cls.ENGINE_COLS}
+            uniform_e = {c: 1.0 / len(cls.BASE_ENGINE_COLS) for c in cls.BASE_ENGINE_COLS}
             uniform_c = {c: 1.0 / len(cls.CHANNEL_COLS) for c in cls.CHANNEL_COLS}
             return EnsembleTuneResult(
                 engine_weights=uniform_e,
@@ -675,7 +696,7 @@ class EnsembleWeightTuner:
                 new_engine_spearman=0.0,
                 old_channel_spearman=0.0,
                 new_channel_spearman=0.0,
-                engine_rho={c: 0.0 for c in cls.ENGINE_COLS},
+                engine_rho={c: 0.0 for c in cls.BASE_ENGINE_COLS},
                 channel_rho={c: 0.0 for c in cls.CHANNEL_COLS},
                 applied=False,
             )
@@ -1045,23 +1066,23 @@ def _engine_score_ensemble(
     channel_weights: dict[str, float],
 ) -> pd.Series:
     """用 Loop3 已校准权重，将三大引擎 + 渠道合并为单一预测分 y_pred，
-    用于残差分解。
+    用于残差分解。v1.4.49+ 支持 grade_norm 第 4 引擎。
     """
-    engine_cols = EnsembleWeightTuner.ENGINE_COLS
+    # v1.4.49+: 动态解析引擎列（有 grade_norm 就加）
+    engine_cols = EnsembleWeightTuner._resolve_engine_cols(df)
     channel_cols = EnsembleWeightTuner.CHANNEL_COLS
-    required = engine_cols + channel_cols
+    required = list(EnsembleWeightTuner.BASE_ENGINE_COLS) + channel_cols
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"残差分解缺少列: {missing}")
 
-    engine_part = (
-        df[engine_cols[0]] * engine_weights.get(engine_cols[0], 1 / 3)
-        + df[engine_cols[1]] * engine_weights.get(engine_cols[1], 1 / 3)
-        + df[engine_cols[2]] * engine_weights.get(engine_cols[2], 1 / 3)
+    engine_part = sum(
+        df[c] * engine_weights.get(c, 1.0 / max(len(engine_cols), 1))
+        for c in engine_cols if c in df.columns
     )
-    channel_part = (
-        df[channel_cols[0]] * channel_weights.get(channel_cols[0], 0.5)
-        + df[channel_cols[1]] * channel_weights.get(channel_cols[1], 0.5)
+    channel_part = sum(
+        df[c] * channel_weights.get(c, 1.0 / len(channel_cols))
+        for c in channel_cols
     )
     return 0.5 * engine_part + 0.5 * channel_part
 
@@ -1392,6 +1413,36 @@ def run_all_loops(
         calib_report_dir.mkdir(parents=True, exist_ok=True)
 
         output_files: list[Path] = []
+
+        # ---------- v1.4.49+: grade_norm 生成（内审分级 → [0,100]）----------
+        # 优先级: 已有 grade_norm > grade_num（原始整数）> 内审分级列（S/A+/A/P 字符串）
+        if "grade_norm" not in history_df.columns:
+            if "grade_num" in history_df.columns:
+                # 已有整数 grade_num（0/1/2/4），归一化到 [0,100]
+                history_df["grade_norm"] = history_df["grade_num"].fillna(0) / 4.0 * 100
+            else:
+                # 尝试从常见列名找内审分级
+                for col_name in ("内审分级", "grade", "final_grade", "expert_grade", "review_grade"):
+                    if col_name in history_df.columns:
+                        grade_val = history_df[col_name].astype(str).str.upper()
+                        grade_map = {"S": 4, "S款": 4, "S级": 4,
+                                     "A+": 3, "A+款": 3,
+                                     "A": 2, "A款": 2, "A级": 2,
+                                     "P": 0, "P款": 0, "P级": 0, "P-": 0,
+                                     "": 1}
+                        history_df["grade_num"] = grade_val.map(grade_map).fillna(1)
+                        history_df["grade_norm"] = history_df["grade_num"] / 4.0 * 100
+                        has_enough = history_df["grade_norm"].notna().sum() >= 3
+                        if has_enough:
+                            log.info(
+                                "v1.4.49: 从列 '%s' 解析内审分级 → grade_norm [%d/%d 非空]",
+                                col_name, history_df["grade_norm"].notna().sum(), len(history_df),
+                            )
+                        break
+                else:
+                    history_df["grade_norm"] = float("nan")  # 标记不存在，Loop3 自动跳过
+        else:
+            log.info("v1.4.49: history_df 已有 grade_norm，直接使用")
 
         # ---------- v1.4.48+: pre-Cross-validation — 决定 safe_mode ----------
         log.info("=== pre-Cross-validation: 判断是否需要 safe_mode ===")
@@ -1756,7 +1807,7 @@ def run_all_loops(
         md_lines.append("")
         md_lines.append("| 引擎 | ρ(销量) | 权重 |")
         md_lines.append("|------|---------|------|")
-        for col in EnsembleWeightTuner.ENGINE_COLS:
+        for col in r3.engine_weights.keys():
             md_lines.append(
                 f"| {col} | {r3.engine_rho.get(col, 0.0):.4f} "
                 f"| {r3.engine_weights.get(col, 0.0):.4f} |"
