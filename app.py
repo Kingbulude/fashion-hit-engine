@@ -1008,7 +1008,7 @@ if "style_to_images" not in st.session_state:  # 款号 -> list[图片路径]
 
 # ========== 面包屑组件（公共） ==========
 def render_breadcrumb(*, suffix: str | None = None) -> None:
-    parts = [f"{brand_cfg.brand_name}"]
+    parts = []
     if st.session_state.batch_name:
         parts.append(f"{st.session_state.batch_name}")
     if suffix:
@@ -1164,7 +1164,7 @@ def render_page_upload():
 <div class="hero">
   <div>
     <h1>上传评估批次</h1>
-    <div class="hero-sub">{brand_cfg.brand_name} · 准备一批新款，让 VLM + 30 人设给出预测</div>
+    <div class="hero-sub">准备一批新款，让 VLM + 30 人设给出预测</div>
   </div>
   <div style="text-align:right;">
     <div style="font-family:'Fraunces',serif;font-size:1.5rem;font-weight:600;color:#8699ab;">{n_calibration or 0}</div>
