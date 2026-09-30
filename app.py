@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import time
 import zipfile
@@ -718,14 +719,17 @@ available_brands = list_available_brands()
 if "brand_id" not in st.session_state:
     st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
 
-# 品牌 selectbox 只显示漂亮名（不带括号）
+# 品牌 selectbox 只显示漂亮名（自动去除括号内容）
 @st.cache_data(show_spinner=False, ttl=3600)
 def _brand_label(bid: str) -> str:
     try:
         bc = load_brand_profile(bid)
-        return bc.brand_name
+        name = bc.brand_name
     except Exception:
-        return bid
+        name = bid
+    # 去除英文括号 (...) 和中文括号 （...） 及其中内容
+    name = re.sub(r'[（(][^)）]*[)）]', '', name).strip()
+    return name
 
 # 加载 BrandConfig（贯穿整个会话共享）
 @st.cache_data(show_spinner=False, ttl=3600)
