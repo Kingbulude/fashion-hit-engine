@@ -36,6 +36,10 @@ class VLMFeatureCalibrationResult:
     new_f1: float = 0.0
     old_p_at_k: float = 0.0
     new_p_at_k: float = 0.0
+    # v1.4.48+: 稳定性过滤 + safe mode
+    safe_mode_used: bool = False
+    feature_stability: dict[str, float] = field(default_factory=dict)   # 每特征稳定分
+    unstable_features: list[str] = field(default_factory=list)          # 被判不稳定的特征（bias=1.0）
 
 
 class VLMFeatureCalibrator:
@@ -53,11 +57,21 @@ class VLMFeatureCalibrator:
         cls,
         df: pd.DataFrame,
         sales_col: str = "sales",
+        *,
+        safe_mode: bool = False,
+        stability_threshold: float = 0.04,
     ) -> VLMFeatureCalibrationResult:
         """
         Args:
             df: DataFrame，必须包含 10 列 F01..F10 + 销量列
             sales_col: 销量列名（默认 "sales"）
+            safe_mode: v1.4.48+ — True 时启用稳定性过滤：
+                1) 先按时间序切 train(前80%)/test(后20%)
+                2) 每特征算 train_ρ 和 test_ρ
+                3) 稳定性 = |train_ρ × test_ρ|，或 train/test 反号
+                4) 不稳定特征 bias 强制 = 1.0
+                5) bias 范围收窄到 [0.85, 1.15]（更保守）
+            stability_threshold: v1.4.48+ — 稳定分低于此阈值视为不稳定
         Returns:
             VLMFeatureCalibrationResult，含偏置系数 & 是否生效
         """
@@ -96,13 +110,49 @@ class VLMFeatureCalibrator:
                 old_rhos.append(rho)
             old_avg = statistics.mean(old_rhos) if old_rhos else 0.0
 
-            # --- 偏置：相对全局均值，ρ_i / mean(ρ)，clamp 到 [0.7, 1.3] ---
+            # === v1.4.48+: safe_mode 稳定性过滤 ===
+            feature_stability: dict[str, float] = {}
+            unstable_features: list[str] = []
+            _bias_low = cls.BIAS_LOW
+            _bias_high = cls.BIAS_HIGH
+
+            if safe_mode and len(df_work) >= 10:
+                n_split = max(5, int(len(df_work) * 0.8))
+                df_tr = df_work.iloc[:n_split]
+                df_te = df_work.iloc[n_split:]
+                y_tr = df_tr[sales_col].values
+                y_te = df_te[sales_col].values
+                for col in cls.FEATURE_COLS:
+                    try:
+                        r_tr, _ = spearmanr(df_tr[col].values, y_tr)
+                        r_te, _ = spearmanr(df_te[col].values, y_te)
+                        r_tr = 0.0 if math.isnan(r_tr) else float(r_tr)
+                        r_te = 0.0 if math.isnan(r_te) else float(r_te)
+                    except Exception:
+                        r_tr = r_te = 0.0
+                    stability = abs(r_tr * r_te)
+                    feature_stability[col] = stability
+                    if r_tr * r_te < 0 or stability < stability_threshold:
+                        unstable_features.append(col)
+                if unstable_features:
+                    log.info(
+                        "Loop1 safe_mode: %d/%d 特征不稳定 → bias=1.0: %s",
+                        len(unstable_features), len(cls.FEATURE_COLS),
+                        ", ".join(unstable_features),
+                    )
+                _bias_low = 0.85
+                _bias_high = 1.15
+
+            # --- 偏置：相对全局均值，ρ_i / mean(ρ)，clamp ---
             eps = 1e-9
             biases: dict[str, float] = {}
             safe_avg = old_avg if abs(old_avg) > eps else 1e-6
             for col in cls.FEATURE_COLS:
+                if safe_mode and col in unstable_features:
+                    biases[col] = 1.0
+                    continue
                 raw = per_feature_rho[col] / safe_avg
-                biases[col] = max(cls.BIAS_LOW, min(cls.BIAS_HIGH, raw))
+                biases[col] = max(_bias_low, min(_bias_high, raw))
 
             # --- 校验：应用偏置后的加权分 vs y 的 Spearman 是否 >= 旧 ---
             def _weighted_score(rho_map: dict[str, float], bias_map: dict[str, float]) -> list[float]:
@@ -166,6 +216,9 @@ class VLMFeatureCalibrator:
                 new_f1=new_cls["macro_f1"],
                 old_p_at_k=old_cls["precision_at_k"],
                 new_p_at_k=new_cls["precision_at_k"],
+                safe_mode_used=safe_mode,
+                feature_stability=feature_stability,
+                unstable_features=unstable_features,
             )
         except Exception as exc:
             log.exception("VLMFeatureCalibrator 失败，降级全1偏置: %s", exc)
@@ -175,6 +228,7 @@ class VLMFeatureCalibrator:
                 new_spearman_avg=0.0,
                 per_feature_rho={c: 0.0 for c in cls.FEATURE_COLS},
                 applied=False,
+                safe_mode_used=False,
             )
 
 
@@ -1339,9 +1393,25 @@ def run_all_loops(
 
         output_files: list[Path] = []
 
+        # ---------- v1.4.48+: pre-Cross-validation — 决定 safe_mode ----------
+        log.info("=== pre-Cross-validation: 判断是否需要 safe_mode ===")
+        try:
+            pre_cv = cross_validate_calibration(history_df, sales_col=sales_col)
+            safe_mode = pre_cv.verdict in ("FAIL",) and len(history_df) >= 20
+            log.info(
+                "pre-CV: verdict=%s, test Spearman=%.3f → safe_mode=%s",
+                pre_cv.verdict, pre_cv.test_in_spearman, safe_mode,
+            )
+        except Exception as exc:
+            log.warning("pre-CV 失败，默认 safe_mode=False: %s", exc)
+            pre_cv = None
+            safe_mode = False
+
         # ---------- Loop1 ----------
-        log.info("=== Loop1: VLMFeatureCalibrator (auto_apply=%s) ===", auto_apply)
-        r1 = VLMFeatureCalibrator.calibrate(history_df, sales_col=sales_col)
+        log.info("=== Loop1: VLMFeatureCalibrator (auto_apply=%s, safe_mode=%s) ===",
+                 auto_apply, safe_mode)
+        r1 = VLMFeatureCalibrator.calibrate(history_df, sales_col=sales_col,
+                                            safe_mode=safe_mode)
         l1_path = effective_dir / "loop1_vlm_feature_biases.yaml"
         _write_yaml(l1_path, {
             "applied": r1.applied,
@@ -1356,6 +1426,10 @@ def run_all_loops(
                 "new_precision_at_k": r1.new_p_at_k,
                 "delta_p_at_k": r1.new_p_at_k - r1.old_p_at_k,
             },
+            # v1.4.48+: safe_mode 稳定性过滤结果
+            "safe_mode_used": r1.safe_mode_used,
+            "unstable_features": r1.unstable_features,
+            "feature_stability": r1.feature_stability,
             "per_feature_rho": r1.per_feature_rho,
             "feature_biases": r1.feature_biases,
         })
@@ -1559,17 +1633,17 @@ def run_all_loops(
                 pattern_md_path = paths[1] if len(paths) > 1 else None
                 output_files.extend([p for p in paths if p is not None])
                 log.info(
-                    "✅ PatternMiner: %d 条规则 (S=%d, P=%d), accuracy=%.1%% → %s",
+                    "✅ PatternMiner: %d 条规则 (S=%d, P=%d), accuracy=%.1f%% → %s",
                     len(pattern_result.rules),
                     len(pattern_result.s_rules),
                     len(pattern_result.p_rules),
-                    pattern_result.tree_accuracy,
+                    pattern_result.tree_accuracy * 100,
                     pattern_yaml_path,
                 )
             else:
                 log.info(
-                    "PatternMiner 样本不足或无区分度（accuracy=%.1%%, S=%d, P=%d），跳过落盘",
-                    pattern_result.tree_accuracy,
+                    "PatternMiner 样本不足或无区分度（accuracy=%.1f%%, S=%d, P=%d），跳过落盘",
+                    pattern_result.tree_accuracy * 100,
                     len(pattern_result.s_rules),
                     len(pattern_result.p_rules),
                 )
