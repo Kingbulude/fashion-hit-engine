@@ -31,6 +31,11 @@ class VLMFeatureCalibrationResult:
     new_spearman_avg: float
     per_feature_rho: dict[str, float]
     applied: bool
+    # v1.4.43+: 新增分类指标（向后兼容）
+    old_f1: float = 0.0
+    new_f1: float = 0.0
+    old_p_at_k: float = 0.0
+    new_p_at_k: float = 0.0
 
 
 class VLMFeatureCalibrator:
@@ -120,10 +125,23 @@ class VLMFeatureCalibrator:
             except Exception:
                 old_sp, new_sp = old_avg, old_avg
 
+            # === v1.4.43+: 同时计算分类指标 ===
+            y_pct = _rank_percentile(y)
+            y_true_labels = _build_grade_labels_from_percentile(y_pct)
+            old_cls = _classification_metrics(y_true_labels, old_score)
+            new_cls = _classification_metrics(y_true_labels, new_score)
+            log.info(
+                "Loop1 分类: old F1=%.3f P@3=%.3f → new F1=%.3f P@3=%.3f",
+                old_cls["macro_f1"], old_cls["precision_at_k"],
+                new_cls["macro_f1"], new_cls["precision_at_k"],
+            )
+
             applied = new_sp > old_sp + 1e-9
             if not applied:
                 biases = {c: 1.0 for c in cls.FEATURE_COLS}
                 new_sp = old_sp
+                # 保护触发 → new_cls 也用 old（因为 score 被回滚了）
+                new_cls = old_cls
                 log.info("Loop1 保护触发：新Spearman(%.4f)未优于旧(%.4f)，返回全1偏置", new_sp, old_sp)
             else:
                 log.info("Loop1 生效：Spearman %.4f → %.4f", old_sp, new_sp)
@@ -144,6 +162,10 @@ class VLMFeatureCalibrator:
                 new_spearman_avg=float(new_sp),
                 per_feature_rho=per_feature_rho,
                 applied=applied,
+                old_f1=old_cls["macro_f1"],
+                new_f1=new_cls["macro_f1"],
+                old_p_at_k=old_cls["precision_at_k"],
+                new_p_at_k=new_cls["precision_at_k"],
             )
         except Exception as exc:
             log.exception("VLMFeatureCalibrator 失败，降级全1偏置: %s", exc)
@@ -166,6 +188,11 @@ class PersonaDistributionFitResult:
     new_spearman: float
     lasso_raw_coef: dict[str, float]
     applied: bool
+    # v1.4.43+: 新增分类指标
+    old_f1: float = 0.0
+    new_f1: float = 0.0
+    old_p_at_k: float = 0.0
+    new_p_at_k: float = 0.0
 
 
 class PersonaDistributionFitter:
@@ -298,10 +325,22 @@ class PersonaDistributionFitter:
             except Exception:
                 new_sp = old_sp
 
+            # === v1.4.43+: 同时计算分类指标 ===
+            old_cls = _classification_metrics(
+                _build_grade_labels_from_percentile(y), list(uniform_score))
+            new_cls = _classification_metrics(
+                _build_grade_labels_from_percentile(y), list(new_score))
+            log.info(
+                "Loop2 分类: old F1=%.3f P@3=%.3f → new F1=%.3f P@3=%.3f",
+                old_cls["macro_f1"], old_cls["precision_at_k"],
+                new_cls["macro_f1"], new_cls["precision_at_k"],
+            )
+
             applied = new_sp >= old_sp + cls.MIN_IMPROVEMENT - 1e-9
             if not applied:
                 # spec §8.4: 回滚到更新前状态（均匀分布）
                 weights = {col: 1.0 / n_p for col in cls.PERSONA_COLS}
+                new_cls = old_cls
                 log.info(
                     "Loop2 保护触发：新Spearman(%.4f) - 旧(%.4f) = %.4f < %.2f，回滚均匀",
                     new_sp, old_sp, new_sp - old_sp, cls.MIN_IMPROVEMENT,
@@ -318,6 +357,10 @@ class PersonaDistributionFitter:
                 new_spearman=float(new_sp),
                 lasso_raw_coef=raw_coef,
                 applied=applied,
+                old_f1=old_cls["macro_f1"],
+                new_f1=new_cls["macro_f1"],
+                old_p_at_k=old_cls["precision_at_k"],
+                new_p_at_k=new_cls["precision_at_k"],
             )
         except Exception as exc:
             log.exception("PersonaDistributionFitter 失败，降级均匀权重: %s", exc)
@@ -388,6 +431,15 @@ class EnsembleTuneResult:
     engine_rho: dict[str, float]
     channel_rho: dict[str, float]
     applied: bool
+    # v1.4.43+: 新增分类指标
+    old_engine_f1: float = 0.0
+    new_engine_f1: float = 0.0
+    old_engine_p_at_k: float = 0.0
+    new_engine_p_at_k: float = 0.0
+    old_chan_f1: float = 0.0
+    new_chan_f1: float = 0.0
+    old_chan_p_at_k: float = 0.0
+    new_chan_p_at_k: float = 0.0
 
 
 class EnsembleWeightTuner:
@@ -470,9 +522,20 @@ class EnsembleWeightTuner:
                 new_engine_sp = old_engine_sp
 
             engine_applied = new_engine_sp > old_engine_sp + 1e-9
+            # === v1.4.43+: 引擎分类指标 ===
+            y_pct = _rank_percentile(y)
+            y_true_labels = _build_grade_labels_from_percentile(y_pct)
+            old_eng_cls = _classification_metrics(y_true_labels, old_engine_score)
+            new_eng_cls = _classification_metrics(y_true_labels, new_engine_score)
+            log.info(
+                "Loop3 引擎分类: old F1=%.3f P@3=%.3f → new F1=%.3f P@3=%.3f",
+                old_eng_cls["macro_f1"], old_eng_cls["precision_at_k"],
+                new_eng_cls["macro_f1"], new_eng_cls["precision_at_k"],
+            )
             if not engine_applied:
                 new_engine_weights = uniform_engine
                 new_engine_sp = old_engine_sp
+                new_eng_cls = old_eng_cls
                 log.info("Loop3 引擎保护：新Spearman(%.4f)未提升，保持均匀", new_engine_sp)
             else:
                 log.info("Loop3 引擎生效：Spearman %.4f → %.4f", old_engine_sp, new_engine_sp)
@@ -513,6 +576,14 @@ class EnsembleWeightTuner:
                 new_chan_sp = old_chan_sp
 
             chan_applied = new_chan_sp > old_chan_sp + 1e-9
+            # === v1.4.43+: 渠道分类指标 ===
+            old_chan_cls = _classification_metrics(y_true_labels, old_chan_score)
+            new_chan_cls = _classification_metrics(y_true_labels, new_chan_score)
+            log.info(
+                "Loop3 渠道分类: old F1=%.3f P@3=%.3f → new F1=%.3f P@3=%.3f",
+                old_chan_cls["macro_f1"], old_chan_cls["precision_at_k"],
+                new_chan_cls["macro_f1"], new_chan_cls["precision_at_k"],
+            )
             if not chan_applied:
                 new_chan_weights = uniform_channel
                 new_chan_sp = old_chan_sp
@@ -530,6 +601,14 @@ class EnsembleWeightTuner:
                 engine_rho=engine_rho,
                 channel_rho=channel_rho,
                 applied=engine_applied or chan_applied,
+                old_engine_f1=old_eng_cls["macro_f1"],
+                new_engine_f1=new_eng_cls["macro_f1"],
+                old_engine_p_at_k=old_eng_cls["precision_at_k"],
+                new_engine_p_at_k=new_eng_cls["precision_at_k"],
+                old_chan_f1=old_chan_cls["macro_f1"],
+                new_chan_f1=new_chan_cls["macro_f1"],
+                old_chan_p_at_k=old_chan_cls["precision_at_k"],
+                new_chan_p_at_k=new_chan_cls["precision_at_k"],
             )
         except Exception as exc:
             log.exception("EnsembleWeightTuner 失败，降级均匀权重: %s", exc)
@@ -760,6 +839,148 @@ def _rank_percentile(values: "pd.Series | list[float]") -> pd.Series:
     if n == 1:
         return pd.Series([0.5])
     return (s.rank(method="average") - 1) / (n - 1)
+
+
+# ========== 分类校准辅助函数（v1.4.43 — P0: Spearman→分类 F1/Precision@k）==========
+# 设计原则：
+#   - 向后兼容：保留 Spearman，新增分类指标作为"业务对齐层"
+#   - 从销量百分位构造 S/A+/A/P 标签（top percentile 映射）
+#   - Precision@k 直接回答业务问题："我给买手推的 top 3 款里有几款真爆了？"
+
+# 销量百分位 → grade 的边界（percentile 越高越好，1.0=最佳）
+# S款: top 10%  (p ≥ 0.90)
+# A+: top 10-25% (0.75 ≤ p < 0.90)
+# A:  middle 50% (0.25 ≤ p < 0.75)
+# P:  bottom 25% (p < 0.25)
+# 可通过 set_grade_boundaries() 覆盖
+_PERCENTILE_GRADE_BOUNDARIES: list[tuple[str, float, float]] = [
+    ("S",  0.90, 1.01),
+    ("A+", 0.75, 0.90),
+    ("A",  0.25, 0.75),
+    ("P",  0.00, 0.25),
+]
+
+
+def set_grade_boundaries(
+    s_threshold: float = 0.90,
+    aplus_threshold: float = 0.75,
+    a_threshold: float = 0.25,
+) -> None:
+    """覆盖默认的销量百分位→grade 边界。
+
+    Args:
+        s_threshold: S款下界（默认 0.90，即 top 10%）
+        aplus_threshold: A+款下界（默认 0.75）
+        a_threshold: A款下界（默认 0.25，bottom 25%→P款）
+
+    边界关系：1.0 > s_threshold > aplus_threshold > a_threshold > 0
+    """
+    global _PERCENTILE_GRADE_BOUNDARIES
+    if not (1.0 > s_threshold > aplus_threshold > a_threshold > 0):
+        raise ValueError("边界必须满足 1.0 > s > aplus > a > 0")
+    _PERCENTILE_GRADE_BOUNDARIES = [
+        ("S",  s_threshold, 1.01),
+        ("A+", aplus_threshold, s_threshold),
+        ("A",  a_threshold, aplus_threshold),
+        ("P",  0.0, a_threshold),
+    ]
+
+
+def _percentile_to_grade(p: float) -> str:
+    """单个销量百分位 → grade 标签。"""
+    for label, lo, hi in _PERCENTILE_GRADE_BOUNDARIES:
+        if lo <= p < hi:
+            return label
+    return _PERCENTILE_GRADE_BOUNDARIES[-1][0]  # fallback → P
+
+
+def _build_grade_labels_from_percentile(
+    percentile: "pd.Series | list[float]",
+) -> list[str]:
+    """批量：销量百分位 [0,1] → S/A+/A/P 标签列表。"""
+    if isinstance(percentile, pd.Series):
+        return [_percentile_to_grade(float(p)) for p in percentile.values]
+    return [_percentile_to_grade(float(p)) for p in percentile]
+
+
+# grade → 数值编码（用于 sklearn 分类指标）
+_GRADE_TO_INT = {"S": 3, "A+": 2, "A": 1, "P": 0}
+_INT_TO_GRADE = {v: k for k, v in _GRADE_TO_INT.items()}
+
+
+def _classification_metrics(
+    y_true_labels: list[str],
+    y_pred_scores: "list[float] | pd.Series",
+    *,
+    top_k: int = 3,
+) -> dict[str, float]:
+    """计算分类指标：macro F1 + Precision@k。
+
+    Args:
+        y_true_labels: 真实 grade 标签列表（从销量百分位构造）
+        y_pred_scores: 模型预测分数（任意尺度，内部用 rank 排序取 top-k）
+        top_k: Precision@k 的 k 值（默认 3 — 买手通常只看 top 3 款）
+
+    Returns:
+        dict: {
+          "macro_f1":     0~1,  # 四分类 macro F1
+          "precision_at_k": 0~1,  # top-k 中真实 S 款的比例
+          "s_precision":  0~1,  # 预测为 S 的款里真实 S 的比例
+          "s_recall":     0~1,  # 真实 S 款里被正确识别为 S 的比例
+          "accuracy":     0~1,  # 四分类 accuracy
+        }
+    """
+    try:
+        from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
+    except ImportError:
+        return {"macro_f1": 0.0, "precision_at_k": 0.0, "s_precision": 0.0,
+                "s_recall": 0.0, "accuracy": 0.0}
+
+    n = len(y_true_labels)
+    if n == 0:
+        return {"macro_f1": 0.0, "precision_at_k": 0.0, "s_precision": 0.0,
+                "s_recall": 0.0, "accuracy": 0.0}
+
+    y_true = [_GRADE_TO_INT.get(l, 0) for l in y_true_labels]
+
+    # 预测分 → 预测 grade：先 rank percentile → 再映射 grade
+    pred_pct = _rank_percentile(list(y_pred_scores))
+    y_pred_labels = [_percentile_to_grade(float(p)) for p in pred_pct.values]
+    y_pred = [_GRADE_TO_INT.get(l, 0) for l in y_pred_labels]
+
+    macro_f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+    accuracy = float(accuracy_score(y_true, y_pred))
+
+    # 二分类（S vs 非 S）的 precision / recall
+    y_true_bin = [1 if l == "S" else 0 for l in y_true_labels]
+    y_pred_bin = [1 if l == "S" else 0 for l in y_pred_labels]
+    s_precision = float(precision_score(y_true_bin, y_pred_bin, zero_division=0))
+    s_recall = float(recall_score(y_true_bin, y_pred_bin, zero_division=0))
+
+    # Precision@k：top-k 预测分对应的款里，有多少真实是 S 款
+    k = min(top_k, n)
+    if k > 0:
+        pred_ranked = sorted(range(n), key=lambda i: -float(y_pred_scores[i]))
+        top_k_idx = pred_ranked[:k]
+        s_in_top_k = sum(1 for i in top_k_idx if y_true_labels[i] == "S")
+        precision_at_k = s_in_top_k / k
+    else:
+        precision_at_k = 0.0
+
+    return {
+        "macro_f1": macro_f1,
+        "precision_at_k": precision_at_k,
+        "s_precision": s_precision,
+        "s_recall": s_recall,
+        "accuracy": accuracy,
+    }
+
+
+def _delta_str(a: float, b: float) -> str:
+    """辅助：delta 显示 (+0.03 或 -0.01)。"""
+    d = b - a
+    sign = "+" if d >= 0 else ""
+    return f"{sign}{d:.4f}"
 
 
 def _engine_score_ensemble(

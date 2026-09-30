@@ -203,6 +203,7 @@ def _render_persona_prompt(
     layer_weights: dict[str, float],
     brand_cfg: BrandConfig | None,
     age_rule: dict[str, Any],
+    pattern_context: str = "",   # v1.4.43+: Few-shot 历史模式参考（空则不注入）
 ) -> tuple[str, str]:
     """返回 (system, user) prompt —— 决策层动态渲染"""
     pid = _persona_key(persona)
@@ -227,6 +228,9 @@ def _render_persona_prompt(
     axes_block = "、".join(axes_block_parts) if axes_block_parts else "未标注"
 
     influencer_block = _render_influencer_profiles(brand_cfg, layers, age_rule)
+
+    # v1.4.43+: 历史模式参考注入（Few-shot）
+    pattern_block = pattern_context.strip() if pattern_context else ""
 
     # 输出 schema 动态生成
     score_fields = "\n".join(
@@ -257,6 +261,7 @@ def _render_persona_prompt(
 {chr(10).join(weight_lines)}
 {influencer_block}
 
+{pattern_block + chr(10) if pattern_block else ""}
 【款式信息】
 款号：{info.style_id}
 品类：{info.category or '未标注'}
@@ -299,9 +304,11 @@ def _vote_one_persona_one_model(
     brand_cfg: BrandConfig | None,
     age_rule: dict[str, Any],
     model: str,
+    pattern_context: str = "",
 ) -> dict[str, Any]:
     sys_p, usr_p = _render_persona_prompt(
         persona, info, feats, layers, layer_weights, brand_cfg, age_rule,
+        pattern_context=pattern_context,
     )
     resp = client.generate_text(
         usr_p,
@@ -347,6 +354,7 @@ def vote_persona(
     *,
     brand_cfg: BrandConfig | None = None,
     target_age: int | None = None,
+    pattern_context: str = "",   # v1.4.43+: Few-shot 历史模式参考
 ) -> PersonaVote:
     """单人设 + 多模型混合，均值聚合（决策层通用）"""
     pid = _persona_key(persona)
@@ -374,6 +382,7 @@ def vote_persona(
                 client, persona=persona, info=info, feats=feats,
                 layers=layers, layer_weights=layer_weights,
                 brand_cfg=brand_cfg, age_rule=age_rule, model=m,
+                pattern_context=pattern_context,
             )
             per_model.append(res)
             # final_score 由代码按权重算，不再依赖 LLM 输出的 final_score
@@ -928,6 +937,55 @@ def _run_persona_review(
         }
 
 
+def _try_load_pattern_context(
+    info: "StyleInfo",
+    feats: "StyleFeatures",
+    brand_cfg: "BrandConfig | None",
+) -> str:
+    """v1.4.43+: 自动探测品牌 memory 目录下的 PatternMiner YAML，
+    构造 Few-shot 历史模式参考文本。找不到或异常 → 返回 ""（不注入）。
+
+    搜索路径（按优先级）：
+      1. brand_profiles/<brand_id>/memory/<any>_patterns.yaml
+      2. 目录下多个 YAML → 取最近修改时间的那个（默认最新季度）
+    """
+    try:
+        from pathlib import Path as _Path
+        from .pattern_miner import build_fewshot_context
+
+        brand_id = brand_cfg.brand_id if brand_cfg is not None else ""
+        if not brand_id:
+            return ""
+
+        # 可能的 memory 目录
+        candidates = [
+            _Path(f"brand_profiles/{brand_id}/memory"),
+            _Path(f"brand_profiles/{brand_id}/calibrated/memory"),
+        ]
+        yaml_path: _Path | None = None
+        for d in candidates:
+            if d.is_dir():
+                yamls = sorted(d.glob("*_patterns.yaml"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if yamls:
+                    yaml_path = yamls[0]
+                    break
+
+        if yaml_path is None:
+            return ""
+
+        # 构造特征 dict（F01~F10 的 score）
+        feat_dict: dict[str, float] = {}
+        if feats is not None and hasattr(feats, "features"):
+            for key, fscore in feats.features.items():
+                feat_dict[key] = float(fscore.score)
+
+        ctx = build_fewshot_context(yaml_path, feat_dict, brand_suffix="历史")
+        return ctx
+    except Exception as e:
+        log.warning("PatternMiner 上下文加载失败（优雅降级）: %s", e)
+        return ""
+
+
 def run_persona_voting(
     client: BailianClient,
     info: StyleInfo,
@@ -969,6 +1027,13 @@ def run_persona_voting(
         layer_weights = {layers[0].id: 1.0}
 
     # Phase1: 初评
+    # v1.4.43+: Few-shot 历史模式参考注入
+    pattern_context = _try_load_pattern_context(info, feats, brand_cfg)
+    if pattern_context:
+        log.info("[%s] Few-shot 模式已注入（%d字）", info.style_id, len(pattern_context))
+    else:
+        log.info("[%s] 未找到历史模式 YAML，跳过注入", info.style_id)
+
     log.info("[%s] Phase1 人设初评（%d 人设）", info.style_id, len(persona_list))
     votes: list[PersonaVote] = []
     pbar = tqdm(persona_list, desc=f"人设初评[{info.style_id}]", leave=False, disable=not progress)
@@ -977,7 +1042,8 @@ def run_persona_voting(
         pbar.set_postfix_str(pid)
         try:
             v = vote_persona(client, p, info, feats, cfg,
-                            brand_cfg=brand_cfg, target_age=target_age)
+                            brand_cfg=brand_cfg, target_age=target_age,
+                            pattern_context=pattern_context)
             v.initial_layer_scores = dict(v.layer_scores)
             votes.append(v)
         except Exception as e:
