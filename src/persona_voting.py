@@ -941,34 +941,43 @@ def _try_load_pattern_context(
     info: "StyleInfo",
     feats: "StyleFeatures",
     brand_cfg: "BrandConfig | None",
+    *,
+    pattern_yaml_path: str | None = None,   # v1.4.46+: calibration_loader 已暴露路径，直通省 glob
 ) -> str:
     """v1.4.43+: 自动探测品牌 memory 目录下的 PatternMiner YAML，
     构造 Few-shot 历史模式参考文本。找不到或异常 → 返回 ""（不注入）。
 
     搜索路径（按优先级）：
-      1. brand_profiles/<brand_id>/memory/<any>_patterns.yaml
-      2. 目录下多个 YAML → 取最近修改时间的那个（默认最新季度）
+      1. pattern_yaml_path 直通（v1.4.46+: calibration_loader → persona_voting 直接传）
+      2. brand_profiles/<brand_id>/memory/<any>_patterns.yaml
+      3. 目录下多个 YAML → 取最近修改时间的那个（默认最新季度）
     """
     try:
         from pathlib import Path as _Path
         from .pattern_miner import build_fewshot_context
 
-        brand_id = brand_cfg.brand_id if brand_cfg is not None else ""
-        if not brand_id:
-            return ""
-
-        # 可能的 memory 目录
-        candidates = [
-            _Path(f"brand_profiles/{brand_id}/memory"),
-            _Path(f"brand_profiles/{brand_id}/calibrated/memory"),
-        ]
+        # v1.4.46+: 优先用直通路径（省去 glob）
         yaml_path: _Path | None = None
-        for d in candidates:
-            if d.is_dir():
-                yamls = sorted(d.glob("*_patterns.yaml"), key=lambda p: p.stat().st_mtime, reverse=True)
-                if yamls:
-                    yaml_path = yamls[0]
-                    break
+        if pattern_yaml_path:
+            p = _Path(pattern_yaml_path)
+            if p.is_file():
+                yaml_path = p
+
+        if yaml_path is None:
+            brand_id = brand_cfg.brand_id if brand_cfg is not None else ""
+            if not brand_id:
+                return ""
+            # 可能的 memory 目录
+            candidates = [
+                _Path(f"brand_profiles/{brand_id}/memory"),
+                _Path(f"brand_profiles/{brand_id}/calibrated/memory"),
+            ]
+            for d in candidates:
+                if d.is_dir():
+                    yamls = sorted(d.glob("*_patterns.yaml"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if yamls:
+                        yaml_path = yamls[0]
+                        break
 
         if yaml_path is None:
             return ""
@@ -997,6 +1006,7 @@ def run_persona_voting(
     target_age: int | None = None,
     three_phase: bool = True,
     expert_model: str = "qwen-max",
+    pattern_yaml_path: str | None = None,   # v1.4.46+: calibration_loader 直通
 ) -> VotingResult:
     """批量人设投票（决策层通用）— 三阶段评审 v1.4.42.2
 
@@ -1028,7 +1038,9 @@ def run_persona_voting(
 
     # Phase1: 初评
     # v1.4.43+: Few-shot 历史模式参考注入
-    pattern_context = _try_load_pattern_context(info, feats, brand_cfg)
+    pattern_context = _try_load_pattern_context(
+        info, feats, brand_cfg, pattern_yaml_path=pattern_yaml_path,
+    )
     if pattern_context:
         log.info("[%s] Few-shot 模式已注入（%d字）", info.style_id, len(pattern_context))
     else:

@@ -814,6 +814,8 @@ class RunAllLoopsResult:
     loop3: EnsembleTuneResult
     residual: ResidualDecomposeResult
     output_files: list[Path]
+    cross_validation: CrossValidationResult | None = None   # v1.4.46+
+    patterns: Any = None                                    # v1.4.46+ PatternMineResult | None
 
 
 def _write_yaml(path: Path, obj: Any) -> None:
@@ -1096,6 +1098,183 @@ def build_history_df(
     return pd.DataFrame(rows)
 
 
+# ======================================================================
+# P0: Cross-validation — 跨季回测校准（防过拟合）
+# ======================================================================
+@dataclass
+class CrossValidationResult:
+    """按时间切分训练/测试集，验证 3Loop 校准是否过拟合。
+
+    用法：
+      cv = cross_validate_calibration(history_df)
+      cv.overfitting_ratio_in_spearman  # 0 = 无过拟合, 1 = 完全过拟合
+      cv.overfitting_ratio_in_f1        # 同上，用 F1 指标
+    """
+    n_total: int
+    n_train: int
+    n_test: int
+    train_in_spearman: float           # 训练集（旧数据）内 3Loop 校准后的 Spearman
+    test_in_spearman: float            # 测试集（新数据）同一套权重的 Spearman
+    train_in_f1: float                 # 训练集 F1
+    test_in_f1: float                  # 测试集 F1
+    train_in_p_at_k: float
+    test_in_p_at_k: float
+    overfitting_ratio_in_spearman: float  # 1 - (test/train) — 越接近 0 越好
+    overfitting_ratio_in_f1: float
+    verdict: str                       # "OK" / "WARN" / "FAIL"
+    notes: str = ""
+
+
+def cross_validate_calibration(
+    history_df: pd.DataFrame,
+    *,
+    sales_col: str = "sales",
+    time_col: str = "",   # 可选日期列；空=按行序
+    test_fraction: float = 0.2,   # 后 20% 当"新季度"
+    min_samples_train: int = 20,
+    min_samples_test: int = 8,
+) -> CrossValidationResult:
+    """跨季回测：用"旧款"拟合 3Loop 权重 → "新款"检验真实效果。
+
+    为什么需要：3Loop 默认在同一批数据上检验 spearman 提升（in-sample），
+    小样本下几乎必然提升，但那是"自己考自己"的分数。本函数把时间维度
+    引进来：按 time_col（或行序）切 train（前 80%）/ test（后 20%），
+    在 train 上跑 3Loop 拟合权重，用 test 数据直接算 Spearman + F1。
+
+    Args:
+        history_df: 带 F01-F10, P01-P30, 引擎分 + sales 的 DataFrame
+        sales_col: 销量列名
+        time_col: 可选日期列（字符串/datetime 都行）；空则按行序切分
+        test_fraction: 测试集比例（默认后 20% = 新季度）
+        min_samples_train / min_samples_test: 样本不足时降级
+
+    Returns:
+        CrossValidationResult — 含 overfitting_ratio 和 verdict
+    """
+    from scipy.stats import spearmanr
+
+    df = history_df.copy()
+    if time_col and time_col in df.columns:
+        try:
+            df["_cv_time"] = pd.to_datetime(df[time_col])
+            df = df.sort_values("_cv_time").reset_index(drop=True)
+        except Exception:
+            df = df.reset_index(drop=True)
+    else:
+        df = df.reset_index(drop=True)
+
+    n = len(df)
+    split_idx = int(n * (1 - test_fraction))
+    train_df = df.iloc[:split_idx]
+    test_df = df.iloc[split_idx:]
+
+    if len(train_df) < min_samples_train or len(test_df) < min_samples_test:
+        return CrossValidationResult(
+            n_total=n, n_train=len(train_df), n_test=len(test_df),
+            train_in_spearman=0, test_in_spearman=0,
+            train_in_f1=0, test_in_f1=0,
+            train_in_p_at_k=0, test_in_p_at_k=0,
+            overfitting_ratio_in_spearman=-1, overfitting_ratio_in_f1=-1,
+            verdict="SKIP",
+            notes=f"样本不足：train={len(train_df)}/{min_samples_train}, "
+                  f"test={len(test_df)}/{min_samples_test}",
+        )
+
+    # 1. 在 train 上跑 3Loop 拿权重
+    try:
+        l1 = VLMFeatureCalibrator.calibrate(train_df, sales_col=sales_col)
+        l2 = PersonaDistributionFitter.fit(train_df, sales_col=sales_col)
+        l3 = EnsembleWeightTuner.tune(train_df, sales_col=sales_col)
+    except Exception as e:
+        log.warning("Cross-validation 拟合阶段失败: %s", e)
+        return CrossValidationResult(
+            n_total=n, n_train=len(train_df), n_test=len(test_df),
+            train_in_spearman=0, test_in_spearman=0,
+            train_in_f1=0, test_in_f1=0,
+            train_in_p_at_k=0, test_in_p_at_k=0,
+            overfitting_ratio_in_spearman=-1, overfitting_ratio_in_f1=-1,
+            verdict="ERROR", notes=f"拟合异常: {e}",
+        )
+
+    def _apply_and_eval(subset: pd.DataFrame) -> dict[str, float]:
+        """拿 train 权重套 subset，算 Spearman + 分类指标。"""
+        sub = subset.copy()
+        # 应用 Loop1 偏置
+        for col, bias in l1.feature_biases.items():
+            if col in sub.columns:
+                sub[col] = sub[col] * bias
+        # Loop2 人设权重：聚合 persona_score 时用权重重算
+        # 简化：直接在已有 persona_score 上乘 persona_weights 的均值偏移
+        pw_vals = list(l2.persona_weights.values())
+        pw_mean = sum(pw_vals) / max(len(pw_vals), 1)
+        if "persona_score" in sub.columns and pw_mean > 0:
+            sub["persona_score"] = sub["persona_score"] * (pw_mean / (1 / 30))
+        # Loop3 集成
+        eng_score = _engine_score_ensemble(sub, l3.engine_weights, l3.channel_weights)
+        y_true = sub[sales_col].astype(float).values
+
+        # Spearman
+        try:
+            rho, _ = spearmanr(eng_score.values, y_true)
+            rho = 0.0 if math.isnan(rho) else float(rho)
+        except Exception:
+            rho = 0.0
+
+        # 分类指标（用 percentile 标签）
+        y_true_pct = _rank_percentile(y_true)
+        y_true_labels = _build_grade_labels_from_percentile(y_true_pct)
+        cls = _classification_metrics(y_true_labels, list(eng_score.values))
+
+        return {
+            "spearman": rho,
+            "f1": cls["macro_f1"],
+            "p_at_k": cls["precision_at_k"],
+        }
+
+    train_eval = _apply_and_eval(train_df)
+    test_eval = _apply_and_eval(test_df)
+
+    tr_sp = train_eval["spearman"]
+    te_sp = test_eval["spearman"]
+    tr_f1 = train_eval["f1"]
+    te_f1 = test_eval["f1"]
+
+    # 过拟合率：1 - test/train（train=0 时安全降级）
+    if abs(tr_sp) > 1e-6:
+        ov_sp = max(0.0, min(1.0, 1.0 - te_sp / tr_sp))
+    else:
+        ov_sp = 0.0
+    if abs(tr_f1) > 1e-6:
+        ov_f1 = max(0.0, min(1.0, 1.0 - te_f1 / tr_f1))
+    else:
+        ov_f1 = 0.0
+
+    # verdict
+    if ov_sp < 0.25 and ov_f1 < 0.25 and te_sp > 0:
+        verdict = "OK"
+    elif ov_sp < 0.5 and ov_f1 < 0.5:
+        verdict = "WARN"
+    else:
+        verdict = "FAIL"
+
+    log.info(
+        "📊 CrossVal: train ρ=%.3f F1=%.3f → test ρ=%.3f F1=%.3f | "
+        "overfit_ρ=%.2f overfit_F1=%.2f | %s",
+        tr_sp, tr_f1, te_sp, te_f1, ov_sp, ov_f1, verdict,
+    )
+
+    return CrossValidationResult(
+        n_total=n, n_train=len(train_df), n_test=len(test_df),
+        train_in_spearman=tr_sp, test_in_spearman=te_sp,
+        train_in_f1=tr_f1, test_in_f1=te_f1,
+        train_in_p_at_k=train_eval["p_at_k"],
+        test_in_p_at_k=test_eval["p_at_k"],
+        overfitting_ratio_in_spearman=ov_sp,
+        overfitting_ratio_in_f1=ov_f1,
+        verdict=verdict,
+    )
+
+
 def run_all_loops(
     brand_cfg: Any,
     history_df: pd.DataFrame,
@@ -1273,10 +1452,77 @@ def run_all_loops(
         })
         output_files.append(residual_path)
 
+        # ---------- Cross-validation：跨季回测（v1.4.46+）----------
+        cv_result: CrossValidationResult | None = None
+        try:
+            # 决定用什么做"时间轴"
+            time_col = ""
+            for cand in ("date", "season", "quarter", "year", "sold_date", "batch_date"):
+                if cand in history_df.columns:
+                    time_col = cand
+                    break
+
+            cv_result = cross_validate_calibration(
+                history_df, sales_col=sales_col, time_col=time_col,
+            )
+            cv_path = effective_dir / "cross_validation.yaml"
+            _write_yaml(cv_path, {
+                "n_total": cv_result.n_total,
+                "n_train": cv_result.n_train,
+                "n_test": cv_result.n_test,
+                "time_col_used": time_col or "(行序)",
+                "train_metrics": {
+                    "spearman": cv_result.train_in_spearman,
+                    "f1": cv_result.train_in_f1,
+                    "p_at_k": cv_result.train_in_p_at_k,
+                },
+                "test_metrics": {
+                    "spearman": cv_result.test_in_spearman,
+                    "f1": cv_result.test_in_f1,
+                    "p_at_k": cv_result.test_in_p_at_k,
+                },
+                "overfitting_ratio": {
+                    "spearman": cv_result.overfitting_ratio_in_spearman,
+                    "f1": cv_result.overfitting_ratio_in_f1,
+                },
+                "verdict": cv_result.verdict,
+                "notes": cv_result.notes,
+            })
+            output_files.append(cv_path)
+            if cv_result.verdict != "SKIP":
+                log.info(
+                    "✅ Cross-validation: verdict=%s (overfit_ρ=%.2f, overfit_F1=%.2f)",
+                    cv_result.verdict,
+                    cv_result.overfitting_ratio_in_spearman,
+                    cv_result.overfitting_ratio_in_f1,
+                )
+        except Exception as exc:
+            log.warning("Cross-validation 失败（不阻塞）: %s", exc)
+            cv_result = None
+
         # ---------- PatternMiner：从历史数据提炼爆款/败款模式（v1.4.44+）----------
         pattern_result = None
         pattern_yaml_path: Path | None = None
         pattern_md_path: Path | None = None
+
+        # P0-#12: 按年份分组校准（v1.4.46+）
+        group_by_year = bool(getattr(brand_cfg, "calibration_group_by_year", False))
+        pattern_df_for_group = history_df
+        year_group_note = ""
+        if group_by_year and "year" in history_df.columns:
+            year_vals = history_df["year"].dropna().unique()
+            if len(year_vals) >= 2:
+                latest_year = int(sorted(year_vals)[-1])
+                pattern_df_for_group = history_df[
+                    history_df["year"] < latest_year
+                ].copy()
+                year_group_note = (
+                    f"（calibration_group_by_year=true：模式库只用 {list(year_vals)} "
+                    f"中 {latest_year} 之前的数据 = {len(pattern_df_for_group)} 款；"
+                    f"最新 {latest_year} 款留给跨季回测检验）"
+                )
+                log.info("📅 PatternMiner 按年分组：train_on=<%d, n=%d",
+                         latest_year, len(pattern_df_for_group))
         try:
             from ..pattern_miner import mine_patterns, save_patterns
 
@@ -1300,7 +1546,10 @@ def run_all_loops(
                 "=== PatternMiner: mine_patterns (%d samples, brand=%s, quarter=%s) ===",
                 len(history_df), brand_name or "?", quarter or "?",
             )
-            pattern_result = mine_patterns(history_df, sales_col=sales_col)
+            pattern_result = mine_patterns(
+                pattern_df_for_group, sales_col=sales_col,
+                season=f"{quarter}" if quarter else "",
+            )
             if pattern_result.n_samples_total > 0 and (pattern_result.s_rules or pattern_result.p_rules):
                 paths = save_patterns(
                     pattern_result, pattern_memory_dir,
@@ -1538,8 +1787,42 @@ def run_all_loops(
             md_lines.append("（无）")
         md_lines.append("")
 
+        # v1.4.46+: Cross-validation 章节
+        md_lines.append("## 🔍 跨季回测（Cross-validation · v1.4.46+）")
+        md_lines.append("")
+        if cv_result is None:
+            md_lines.append("> 跨季回测未执行。")
+        elif cv_result.verdict == "SKIP":
+            md_lines.append(f"> 样本不足，已跳过：{cv_result.notes}")
+        else:
+            emoji = {"OK": "✅", "WARN": "⚠️", "FAIL": "❌", "ERROR": "🔶"}.get(
+                cv_result.verdict, "❓"
+            )
+            md_lines.append(f"{emoji} **verdict: `{cv_result.verdict}`** "
+                            f"（overfit_ρ={cv_result.overfitting_ratio_in_spearman:.2f}, "
+                            f"overfit_F1={cv_result.overfitting_ratio_in_f1:.2f}）")
+            md_lines.append("")
+            md_lines.append(f"- 切分：train={cv_result.n_train} / test={cv_result.n_test} "
+                            f"（共 {cv_result.n_total} 款）")
+            md_lines.append(f"- Train ρ={cv_result.train_in_spearman:.3f} → "
+                            f"Test ρ=**{cv_result.test_in_spearman:.3f}** "
+                            f"（Δ={cv_result.train_in_spearman - cv_result.test_in_spearman:+.3f}）")
+            md_lines.append(f"- Train F1={cv_result.train_in_f1:.3f} → "
+                            f"Test F1=**{cv_result.test_in_f1:.3f}** "
+                            f"（Δ={cv_result.train_in_f1 - cv_result.test_in_f1:+.3f}）")
+            md_lines.append("")
+            md_lines.append(
+                "overfit_ratio = 1 - (test/train)，0=无过拟合，越高越虚。"
+                " 建议 < 0.25 为健康，> 0.5 需警惕校准过拟合历史噪音。"
+            )
+
+        md_lines.append("")
+
         # v1.4.44+: PatternMiner 章节
         md_lines.append("## 🧠 模式提炼（PatternMiner · v1.4.44+）")
+        if year_group_note:
+            md_lines.append("")
+            md_lines.append(year_group_note)
         md_lines.append("")
         if pattern_result is None:
             md_lines.append("> PatternMiner 未执行（ImportError/异常/样本不足）。")
@@ -1599,6 +1882,8 @@ def run_all_loops(
             loop3=r3,
             residual=r4,
             output_files=output_files,
+            cross_validation=cv_result,
+            patterns=pattern_result,
         )
     except Exception as exc:
         log.exception("run_all_loops 异常退出: %s", exc)

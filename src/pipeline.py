@@ -579,6 +579,7 @@ class PredictionPipeline:
         voting = run_persona_voting(
             self.text_client if self.llm_backend == "hybrid" else self.client,
             info, feats, None, brand_cfg=self.brand_cfg,
+            pattern_yaml_path=getattr(self.calibration, "pattern_yaml_path", None),
         )
         channels, _ = calculate_channel_scores(
             info, feats, voting, cfg=None, all_style_prices=price_pool, brand_cfg=self.brand_cfg,

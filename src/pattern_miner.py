@@ -72,11 +72,13 @@ class PatternMineResult:
     n_samples_total: int = 0
     feature_importance: dict[str, float] = field(default_factory=dict)
     tree_accuracy: float = 0.0
+    season: str = ""          # v1.4.46+: 模式所属季度/年份（用于衰减）
 
     def to_yaml_dict(self) -> dict[str, Any]:
         return {
             "n_samples": self.n_samples_total,
             "tree_accuracy": round(self.tree_accuracy, 4),
+            "season": self.season,
             "feature_importance": {k: round(v, 4) for k, v in self.feature_importance.items()},
             "s_rules": [r.to_dict() for r in self.s_rules],
             "p_rules": [r.to_dict() for r in self.p_rules],
@@ -179,6 +181,7 @@ def mine_patterns(
     min_rule_confidence: float = 0.60,
     min_rule_coverage: float = 0.05,
     top_k_rules_per_grade: int = 8,
+    season: str = "",   # v1.4.46+: 模式所属季度/年份（衰减用）
 ) -> PatternMineResult:
     """核心入口：从历史 DataFrame 提炼模式规则。
 
@@ -290,6 +293,7 @@ def mine_patterns(
         n_samples_total=len(X),
         feature_importance=feat_imp,
         tree_accuracy=tree_acc,
+        season=season,
     )
 
 
@@ -484,6 +488,37 @@ def match_rules_for_style(
         p_rules = data.get("p_rules", []) or []
         all_rules = s_rules + p_rules
 
+    # v1.4.46+: 规则衰减 — 旧季度的规则 confidence 乘以衰减系数
+    # 规则：season 以字符串形式存 "Q1", "Q2", "2025Q3" 等。
+    #   同季度 → 1.0, 差 1 季 → 0.85, 差 2+ 季 → 0.65, 差 4+ 季 → 0.45
+    yaml_season = str(data.get("season", "") or "").upper()
+    import re
+    _quarter_match = re.search(r"(\d{4})[-\s]?(Q[1-4])", yaml_season)
+    yaml_qnum = None
+    if _quarter_match:
+        yaml_qnum = int(_quarter_match.group(1)) * 4 + int(_quarter_match.group(2)[1])
+    # 当前"新度"：取最近 2026Q4 作参考（硬上限，实际用当前 season 会更准）
+    _now_match = re.search(r"(\d{4})[-\s]?(Q[1-4])", "2026Q4")
+    now_qnum = int(_now_match.group(1)) * 4 + int(_now_match.group(2)[1])
+    if yaml_qnum and yaml_qnum < now_qnum:
+        q_gap = now_qnum - yaml_qnum
+        if q_gap <= 1:
+            decay = 1.0   # 同季/差 1 季不衰减
+        elif q_gap <= 2:
+            decay = 0.85
+        elif q_gap <= 4:
+            decay = 0.65
+        else:
+            decay = 0.45
+    else:
+        decay = 1.0
+
+    if decay < 1.0:
+        log.debug("PatternMiner decay: season=%s, q_gap=%d → decay=%.2f",
+                  yaml_season,
+                  (now_qnum - yaml_qnum) if yaml_qnum else 0,
+                  decay)
+
     scored: list[tuple[float, dict]] = []
     for rule in all_rules:
         cols = rule.get("feature_cols", [])
@@ -517,7 +552,8 @@ def match_rules_for_style(
 
         conf = rule.get("confidence", 0)
         # v1.4.45+: 综合分 = 置信度 × 覆盖率 × 条件强度均值
-        score = conf * coverage * mean_strength
+        # v1.4.46+: × 季节衰减系数 decay（旧季度的规则自然降权）
+        score = conf * coverage * mean_strength * decay
         if score > min_score:
             rule_copy = dict(rule)
             rule_copy["match_score"] = round(score, 4)

@@ -171,9 +171,9 @@ def test_run_all_loops_residual_normalization_end_to_end():
         f"T010 应为 overperformer (sales 最高/预测最低), got {over_ids}"
     )
 
-    # 5 个产物文件全部生成
-    assert len(result.output_files) == 5, (
-        f"应有 5 个产物文件 (4 YAML + 1 MD), got {len(result.output_files)}"
+    # 5+ 个产物文件全部生成（v1.4.46+ 额外含 cross_validation.yaml）
+    assert len(result.output_files) >= 5, (
+        f"应有至少 5 个产物文件 (4 YAML + 1 MD), got {len(result.output_files)}"
     )
 
     # 关键产物文件存在
