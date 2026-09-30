@@ -753,7 +753,7 @@ except Exception:
 st.sidebar.markdown(f"""
 <div class="sb-brand">
   <div class="sb-brand-name">{brand_cfg.brand_name}</div>
-  <div class="sb-brand-meta">{brand_cfg.brand_id} · Decision Engine</div>
+  <div class="sb-brand-meta">Decision Engine</div>
   <div class="sb-badge">校准 {n_calibration} 轮 · {_hist_batches} 批 / {_hist_styles} 款</div>
 </div>
 """, unsafe_allow_html=True)
