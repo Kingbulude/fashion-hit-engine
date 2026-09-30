@@ -230,7 +230,8 @@ def run_batch(cfg, styles_path, images_dir, mode, out_dir, brand_id="mipo"):
                 for p in predictions
                 if p.info.sales_qty and p.info.sales_qty > 0
             }
-            history_df = build_history_df(predictions, sales_lookup=sales_lookup)
+            history_df = build_history_df(predictions, sales_lookup=sales_lookup,
+                                          has_internal_review=brand_cfg.has_internal_review)
             sales_col = "sales"
             if sales_col not in history_df.columns or history_df[sales_col].sum() == 0:
                 log.warning(
@@ -732,9 +733,8 @@ class PredictionPipeline:
             predictions = self.run_smoke_test_data(n=10)
 
         from .core.optimization_kernel import build_history_df, run_all_loops
-        history_df = build_history_df(predictions, sales_lookup=sales_lookup)
-
-        # 销量全 0 → run_all_loops 无信号，提前拦截
+        history_df = build_history_df(predictions, sales_lookup=sales_lookup,
+                                      has_internal_review=getattr(self.brand_cfg, "has_internal_review", True))
         sales_col = "sales"
         if sales_col not in history_df.columns or history_df[sales_col].sum() == 0:
             log.warning(

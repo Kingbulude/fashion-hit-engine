@@ -70,3 +70,5 @@ sales_label_mapping:
 # 当前设 False（默认）—— 因为 40-60 款混在一起跑 Lasso 比按年拆成 20-30 款
 # 更容易稳定收敛。跑过一次完整 3Loop 确认人设权重稳定后再改 True。
 calibration_group_by_year: false
+# v1.4.51: MIPO 有正式内审分级流程（S/A+/A/P）→ grade_norm 参与 3Loop
+has_internal_review: true

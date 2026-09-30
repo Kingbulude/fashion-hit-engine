@@ -2184,6 +2184,56 @@ def render_page_calibration():
                 ])
                 st.dataframe(df_compare, use_container_width=True, hide_index=True)
 
+                # v1.4.50+: 分类指标表（macro F1 + Precision@3）
+                st.subheader("🎯 分类指标（业务对齐层）")
+                st.caption("Spearman 衡量排序相关性；以下回答更贴近业务：「top 3 里真有几款爆的？」「macro F1 均衡 S/P 类的召回」")
+                def _f1_flag(old, new):
+                    d = new - old
+                    icon = "🟢" if d >= 0.02 else ("⚪" if d >= 0 else "🔴")
+                    return f"{icon} {new:.2f}  ({d:+.2f})"
+                df_cls = pd.DataFrame([
+                    {"步骤": "Loop1 VLM特征校准",
+                     "macro F1": _f1_flag(loop_result.loop1.old_f1, loop_result.loop1.new_f1),
+                     "Precision@3": _f1_flag(loop_result.loop1.old_p_at_k, loop_result.loop1.new_p_at_k)},
+                    {"步骤": "Loop2 人设分布拟合",
+                     "macro F1": _f1_flag(loop_result.loop2.old_f1, loop_result.loop2.new_f1),
+                     "Precision@3": _f1_flag(loop_result.loop2.old_p_at_k, loop_result.loop2.new_p_at_k)},
+                    {"步骤": "Loop3 引擎合成",
+                     "macro F1": _f1_flag(loop_result.loop3.old_engine_f1, loop_result.loop3.new_engine_f1),
+                     "Precision@3": _f1_flag(loop_result.loop3.old_engine_p_at_k, loop_result.loop3.new_engine_p_at_k)},
+                    {"步骤": "Loop3 渠道合成",
+                     "macro F1": _f1_flag(loop_result.loop3.old_chan_f1, loop_result.loop3.new_chan_f1),
+                     "Precision@3": _f1_flag(loop_result.loop3.old_chan_p_at_k, loop_result.loop3.new_chan_p_at_k)},
+                ])
+                st.dataframe(df_cls, use_container_width=True, hide_index=True)
+
+                # v1.4.50+: Loop3 引擎权重 + 各引擎 ρ 诊断（含 grade_norm）
+                with st.expander("⚖️ Loop3 引擎权重诊断（点击展开）", expanded=False):
+                    l3 = loop_result.loop3
+                    col_eng, col_rho = st.columns(2)
+                    with col_eng:
+                        st.markdown("**校准后引擎权重**")
+                        eng_labels = {
+                            "persona_score": "👥 人设投票",
+                            "channel_score": "📺 双渠道合成",
+                            "price_value_score": "💰 价格价值",
+                            "grade_norm": "⭐ 内审分级 (grade_norm)",
+                        }
+                        for eng_name, w in l3.engine_weights.items():
+                            label = eng_labels.get(eng_name, eng_name)
+                            pct = f"{w*100:.1f}%"
+                            highlight = " ⭐" if eng_name == "grade_norm" else ""
+                            st.progress(w, text=f"{label}{highlight} — {pct}")
+                    with col_rho:
+                        st.markdown("**各引擎 ρ（与真实销量的排序相关）**")
+                        for eng_name, rho in l3.engine_rho.items():
+                            label = eng_labels.get(eng_name, eng_name)
+                            st.write(f"- {label}：ρ = {rho:+.3f}")
+                        # channel ρ 也展示
+                        st.markdown("**渠道 ρ**")
+                        for ch_name, rho in l3.channel_rho.items():
+                            st.write(f"- {ch_name}：ρ = {rho:+.3f}")
+
                 # 4) 残差分离结果
                 st.subheader("🔍 残差分离（不可预知因素识别）")
                 rd = loop_result.residual

@@ -1093,6 +1093,7 @@ def build_history_df(
     sales_lookup: dict[str, float] | None = None,
     *,
     grade_lookup: dict[str, str | int] | None = None,
+    has_internal_review: bool = True,
 ) -> pd.DataFrame:
     """从 FullPrediction 列表构造 history_df，含 run_all_loops 所需全部列。
 
@@ -1111,6 +1112,8 @@ def build_history_df(
             {style_id: sales_qty}，便于回测注入真实销量
         grade_lookup: v1.4.50+ — 当 prediction.info.manual_grade 为空时的兜底内审分级
             {style_id: "S"|"A+"|"A"|"P"|0|2|3|4}，便于回测注入人工分级
+        has_internal_review: v1.4.51+ — 品牌是否有内审分级流程。
+            False 时跳过 grade_norm 列生成，3Loop 自然退回 3 引擎。
     """
     persona_ids = [f"P{i:02d}" for i in range(1, 31)]
     feature_cols = [f"F{i:02d}" for i in range(1, 11)]
@@ -1170,35 +1173,38 @@ def build_history_df(
         }
 
         # v1.4.50: grade_num / grade_norm — 从 manual_grade 或 grade_lookup 解析
-        _grade_str = str(getattr(info, "manual_grade", "") or "").strip().upper()
-        _from_lookup = False
-        if not _grade_str and style_id in grade_lookup:
-            _gl = grade_lookup[style_id]
-            if isinstance(_gl, int):
-                grade_num = float(_gl)
-                grade_norm = grade_num / 4.0 * 100  # [0, 100]
-                rows.append({"style_id": style_id, **feat_row, **persona_row, **eng_row,
-                             "grade_num": grade_num, "grade_norm": grade_norm, })
-                continue
-            _grade_str = str(_gl).strip().upper()
-            _from_lookup = True
-        _grade_map = {"S": 4, "S款": 4, "S级": 4,
-                      "A+": 3, "A+款": 3,
-                      "A": 2, "A款": 2, "A级": 2,
-                      "P": 0, "P款": 0, "P级": 0, "P-": 0}
-        grade_num = float(_grade_map.get(_grade_str, -1))
-        # -1 表示"没内审分级"（不是真 P 款）→ grade_norm=NaN
-        # 0 表示"真 P 款"（有分级但结果是 P）→ grade_norm=0.0
-        has_real_grade = _grade_str != "" and grade_num >= 0
-        grade_norm = (grade_num / 4.0 * 100) if has_real_grade else float("nan")
+        # v1.4.51+: has_internal_review=False 时跳过（品牌无内审流程）
+        grade_extra: dict[str, float] = {}
+        if has_internal_review:
+            _grade_str = str(getattr(info, "manual_grade", "") or "").strip().upper()
+            _from_lookup = False
+            if not _grade_str and style_id in grade_lookup:
+                _gl = grade_lookup[style_id]
+                if isinstance(_gl, int):
+                    grade_num = float(_gl)
+                    grade_norm = grade_num / 4.0 * 100  # [0, 100]
+                    rows.append({"style_id": style_id, **feat_row, **persona_row, **eng_row,
+                                 "grade_num": grade_num, "grade_norm": grade_norm, })
+                    continue
+                _grade_str = str(_gl).strip().upper()
+                _from_lookup = True
+            _grade_map = {"S": 4, "S款": 4, "S级": 4,
+                          "A+": 3, "A+款": 3,
+                          "A": 2, "A款": 2, "A级": 2,
+                          "P": 0, "P款": 0, "P级": 0, "P-": 0}
+            grade_num = float(_grade_map.get(_grade_str, -1))
+            # -1 表示"没内审分级"（不是真 P 款）→ grade_norm=NaN
+            # 0 表示"真 P 款"（有分级但结果是 P）→ grade_norm=0.0
+            has_real_grade = _grade_str != "" and grade_num >= 0
+            grade_norm = (grade_num / 4.0 * 100) if has_real_grade else float("nan")
+            grade_extra = {"grade_num": grade_num, "grade_norm": grade_norm}
 
         rows.append({
             "style_id": style_id,
             **feat_row,
             **persona_row,
             **eng_row,
-            "grade_num": grade_num,
-            "grade_norm": grade_norm,  # v1.4.50: L1193 已正确区分 P款=0.0 vs 空=NaN
+            **grade_extra,  # v1.4.51+: has_internal_review=False 时为空 dict
         })
 
     return pd.DataFrame(rows)

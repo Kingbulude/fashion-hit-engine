@@ -243,6 +243,10 @@ class BrandConfig:
     # 开启后每年数据独立跑 Loop1/Loop2/Loop3，避免跨年度风格漂移污染校准权重。
     # 需要 Excel 里有「年份」列（YEAR_COL_ALIASES）。默认 False（不分组）。
     calibration_group_by_year: bool = False
+    # v1.4.51+: 品牌是否有内审分级流程（S/A+/A/P）
+    # False 时 build_history_df 跳过 grade_norm 列生成 → 3Loop 自然退回 3 引擎
+    # 避免无内审品牌的空 manual_grade 干扰 grade_norm 权重
+    has_internal_review: bool = True
 
 
 # ========== 结构化解析 ==========
