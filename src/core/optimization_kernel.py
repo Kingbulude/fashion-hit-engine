@@ -1972,6 +1972,52 @@ def run_all_loops(
                 " 建议 < 0.25 为健康，> 0.5 需警惕校准过拟合历史噪音。"
             )
 
+        # v1.4.50+: grade_norm 增量诊断表（有 vs 无 内审分级信号）
+        _gn_has = cv_result is not None and "grade_norm" in history_df.columns and history_df["grade_norm"].notna().sum() >= 3
+        _l3_no_gn_weights: dict[str, float] = {}
+        if _gn_has:
+            try:
+                df_no_gn = history_df.copy()
+                df_no_gn["grade_norm"] = float("nan")
+                df_no_gn["grade_num"] = float("nan")
+                cv_no_gn = cross_validate_calibration(df_no_gn, sales_col=sales_col)
+                # 重跑 Loop3 拿无 grade_norm 的引擎权重（轻量，不重跑全 3Loop）
+                try:
+                    _l3_no_gn = EnsembleWeightTuner.tune(df_no_gn, sales_col=sales_col)
+                    _l3_no_gn_weights = _l3_no_gn.engine_weights
+                except Exception:
+                    _l3_no_gn_weights = {}
+                md_lines.append("")
+                md_lines.append("### 💡 grade_norm 增量诊断（v1.4.50+）")
+                md_lines.append("")
+                md_lines.append("内审分级 grade_norm 是否被 Loop3 采纳，直接决定了预测质量上限。")
+                md_lines.append("下表对比了同一款 history_df，有 vs 无 grade_norm 信号的效果差异：")
+                md_lines.append("")
+                md_lines.append("| 指标 | 有 grade_norm | 无 grade_norm | Δ（grade_norm 贡献） |")
+                md_lines.append("|------|:---:|:---:|:---:|")
+                md_lines.append(f"| **CV verdict** | `{cv_result.verdict}` | `{cv_no_gn.verdict}` | — |")
+                md_lines.append(f"| **Test Spearman** | **{cv_result.test_in_spearman:+.3f}** | {cv_no_gn.test_in_spearman:+.3f} | **{cv_result.test_in_spearman - cv_no_gn.test_in_spearman:+.3f}** |")
+                md_lines.append(f"| Test F1 | {cv_result.test_in_f1:.3f} | {cv_no_gn.test_in_f1:.3f} | {cv_result.test_in_f1 - cv_no_gn.test_in_f1:+.3f} |")
+                md_lines.append(f"| Overfit ρ | {cv_result.overfitting_ratio_in_spearman:.2f} | {cv_no_gn.overfitting_ratio_in_spearman:.2f} | {cv_result.overfitting_ratio_in_spearman - cv_no_gn.overfitting_ratio_in_spearman:+.2f} |")
+                md_lines.append("")
+                md_lines.append("**Loop3 引擎权重对比**：")
+                md_lines.append("")
+                md_lines.append("| 引擎 | 有 grade_norm | 无 grade_norm | ρ(销量) |")
+                md_lines.append("|------|:---:|:---:|:---:|")
+                _all_eng = sorted(set(
+                    list(r3.engine_weights.keys()) +
+                    ["persona_score", "channel_score", "price_value_score"]
+                ), key=lambda c: -r3.engine_weights.get(c, 0))
+                for _eng in _all_eng:
+                    _wa = r3.engine_weights.get(_eng, 0)
+                    _wb = _l3_no_gn_weights.get(_eng, 0)
+                    _rho = r3.engine_rho.get(_eng, 0)
+                    md_lines.append(
+                        f"| {_eng} | {_wa:.3f} | {_wb:.3f} | {_rho:+.3f} |"
+                    )
+            except Exception as _exc:
+                log.warning("grade_norm 增量诊断跳过（不阻塞）: %s", _exc)
+
         md_lines.append("")
 
         # v1.4.44+: PatternMiner 章节
