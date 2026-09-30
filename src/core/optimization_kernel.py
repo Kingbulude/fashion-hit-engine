@@ -1091,12 +1091,15 @@ def build_history_df(
     predictions: list[Any],
     sales_col: str = "sales",
     sales_lookup: dict[str, float] | None = None,
+    *,
+    grade_lookup: dict[str, str | int] | None = None,
 ) -> pd.DataFrame:
     """从 FullPrediction 列表构造 history_df，含 run_all_loops 所需全部列。
 
     列：style_id, F01-F10 (10 特征分), P01-P30 (30 人设投票分),
         persona_score, channel_score, price_value_score,
-        natural_score, live_score, sales。
+        natural_score, live_score, sales,
+        + v1.4.50: grade_num / grade_norm （从 StyleInfo.manual_grade 自动解析）
 
     用 getattr 鸭子类型访问，避免与 src.types 强耦合；
     用于 smoke test 与 pipeline.py backtest 分支共用，避免两边重复逻辑。
@@ -1106,10 +1109,13 @@ def build_history_df(
         sales_col: 销量列名，默认 "sales"
         sales_lookup: 当 prediction.info.sales_qty 为 0/None 时的兜底销量映射
             {style_id: sales_qty}，便于回测注入真实销量
+        grade_lookup: v1.4.50+ — 当 prediction.info.manual_grade 为空时的兜底内审分级
+            {style_id: "S"|"A+"|"A"|"P"|0|2|3|4}，便于回测注入人工分级
     """
     persona_ids = [f"P{i:02d}" for i in range(1, 31)]
     feature_cols = [f"F{i:02d}" for i in range(1, 11)]
     sales_lookup = sales_lookup or {}
+    grade_lookup = grade_lookup or {}
     rows: list[dict[str, Any]] = []
 
     for p in predictions:
@@ -1163,11 +1169,36 @@ def build_history_df(
             sales_col: sales,
         }
 
+        # v1.4.50: grade_num / grade_norm — 从 manual_grade 或 grade_lookup 解析
+        _grade_str = str(getattr(info, "manual_grade", "") or "").strip().upper()
+        _from_lookup = False
+        if not _grade_str and style_id in grade_lookup:
+            _gl = grade_lookup[style_id]
+            if isinstance(_gl, int):
+                grade_num = float(_gl)
+                grade_norm = grade_num / 4.0 * 100  # [0, 100]
+                rows.append({"style_id": style_id, **feat_row, **persona_row, **eng_row,
+                             "grade_num": grade_num, "grade_norm": grade_norm, })
+                continue
+            _grade_str = str(_gl).strip().upper()
+            _from_lookup = True
+        _grade_map = {"S": 4, "S款": 4, "S级": 4,
+                      "A+": 3, "A+款": 3,
+                      "A": 2, "A款": 2, "A级": 2,
+                      "P": 0, "P款": 0, "P级": 0, "P-": 0}
+        grade_num = float(_grade_map.get(_grade_str, -1))
+        # -1 表示"没内审分级"（不是真 P 款）→ grade_norm=NaN
+        # 0 表示"真 P 款"（有分级但结果是 P）→ grade_norm=0.0
+        has_real_grade = _grade_str != "" and grade_num >= 0
+        grade_norm = (grade_num / 4.0 * 100) if has_real_grade else float("nan")
+
         rows.append({
             "style_id": style_id,
             **feat_row,
             **persona_row,
             **eng_row,
+            "grade_num": grade_num,
+            "grade_norm": grade_norm,  # v1.4.50: L1193 已正确区分 P款=0.0 vs 空=NaN
         })
 
     return pd.DataFrame(rows)
