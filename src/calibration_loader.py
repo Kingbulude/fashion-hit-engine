@@ -125,26 +125,16 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
                 expected_keys = base_expected | ({"grade_norm"} if has_grade_norm else set())
 
                 if base_expected.issubset(mapped_eng.keys()):
-                    # grade_norm 是新增引擎：即使权重均匀也必须加载
-                    # 否则预测阶段 ensemble_engine 看不到 grade_norm 权重
-                    n_engines = len(expected_keys)  # 3 or 4
-                    target_uniform = 1.0 / n_engines
-                    mapped_eng_has_grade = has_grade_norm
-
-                    # 判定"是否偏离均匀"（只看基础 3 引擎的分布）
-                    base_weights = [mapped_eng.get(k, 0) for k in base_expected]
-                    base_uniform = all(
-                        abs(w - 1.0 / 3) < 0.001 for w in base_weights
-                    )
-                    # grade_norm 均匀但存在 → 也算"有校准"，因为 4 引擎 vs 3 引擎是本质差异
-                    if (not base_uniform) or mapped_eng_has_grade:
-                        result.engine_weights = mapped_eng
-                        result.loaded_files.append("loop3_ensemble_weights.yaml")
-                        gn_hint = " + grade_norm" if has_grade_norm else ""
-                        log.info("✅ Loop3 engine_weights 已加载 (%d引擎%s): %s",
-                                 n_engines, gn_hint, mapped_eng)
-                    else:
-                        log.info("Loop3 engine_weights 仍是均匀权重且无 grade_norm，跳过")
+                    # ===== v1.4.53: 只要 3 个基础引擎齐了就加载 =====
+                    # 不再检查"是否偏离均匀"——校准跑完后权重均匀也是有意义的结果
+                    # （说明在当前数据上没找到改进方向）；冷启动用 default_engine_weights
+                    # 只有在 loop3 YAML **不存在**时才 fallback 到默认值
+                    result.engine_weights = mapped_eng
+                    result.loaded_files.append("loop3_ensemble_weights.yaml")
+                    gn_hint = " + grade_norm" if has_grade_norm else ""
+                    log.info("✅ Loop3 engine_weights 已加载 (%d引擎%s): %s",
+                             len(base_expected) + (1 if has_grade_norm else 0),
+                             gn_hint, mapped_eng)
 
             if ch:
                 mapped_ch = {
@@ -153,10 +143,9 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
                 }
                 expected_ch = {"natural", "live_stream"}
                 if expected_ch.issubset(mapped_ch.keys()):
-                    uniform_ch = abs(mapped_ch.get("natural", 0) - 0.5) < 0.001
-                    if not uniform_ch:
-                        result.channel_split = mapped_ch
-                        log.info("✅ Loop3 channel_split 已加载: %s", mapped_ch)
+                    # v1.4.53: 齐了就加载，不再检查 0.5/0.5 均匀
+                    result.channel_split = mapped_ch
+                    log.info("✅ Loop3 channel_split 已加载: %s", mapped_ch)
 
             # 记录 spearman 增益
             if eng:
@@ -173,16 +162,15 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
         try:
             data = yaml.safe_load(l2_path.read_text(encoding="utf-8"))
             pw = data.get("persona_weights") or {}
-            lasso = data.get("lasso_raw_coef") or {}
 
-            # 只有当至少有一个人设的 Lasso coef > 0 时才加载
-            nz_lasso = {k: float(v) for k, v in lasso.items() if float(v) > 0}
-            if nz_lasso and pw:
+            # v1.4.53: 只要 persona_weights 有值就加载
+            # 之前要求 Lasso coef > 0 才加载——但即使全为 0 也意味着"校准后人设分布不变"
+            if pw:
                 result.persona_weights = {k: float(v) for k, v in pw.items()}
                 result.loaded_files.append("loop2_persona_distribution_weights.yaml")
-                log.info("✅ Loop2 persona_weights 已加载 (%d 人设非零)", len(nz_lasso))
-            else:
-                log.info("Loop2 Lasso coef 全为 0（mock 数据信噪比低），跳过加载")
+                nz_count = sum(1 for v in pw.values() if abs(float(v) - 1/30) > 0.01)
+                log.info("✅ Loop2 persona_weights 已加载 (%d/%d 人设权重有调整)",
+                         nz_count, len(pw))
 
             old_sp = data.get("old_spearman", 0)
             new_sp = data.get("new_spearman", 0)
@@ -198,15 +186,14 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
             data = yaml.safe_load(l1_path.read_text(encoding="utf-8"))
             biases = data.get("feature_biases") or {}
 
-            # 只有当至少有一个 bias 不是 1.0 时才加载
-            non_default = {k: float(v) for k, v in biases.items() if abs(float(v) - 1.0) > 0.01}
-            if non_default:
+            # v1.4.53: 只要 feature_biases 有值就加载
+            # 之前要求至少一个 bias != 1.0 才加载——但即使全 1.0 也意味着"特征评分不需要调整"
+            if biases:
                 result.feature_biases = {k: float(v) for k, v in biases.items()}
                 result.loaded_files.append("loop1_vlm_feature_biases.yaml")
+                non_default = sum(1 for v in biases.values() if abs(float(v) - 1.0) > 0.01)
                 log.info("✅ Loop1 feature_biases 已加载 (%d/%d 个有调整)",
-                         len(non_default), len(biases))
-            else:
-                log.info("Loop1 feature_biases 全为 1.0（内核 bug 或无改进），跳过加载")
+                         non_default, len(biases))
 
             old_sp = data.get("old_spearman_avg", 0)
             new_sp = data.get("new_spearman_avg", 0)
