@@ -1698,15 +1698,11 @@ def render_page_summary():
         & df["主推渠道"].isin(channel_filter)
     ]
 
-    st.dataframe(dff, use_container_width=True, height=450, hide_index=True)
+    st.dataframe(dff, use_container_width=True, height=620, hide_index=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        grade_counts = df["分级"].value_counts().reindex(["S", "A+", "A", "P"]).fillna(0).astype(int)
-        st.subheader("📊 分级分布")
-        st.bar_chart(grade_counts)
-    with col2:
-        st.subheader("📥 导出")
+    st.subheader("📥 导出")
+    col_a, col_b = st.columns(2)
+    with col_a:
         bio = io.BytesIO()
         with pd.ExcelWriter(bio, engine="openpyxl") as writer:
             dff.to_excel(writer, index=False, sheet_name="批次总表")
@@ -1716,6 +1712,7 @@ def render_page_summary():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+    with col_b:
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for p in preds:
