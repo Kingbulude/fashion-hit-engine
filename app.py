@@ -1766,7 +1766,7 @@ def render_page_detail():
     st.markdown("""
     <style>
     .thumb-wrap { display:flex; flex-direction:column; align-items:center; }
-    .thumb-box { width:220px; height:280px; overflow:hidden; border-radius:8px;
+    .thumb-box { width:100%; height:520px; overflow:hidden; border-radius:8px;
                  display:flex; align-items:center; justify-content:center;
                  background:#f5f2ec; border:1px solid #e0dcd5; }
     .thumb-box img { width:100%; height:100%; object-fit:cover; }
@@ -1777,8 +1777,8 @@ def render_page_detail():
     </style>
     """, unsafe_allow_html=True)
 
-    # ===== 左右分栏：款式图片 (1.3) + 基本信息+BARS (1.4) =====
-    def _thumb_b64(ipath: str, size=(220, 280)) -> str:
+    # ===== 左右分栏：款式图片+优劣势 (1.3) + 基本信息+BARS (1.4) =====
+    def _thumb_b64(ipath: str, size=(400, 520)) -> str:
         """PIL 中心裁剪 + 缩放到统一规格 → base64 data URI"""
         try:
             img = Image.open(ipath).convert("RGB")
@@ -1798,9 +1798,19 @@ def render_page_detail():
         except Exception:
             return ""
 
-    left, right = st.columns([1.3, 1.4])
+    left, right = st.columns([1.6, 1.4])
     with left:
         st.subheader("📷 款式图片")
+        # —— 优劣势速览（上移到图片上方，与右列「基本信息」对齐）——
+        strength_items = g.strengths or []
+        weakness_items = g.weaknesses or []
+        if strength_items or weakness_items:
+            st.subheader("🏆 优劣势速览")
+            if strength_items:
+                st.caption("✅ 优势：" + " · ".join(strength_items[:4]))
+            if weakness_items:
+                st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:4]))
+
         image_paths = st.session_state.get("image_paths_map", {}).get(p.info.style_id, [])
         if image_paths:
             _thumbs = st.columns(min(len(image_paths), 3))
@@ -1943,18 +1953,7 @@ def render_page_detail():
                 st.caption(row["VLM理由"])
                 st.divider()
 
-    # ===== 优劣势速览（左右分栏之后，全宽长条）=====
-    strength_items = g.strengths or []
-    weakness_items = g.weaknesses or []
-    if strength_items or weakness_items:
-        st.subheader("🏆 优劣势速览")
-        if strength_items:
-            st.caption("✅ 优势：" + " · ".join(strength_items[:4]))
-        if weakness_items:
-            st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:4]))
-        st.divider()
-    else:
-        st.divider()
+    st.divider()
 
     # ===== 下方：三列指标（全宽）=====
     def _score_color(score: float, *, lo_high: float = 8.5, lo_mid: float = 6.5,
