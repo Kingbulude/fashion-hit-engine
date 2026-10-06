@@ -562,6 +562,42 @@ class EnsembleWeightTuner:
             if len(df_work) < 3:
                 raise ValueError(f"样本量不足（{len(df_work)}<3）")
 
+            # v1.4.82+: sales 全 0/缺失时明确警告（否则 Spearman 无意义）
+            _sales_nonzero = int((df_work[sales_col] > 0).sum())
+            if _sales_nonzero < 5:
+                log.warning(
+                    "⚠️ Loop3 有效销量样本仅 %d/%d（≥5 才有意义）。"
+                    "请通过回测 Excel 注入真实销量数据。",
+                    _sales_nonzero, len(df_work),
+                )
+
+            # v1.4.82+: 从 persona 分布特征中挑一个 ρ 最高的，
+            # 替换 persona_score 参与引擎加权（比单个 weighted_score 更准）
+            _persona_extra_cols = [
+                c for c in ["persona_top8", "persona_support_rate",
+                            "persona_oppose_rate", "persona_divergence",
+                            "persona_extreme_gap"]
+                if c in df_work.columns
+            ]
+            if _persona_extra_cols:
+                _best_persona_col = "persona_score"
+                _best_persona_rho = 0.0
+                for _pc in ["persona_score"] + _persona_extra_cols:
+                    try:
+                        _r, _ = spearmanr(df_work[_pc].values, df_work[sales_col].values)
+                        _r = 0.0 if math.isnan(_r) else abs(float(_r))
+                        if _r > _best_persona_rho:
+                            _best_persona_rho = _r
+                            _best_persona_col = _pc
+                    except Exception:
+                        pass
+                if _best_persona_col != "persona_score":
+                    df_work["persona_score"] = df_work[_best_persona_col]
+                    log.info(
+                        "🧠 Persona 引擎自动增强: 用 %s (|ρ|=%.3f) 替换 persona_score",
+                        _best_persona_col, _best_persona_rho,
+                    )
+
             y = df_work[sales_col].values
 
             # --- 旧：引擎均匀权重 ---
@@ -1139,6 +1175,7 @@ def build_history_df(
     sales_lookup: dict[str, float] | None = None,
     *,
     grade_lookup: dict[str, str | int] | None = None,
+    persona_weights: list[float] | None = None,
     has_internal_review: bool = True,
 ) -> pd.DataFrame:
     """从 FullPrediction 列表构造 history_df，含 run_all_loops 所需全部列。
@@ -1192,13 +1229,38 @@ def build_history_df(
         weighted_score = float(getattr(voting, "weighted_score", 5.0))
         votes = getattr(voting, "votes", None) or []
         persona_row: dict[str, float] = {}
+        _p_scores = []  # 收集所有人设 final_score，用于聚合
+        # 人设权重（按 persona_weights 配置），默认均匀
+        _pw = persona_weights or [1.0 / 30] * 30
         for pi in range(30):
             if pi < len(votes):
-                persona_row[persona_ids[pi]] = float(
-                    getattr(votes[pi], "final_score", weighted_score)
-                )
+                _s = float(getattr(votes[pi], "final_score", weighted_score))
+                persona_row[persona_ids[pi]] = _s
+                _p_scores.append((_s, _pw[pi] if pi < len(_pw) else 1.0 / 30))
             else:
                 persona_row[persona_ids[pi]] = weighted_score
+                _p_scores.append((weighted_score, _pw[pi] if pi < len(_pw) else 1.0 / 30))
+
+        # v1.4.82+: 丰富人设分布特征（persona_score 只取 weighted_score 太粗）
+        _scores_arr = np.array([s for s, _ in _p_scores])
+        _weights_arr = np.array([w for _, w in _p_scores])
+        _top8_idx = np.argsort(-_weights_arr)[:8]  # 权重最大的 top-8 人设
+        persona_top8 = float(_scores_arr[_top8_idx].mean())  # 核心人群均分
+        # 支持率：final_score >= 6 的人设权重占比
+        persona_support_rate = float(
+            _weights_arr[_scores_arr >= 6].sum() / _weights_arr.sum()
+        ) if _weights_arr.sum() > 0 else 0.0
+        # 反对率：final_score < 4 的人设权重占比
+        persona_oppose_rate = float(
+            _weights_arr[_scores_arr < 4].sum() / _weights_arr.sum()
+        ) if _weights_arr.sum() > 0 else 0.0
+        # 核心人设分歧度：top-8 标准差（核心越分裂越危险）
+        persona_divergence = float(_scores_arr[_top8_idx].std())
+        # 极端差：top-3 权重均分 - bottom-3 权重均分
+        _btm3_idx = np.argsort(_weights_arr)[:3]
+        persona_extreme_gap = float(
+            _scores_arr[_top8_idx[:3]].mean() - _scores_arr[_btm3_idx].mean()
+        )
 
         # 三大引擎 + 双渠道
         natural = float(getattr(channels, "natural_score", 5.0))
@@ -1209,6 +1271,12 @@ def build_history_df(
         is_live_stream = 1.0 if getattr(info, "is_live_stream", False) else 0.0
         eng_row = {
             "persona_score": weighted_score,
+            # v1.4.82+: 丰富人设分布特征 — 让校准能发现分布形状的预测力
+            "persona_top8": persona_top8,
+            "persona_support_rate": persona_support_rate,
+            "persona_oppose_rate": persona_oppose_rate,
+            "persona_divergence": persona_divergence,
+            "persona_extreme_gap": persona_extreme_gap,
             "channel_score": (natural + live) / 2,
             "price_value_score": perceived,
             "natural_score": natural,
