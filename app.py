@@ -1860,9 +1860,9 @@ def render_page_detail():
         for key, f in p.features.features.items():
             feat_rows.append({"特征": f.name, "分数": f.score, "理由": f.reason or "（无）"})
         df_feat = pd.DataFrame(feat_rows).sort_values("分数")
-        # 压缩高度 + 固定 x 轴 0-10，避免每次渲染随机缩放
+        # 压缩高度（height=200）避免每次渲染撑满一屏
         st.bar_chart(df_feat, x="特征", y="分数", horizontal=True,
-                     color="#a8b5c4", height=200, x_min=0, x_max=10)
+                     color="#a8b5c4", height=200)
 
     # ===== 下方：四列指标（图片下方一屏看完）=====
     # 分数含义说明：0-10 分（越高越好），人设/渠道/价格三个引擎独立打分后加权
@@ -1889,7 +1889,7 @@ def render_page_detail():
                      p.channels.live_score, p.channels.perceived_value],
         })
         st.bar_chart(engine_df, x="引擎", y="得分", color="#9fb893",
-                     height=180, use_container_width=True, y_min=0, y_max=10)
+                     height=180, use_container_width=True)
         # 价格风险 + 百分位
         _risk_map = {"低风险": "🟢 低风险", "中风险": "🟡 中风险", "高风险": "🔴 高风险"}
         _risk_text = _risk_map.get(p.channels.price_risk, p.channels.price_risk)
