@@ -797,7 +797,7 @@ _header_ph.markdown(f"""
 
 st.sidebar.divider()
 
-# --- 侧边栏：LLM 模式切换（智谱免费为默认） ---
+# --- 侧边栏：LLM 模式切换（混合模式为默认 — 视觉本地 Ollama + 文本智谱云端，兼顾速度与质量） ---
 llm_mode_label = st.sidebar.radio(
     "🤖 预测引擎",
     options=[
@@ -816,7 +816,7 @@ llm_mode_label = st.sidebar.radio(
         "百炼：阿里云付费 API（每批约 2-6 元，免费额度已耗尽时慎选）。"
         "演示模式用伪随机数据跑通全链路，仅用于本地调试。"
     ),
-    index=0,
+    index=2,  # 默认：混合模式（智谱 VLM + 本地文本）
 )
 
 # --- 侧边栏：API Key 输入（按所选后端显示对应输入框） ---
