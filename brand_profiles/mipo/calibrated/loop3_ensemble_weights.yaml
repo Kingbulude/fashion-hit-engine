@@ -1,35 +1,35 @@
 applied: true
 engine:
-  old_spearman: 0.6848484848484848
-  new_spearman: 0.6848484848484848
+  old_spearman: 0.6363636363636362
+  new_spearman: 0.7333333333333332
   classification:
     old_f1: 0.2708333333333333
-    new_f1: 0.2708333333333333
-    delta_f1: 0.0
+    new_f1: 0.5208333333333333
+    delta_f1: 0.24999999999999994
     old_precision_at_k: 0.3333333333333333
     new_precision_at_k: 0.3333333333333333
     delta_p_at_k: 0.0
   rho:
-    persona_score: 0.5151515151515151
-    channel_score: 0.12727272727272726
+    persona_score: -0.28484848484848485
+    channel_score: 0.3696969696969697
     price_value_score: 0.6727272727272726
   weights:
-    persona_score: 0.3333333333333333
-    channel_score: 0.3333333333333333
-    price_value_score: 0.3333333333333333
+    persona_score: 0.029543419874664283
+    channel_score: 0.39570277529095793
+    price_value_score: 0.5747538048343778
 channel:
-  old_spearman: 0.12727272727272726
-  new_spearman: 0.1515151515151515
+  old_spearman: 0.3696969696969697
+  new_spearman: 0.3696969696969697
   classification:
-    old_f1: 0.2708333333333333
-    new_f1: 0.20833333333333331
-    delta_f1: -0.0625
+    old_f1: 0.3958333333333333
+    new_f1: 0.0
+    delta_f1: -0.3958333333333333
     old_precision_at_k: 0.0
-    new_precision_at_k: 0.0
-    delta_p_at_k: 0.0
+    new_precision_at_k: 0.3333333333333333
+    delta_p_at_k: 0.3333333333333333
   rho:
     natural_score: -0.0303030303030303
-    live_score: -0.05454545454545454
+    live_score: 0.16363636363636364
   weights:
-    natural_score: 0.5235294117647059
-    live_score: 0.47647058823529415
+    natural_score: 0.5
+    live_score: 0.5

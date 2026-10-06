@@ -417,60 +417,155 @@ class PredictionPipeline:
             grade_norm_score=grade_norm_score,
         )
 
-    # ===== mock 人设投票（不依赖LLM，用于smoke test）=====
-    def _mock_voting(self, style_id: str, feats: StyleFeatures) -> VotingResult:
-        import random
-        # 注：原 hash() 跨进程随机化（PYTHONHASHSEED）→ mock 投票每进程不同 →
-        # smoke test 非确定性（sp_sales 在 0.90~0.99 漂移、阈值 0.92 随机失败）。
-        # 改用 zlib.crc32 提供确定性 hash。
-        random.seed(zlib.crc32(f"{style_id}_vote".encode()))
-        target_age = int(getattr(self.brand_cfg.decision_structure, "default_target_age", 10))
-        n_personas = 30
+    # ===== mock 人设投票（演示用：生成带款式特征引用的自然语言理由）=====
+    def _mock_voting(self, info: "StyleInfo", feats: StyleFeatures) -> VotingResult:
+        import random, re
+        from .types import PersonaVote
+
+        # 确定性种子（style_id + price 保证同一款每次 mock 结果一致）
+        seed_str = f"{info.style_id}_{info.price}_{info.season}"
+        random.seed(zlib.crc32(seed_str.encode()))
+
+        # —— 准备款式描述素材（用于理由生成）——
+        feats_list = list(feats.features.values())
+        feats_sorted = sorted(feats_list, key=lambda f: f.score)
+        low3 = feats_sorted[:3]           # 最低分 3 个特征（短板）
+        high3 = feats_sorted[-3:][::-1]   # 最高分 3 个特征（亮点）
+        low_names = [f.name for f in low3]
+        high_names = [f.name for f in high3]
+
+        # 从 FAB 描述抽关键短语（逗号/分号/顿号切，≥2 字且非尾字标点）
+        fab_phrases: list[str] = []
+        if info.fab_description:
+            fab_phrases = [p.strip("。，；,.； ")
+                           for p in re.split(r"[，,；;、]", info.fab_description)
+                           if len(p.strip("。，；,.； ")) >= 2][:4]
+
+        scene_kw = ""
+        if info.season:
+            scene_kw = f"{info.season}"
+
+        # —— 理由模板池（按 layer.role + 褒贬倾向分）——
+        # decider 层：妈妈/决策者视角（实用、功能、耐脏、价格、实穿）
+        decider_positive = [
+            "{fab}，{top1}很好，{scene}都能穿，性价比不错",
+            "{top1}和{top2}做得好，{fab}，我家娃日常上学穿合适",
+            "{fab}，面料{top1}，不用担心不耐造，值得入",
+            "{top1}是这款最大亮点，{fab}，价格也合理，推荐",
+            "{fab}，{top1}够用心，{scene}穿搭不费力",
+        ]
+        decider_negative = [
+            "{bottom1}一般，{fab}但日常上学不太好搭",
+            "版型{bottom1}，{bottom2}也偏低，{fab}可不敢买",
+            "{fab}看起来设计太夸张，{bottom1}是硬伤",
+            "面料{bottom1}，{scene}穿不够实穿，再考虑下",
+            "{bottom1}和{bottom2}都不太行，{fab}但不值得这个价",
+        ]
+        # influencer 层：孩子/影响者视角（好看、酷、颜色、同学同款、上镜）
+        influencer_positive = [
+            "{fab}好酷！{top1}，我想跟同学穿同款",
+            "{top1}和{top2}都棒，{fab}，穿去学校肯定被夸",
+            "{fab}，颜色和{top1}都好看，就定这款了",
+            "{top1}超喜欢！{fab}，周末出去玩穿",
+            "{fab}设计独特，{top1}，拍照片应该挺上镜的",
+        ]
+        influencer_negative = [
+            "{bottom1}不太行，{fab}我不想穿这个",
+            "颜色/版型{bottom1}，{fab}但显得我好丑",
+            "{fab}看起来很老气，{bottom1}是致命问题",
+            "{top1}不够突出，{bottom1}又明显，{fab}没意思",
+            "{fab}设计太怪，{bottom1}不好看，算了吧",
+        ]
+
+        def _fill_template(template: str) -> str:
+            """把模板里的 {fab} {top1} {bottom1} {scene} 等占位符填上"""
+            return template.format(
+                fab=fab_phrases[0] if fab_phrases else info.category or "这款",
+                top1=high_names[0] if high_names else "整体",
+                top2=high_names[1] if len(high_names) > 1 else high_names[0] if high_names else "整体",
+                bottom1=low_names[0] if low_names else "整体",
+                bottom2=low_names[1] if len(low_names) > 1 else low_names[0] if low_names else "整体",
+                scene=scene_kw or "日常",
+            )
+
+        # —— 人设池（复用 brand_cfg.personas 里的真实人设，不够就兜底）——
+        brand_personas = self.brand_cfg.personas or []
+        n_personas = max(30, len(brand_personas))
         votes = []
         all_scores: list[float] = []
         support = 0
         oppose = 0
         buy_reasons_map: dict[str, int] = {}
         oppose_reasons_map: dict[str, int] = {}
-        reasons_pool_buy = [
-            "面料看起来很舒服，功能设计也实用",
-            "版型好看，孩子喜欢颜色和廓形",
-            "场景百搭，上学户外都能穿",
-            "品牌调性符合我们的审美",
-            "设计独特不容易撞款",
-        ]
-        reasons_pool_oppose = [
-            "颜色太艳/太大胆，不敢挑战",
-            "感觉搭配难度有点高",
-            "版型过于宽松，日常上学不太合适",
-            "面料看起来偏薄，担心质量",
-            "设计有点夸张，不够实穿",
-        ]
+
+        # 用 brands personas 提供个性名字 + axes
         for i in range(n_personas):
-            base = random.uniform(4.0, 8.0)
+            if i < len(brand_personas):
+                p_p = brand_personas[i]
+                p_id = p_p.get("persona_id", f"P{i+1:02d}")
+                p_name = p_p.get("name", f"人设{i+1}")
+                p_scene = (p_p.get("axes", {}) or {}).get("scene", "")
+            else:
+                p_id, p_name, p_scene = f"P{i+1:02d}", f"人设{i+1}", ""
+
+            base = random.uniform(1.0, 10.0)  # 拉宽分布，让更多人设进入极端段
             avg_feat = sum(f.score for f in feats.features.values()) / max(1, len(feats.features))
             s = clamp(base * 0.5 + avg_feat * 0.5, 1.0, 10.0)
-            # 各决策层独立扰动：决策者层±0.8，影响层±1.2（与层语义无关的数值扰动）
+
+            # 各决策层独立扰动 + 生成带款式引用的自然语言理由
             layer_scores: dict[str, float] = {}
+            layer_reasons: dict[str, str] = {}
             for layer in self.brand_cfg.decision_structure.layers:
                 jitter = 0.8 if layer.role == "decider" else 1.2
-                layer_scores[layer.id] = round(clamp(s + random.uniform(-jitter, jitter), 1.0, 10.0), 1)
+                ls = round(clamp(s + random.uniform(-jitter, jitter), 1.0, 10.0), 1)
+                layer_scores[layer.id] = ls
+
+                # 根据 layer.score + role 选模板
+                pos_pool = decider_positive if layer.role == "decider" else influencer_positive
+                neg_pool = decider_negative if layer.role == "decider" else influencer_negative
+                if ls >= 7.0:
+                    tpl = pos_pool[random.randint(0, len(pos_pool) - 1)]
+                elif ls <= 4.0:
+                    tpl = neg_pool[random.randint(0, len(neg_pool) - 1)]
+                else:
+                    # 中间分：温和评价
+                    tpl = (
+                        f"{info.category or '这款'}整体还行，{{top1}}可以，{{bottom1}}一般，"
+                        f"我会先放购物车看看价格"
+                    ) if layer.role == "decider" else (
+                        f"{{fab}}一般般吧，{{top1}}还行，{{bottom1}}不够惊艳"
+                    )
+                layer_reasons[layer.id] = _fill_template(tpl)
+
             all_scores.append(s)
+            # opposing_reason + 聚合池
+            opposing = ""
             if s >= 7.0:
                 support += 1
-                r = random.choice(reasons_pool_buy)
-                buy_reasons_map[r] = buy_reasons_map.get(r, 0) + 1
+                r = layer_reasons.get(
+                    self.brand_cfg.decision_structure.layers[0].id,
+                    ""
+                )
+                if r:
+                    buy_reasons_map[r] = buy_reasons_map.get(r, 0) + 1
             elif s < 4.0:
                 oppose += 1
-                r = random.choice(reasons_pool_oppose)
-                oppose_reasons_map[r] = oppose_reasons_map.get(r, 0) + 1
-            from .types import PersonaVote
+                opposing = _fill_template(
+                    (decider_negative + influencer_negative)[random.randint(
+                        0, len(decider_negative) + len(influencer_negative) - 1
+                    )]
+                )
+                oppose_reasons_map[opposing] = oppose_reasons_map.get(opposing, 0) + 1
+
             votes.append(PersonaVote(
-                persona_id=f"P{i+1:02d}",
-                persona_name=f"人设{i+1}",
+                persona_id=p_id,
+                persona_name=p_name,
                 layer_scores=layer_scores,
+                layer_reasons=layer_reasons,
                 final_score=round(s, 1),
+                opposing_reason=opposing,
             ))
+
         from statistics import pstdev
         top_buy = [r for r, _ in sorted(buy_reasons_map.items(), key=lambda x: -x[1])[:3]]
         top_opp = [r for r, _ in sorted(oppose_reasons_map.items(), key=lambda x: -x[1])[:3]]
@@ -533,7 +628,7 @@ class PredictionPipeline:
                         feat.score = round(
                             clamp(feat.score * bias, 0.0, 10.0), 3
                         )
-            voting = self._mock_voting(info.style_id, feats)
+            voting = self._mock_voting(info, feats)
             channels, _debug = calculate_channel_scores(
                 info, feats, voting,
                 cfg=None, all_style_prices=price_pool, brand_cfg=self.brand_cfg,
