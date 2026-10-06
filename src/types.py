@@ -14,13 +14,22 @@ from typing import Any, Literal, Optional
 # ========== 数据类 ==========
 @dataclass
 class FeatureScore:
-    """单个特征的BARS评分结果"""
+    """单个特征的BARS视觉锚定结果
+
+    v1.4.90+: score 不再表示 VLM 对销量的预判分，而是匹配到的视觉锚定档的区间中点
+    （纯视觉分类映射，如 anchor 3 对应区间 [5,6] → score=5.5）。
+    销量判断完全由人设 LLM 基于 visual_description + anchor_level 独立做出。
+    """
     key: str
     name: str
     category: str
     score: float
     confidence: float
-    reason: str = ""
+    # v1.4.90+: VLM 纯客观视觉描述（只写眼睛看到的，不做价值判断）
+    visual_description: str = ""
+    # v1.4.90+: 匹配到的视觉锚定档 1-5（纯视觉分类，无销量语义）
+    anchor_level: int | None = None
+    reason: str = ""  # 保留给向后兼容（旧路径可能填充）
     # 多模型交叉验证
     model_scores: dict[str, float] = field(default_factory=dict)
     divergence: float = 0.0

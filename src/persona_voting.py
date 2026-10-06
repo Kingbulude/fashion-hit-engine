@@ -47,49 +47,67 @@ def _persona_key(p: dict[str, Any]) -> str:
     return str(p.get("id", p.get("persona_id", "")))
 
 
-# ========== 特征值转自然语言（喂给人设LLM）==========
-def _feat_summary(feats: StyleFeatures, *, top_n: int = 3, max_reason_len: int = 50) -> str:
-    """瘦身版特征摘要：只给 TopN 高分 + TopN 低分，砍掉中间平庸项。
+# ========== 特征摘要（喂给人设 LLM 的视觉事实）==========
+def _feat_summary(feats: StyleFeatures, *, top_n: int = 3, max_reason_len: int = 60) -> str:
+    """v1.4.90+: 基于视觉锚定档 + visual_description 生成特征摘要。
 
-    动机：7B 本地模型注意力广度有限，10 个全塞进去容易"平均化处理"
-    （全打 6-8 分）。只给头尾 6 个 + 截短 reason，既保留梯度信息又减 token。
-    实测 prompt 从 ~220 tokens 降到 ~60 tokens，压缩 3.7x。
+    设计哲学：人设 LLM 不再收到被 VLM 预判过的"加分/减分"信号，
+    而是收到纯视觉事实（锚定档标签 + VLM 看到的具体细节），
+    让它自己判断对自己来说好不好卖。
     """
-    def _level(sc: float) -> str:
-        if sc >= 8: return "非常高"
-        if sc >= 6.5: return "较高"
-        if sc >= 5.0: return "中等"
-        if sc >= 3.5: return "较低"
-        return "非常低"
+    # 需要 feat_defs 来查 anchor label — 但 _feat_summary 没有 brand_cfg 引用
+    # 简化：从 score 值反推档（score 是 anchor range 中点）
+    def _anchor_label_from_score(sc: float) -> str:
+        """根据 score 大致推断 anchor 档标签（score 是视觉档的区间中点）"""
+        if sc <= 2: return "极低视觉档"
+        elif sc <= 4: return "偏低视觉档"
+        elif sc <= 6: return "常规视觉档"
+        elif sc <= 8: return "较高视觉档"
+        elif sc <= 9.5: return "高视觉档"
+        else: return "极高视觉档"
+
+    def _feat_line(f: "FeatureScore") -> str:
+        """为单个特征生成一行摘要"""
+        # 优先用 anchor_level（v1.4.90+），fallback 从 score 反推
+        if f.anchor_level is not None:
+            # anchor_level 1-5 只是视觉分类，不是好坏
+            level_note = f"档{f.anchor_level}"
+        else:
+            level_note = _anchor_label_from_score(f.score)
+
+        # visual_description（VLM 看到的具体细节）
+        desc = f.visual_description or f.reason or ""
+        if desc and len(desc) > max_reason_len:
+            desc = desc[:max_reason_len] + "..."
+
+        line = f"· {f.name} [{level_note}]"
+        if desc:
+            line += f"：{desc}"
+        return line
 
     sorted_feats = sorted(
         feats.features.items(), key=lambda kv: -kv[1].score
     )
     n = len(sorted_feats)
     if n <= top_n * 2:
-        # 特征总数太少（<6），全列出来
         full = []
         for key, f in sorted_feats:
-            reason = (f.reason or "无细节")[:max_reason_len]
-            full.append(f"· {f.name}：{f.score:.1f}/10（{_level(f.score)}）— {reason}")
+            full.append(_feat_line(f))
         return "\n".join(full)
 
     high = sorted_feats[:top_n]
     low = sorted_feats[-top_n:]
     lines: list[str] = []
-    lines.append("【优势特征】（对销量是加分项）")
+    lines.append("【视觉特征 — 较高档】（视觉上更突出的）")
     for key, f in high:
-        reason = (f.reason or "")[:max_reason_len]
-        lines.append(f"  ↑ {f.name}：{f.score:.1f}/10（{_level(f.score)}）{('— ' + reason) if reason else ''}")
-    lines.append(f"【劣势特征】（对销量有风险）")
+        lines.append(f"  ↑ {_feat_line(f)}")
+    lines.append(f"【视觉特征 — 较低档】（视觉上不那么突出的）")
     for key, f in low:
-        reason = (f.reason or "")[:max_reason_len]
-        lines.append(f"  ↓ {f.name}：{f.score:.1f}/10（{_level(f.score)}）{('— ' + reason) if reason else ''}")
+        lines.append(f"  ↓ {_feat_line(f)}")
 
-    # 整体调性一句话（让人设知道这款大致在什么段位）
     all_scores = [f.score for _, f in sorted_feats]
     avg = sum(all_scores) / len(all_scores)
-    lines.append(f"【整体调性】平均 {avg:.1f}/10，特征梯度明确")
+    lines.append(f"【视觉整体】各特征视觉锚定档均值 {avg:.1f}")
     return "\n".join(lines)
 
 

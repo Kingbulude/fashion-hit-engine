@@ -38,83 +38,80 @@ def _resolve_bars_cfg(brand_cfg: BrandConfig | None, cfg: AppConfig | None) -> d
     return fallback.features_bars
 
 
-# ========== BARS量表渲染 ==========
+# ========== BARS量表渲染（纯视觉锚定版 v1.4.90）==========
 def _render_bars_prompt(features_cfg: dict[str, Any]) -> str:
     """把YAML中的10个BARS量表渲染为LLM可读的prompt
 
-    设计哲学：视觉观察（System1 描述）和销量影响判断（System2 推断）是两个
-    独立认知任务，拆开让 VLM 先专注客观观察、再基于量表做价值推断，减少
-    "凭感觉直接打分"的系统性偏差。
+    v1.4.90 重写：VLM 只做「眼睛」——纯客观视觉描述 + 视觉锚定档匹配，
+    不做任何销量预判。销量判断由人设 LLM 独立完成。
+    score 字段由代码根据 anchor_level + anchor.range 自动计算（区间中点），
+    VLM 不输出 score。
     """
     features = features_cfg["features"]
-    lines = ["【10个服装特征BARS评分量表】", ""]
+    lines = [
+        "【10个服装特征 · 纯视觉锚定量表】",
+        "",
+        "⚠️ 你的角色是「视觉观察员」，不是销售预测分析师。",
+        "你只做两件事：① 描述眼睛看到的东西；② 匹配视觉锚定档。",
+        "**绝对禁止**：判断好不好卖、好不好看、适合谁穿、受众广不广、退货率、性价比——这些都不是你该管的。",
+        "",
+    ]
     for key, feat in features.items():
         lines.append(f"### {key} · {feat['name']}")
         lines.append(f"定义：{feat['description']}")
-        lines.append("评分档锚定：")
+        lines.append("视觉锚定档（1-5档，从低到高描述视觉属性）：")
         for level_id, anchor in feat["anchors"].items():
             rng = anchor["range"]
             lines.append(
-                f"  {rng[0]}-{rng[1]}分 [{anchor['label']}]：{anchor['description']}"
+                f"  档{level_id} [{anchor['label']}]：{anchor['description']}"
             )
         lines.append("")
+
     val_cfg = features_cfg.get("feature_validation", {})
-    lines.append("【评分规则 — 严格按三步执行，切勿跳过】")
+    lines.append("【执行规则 — 严格两步】")
     lines.append("")
-    lines.append("=== 第一步：视觉观察（System1 · 描述阶段）===")
-    lines.append("先只看图片，对每个特征做**纯客观视觉描述**，不要涉及销量判断。")
-    lines.append('  格式：[视觉观察] + 你看到的具体细节（如"明显oversize、裤腿有魔术贴调节、面料看起来是速干材质"）')
-    lines.append("  如果图片/角度/清晰度导致某特征**无法可靠判断**（如F08面料质感、F04防水条是否真的存在），写：")
-    lines.append('    [视觉观察] 无法判断 — 理由：xxx（如"图片模糊看不出面料纹理"、"没有帽子所以无法判断帽檐功能"）')
-    lines.append("  无法判断时该特征输出 score=null, confidence=0.0")
+    lines.append("=== 第一步：纯客观视觉描述 ===")
+    lines.append("只描述图片中你**实际看到**的视觉事实，用短句列细节：")
+    lines.append('  格式：直接写细节关键词（如"明显宽松廓形、裤腿有魔术贴调节、面料表面有轻微反光"）')
+    lines.append("  ❌ 禁止使用价值判断词：好/不好、好看/难看、加分/减分、适合/不适合、值得/不值得、热销/滞销、便宜/贵")
+    lines.append('  ❌ 禁止推测品牌意图或消费者反应：不要说"父母会喜欢"、"直播间能引流"、"孩子会穿"')
+    lines.append("  ✅ 可以写：颜色名称、版型、面料外观、功能元素细节、有无帽子/口袋/反光条、轮廓宽窄、是否宽松、线条是否干净")
+    lines.append('  如果图片/角度/清晰度导致某特征**无法可靠判断**，写视觉描述为："无法判断：+ 具体原因（如"图片模糊看不出面料纹理"、"无帽子故无法判断帽檐特征"）"')
+    lines.append("  无法判断时 anchor_level=null, confidence=0.0")
     lines.append("")
-    lines.append("=== 第二步：锚定档匹配 ===")
-    lines.append("将第一步的视觉观察结果，与上表最接近的 BARS 锚定档做匹配。")
-    lines.append("  匹配原则：先选最接近的档，再判断是否需要跨档微调（如客观在3档但某维度明显偏弱/偏强）")
-    lines.append("  分数 1-10，方向：**所有特征统一「高分=对品牌目标客群销量有正向贡献」**")
-    lines.append("  → F03 色彩安全度：基础色受众广=高分(9-10)，撞色/荧光受众窄=低分(1-4)")
-    lines.append("  → F04 功能可见性：硬核功能外显=高分(9-10)，完全无功能元素=低分(1-2)")
-    lines.append("  （完整方向见上方各特征的 anchors 描述）")
+    lines.append("=== 第二步：视觉锚定档匹配 ===")
+    lines.append("将你第一步的视觉描述，匹配到上表中**视觉上最接近的档位（档1-档5）**。")
+    lines.append("  ⚠️ 匹配依据只能是「视觉特征像不像」，不能是「觉得哪档更好卖」。")
+    lines.append("  例：F03 如果主图是黄色+深灰撞色 → 看视觉上撞色程度 → 档2 或 档1（看色相差）")
+    lines.append('  ❌ 错误匹配理由："撞色可能受众窄→档1"（带了销量判断）')
+    lines.append('  ✅ 正确匹配理由："黄色和深灰色相差约120°→视觉上属于高饱和撞色→档1"')
     lines.append("")
-    lines.append("=== 第三步：综合给分 + 理由 ===")
-    lines.append("  score: 1-10（或 null 表示无法判断）")
-    lines.append("  confidence: 0-1（或 0.0 表示无法判断）")
-    lines.append("  reason: 必须分两段，格式「[视觉观察]...；[销量影响]...」")
-    lines.append("    - [视觉观察]：引用图片具体细节（如'oversize版型、魔术贴调节'）")
-    lines.append("    - [销量影响]：直接说「这款放在本品牌是加分项/减分项/中性」+ 为什么（如'基础中性色受众广→搜索端稳销加分'）")
-    lines.append("")
-    lines.append("【附加规则】")
-    lines.append(f"- 多模型分歧>{val_cfg.get('divergence_threshold',2.0)}或confidence<{val_cfg.get('confidence_threshold',0.6)}需人工复核")
-    lines.append("- 区分度：同一批次同一特征分数标准差尽量≥1.5，避免都打7-8分的中庸分")
-    lines.append("")
-    lines.append("【多图颜色场景识别·最高优先级】如果输入了多张图且衣服颜色不同：")
+    lines.append("【多图颜色场景识别（最高优先级）】如果输入了多张图且衣服颜色不同：")
     lines.append("  1. 先判断颜色差异是「同一件衣服的拼接/撞色设计」还是「同一款的不同SKU分色」")
-    lines.append("     · 拼接/撞色 = 不同色块在同一件衣服上（一张图同时出现多色，或各图是同一件的不同部位）")
-    lines.append("     · SKU分色 = 各图是不同件衣服但剪裁/款式完全相同（颜色是选色问题，不是设计问题）")
-    lines.append("  2. 若为 SKU 分色：F03（色彩安全度）只评主推色（通常是第一张/主图的颜色）")
-    lines.append("  3. 若为同一件衣服的撞色设计：F03 按 anchor 正常评分（撞色 → 安全度偏低）")
-    lines.append("  4. F05/F09/F10 同理，SKU分色时只评主推色")
-    lines.append("  5. 其他特征（F01/F02/F04/F06/F07/F08）不受颜色影响")
+    lines.append("     · 拼接/撞色 = 不同色块在同一件衣服上（一张图同时出现多色）")
+    lines.append("     · SKU分色 = 各图是不同件衣服但剪裁/款式完全相同")
+    lines.append("  2. 若为 SKU 分色：F03/F05/F09/F10 只评主推色（通常是第一张/主图的颜色）")
+    lines.append("  3. 若为同一件衣服的撞色设计：F03 按实际撞色视觉特征匹配档")
+    lines.append("  4. 其他特征（F01/F02/F04/F06/F07/F08）不受颜色影响")
     lines.append("")
-    lines.append("【颜色澄清反例】")
-    lines.append("- ❌ 错误：'图片有深灰和黄色两种颜色→F03高饱和撞色 3分'（如果深灰和黄色是同一款两个SKU）")
-    lines.append("- ✅ 正确：'多图颜色识别：深灰和黄色是同一款不同SKU→以主推深灰色为准，属于安全基础色→F03 9分'")
-    lines.append("- ❌ 错误：'宽松版型，有垂坠感'（只有视觉描述，缺销量影响判断）")
-    lines.append("- ✅ 正确理由：'宽松oversize版型，比正常大1个码，有魔术贴调节；对目标客群是主推款型，直播间能引流→加分'")
-    lines.append("")
-    lines.append("【输出格式】纯JSON，不要额外文字。score 字段允许为 null 表示无法判断：")
+    lines.append("【输出格式】纯JSON，不要任何额外文字。只有3个字段，没有score、没有reason：")
     lines.append('''{
-  "F01_silhouette":     {"score": X或null, "confidence": X, "reason": "[视觉观察]...；[销量影响]..."},
-  "F02_clean_look":     {"score": X或null, "confidence": X, "reason": "..."},
-  "F03_color_safety":   {"score": X或null, "confidence": X, "reason": "..."},
-  "F04_function_visibility": {"score": X或null, "confidence": X, "reason": "..."},
-  "F05_photogenic":     {"score": X或null, "confidence": X, "reason": "..."},
-  "F06_wearability":    {"score": X或null, "confidence": X, "reason": "..."},
-  "F07_pairing":        {"score": X或null, "confidence": X, "reason": "..."},
-  "F08_fabric_perception": {"score": X或null, "confidence": X, "reason": "..."},
-  "F09_brand_tone":     {"score": X或null, "confidence": X, "reason": "..."},
-  "F10_uniqueness":     {"score": X或null, "confidence": X, "reason": "..."}
+  "F01_silhouette":     {"visual_description": "...你看到的细节...", "anchor_level": 1-5的整数或null, "confidence": 0.0-1.0},
+  "F02_clean_look":     {"visual_description": "...", "anchor_level": null, "confidence": 0.0},
+  "F03_color_safety":   {"visual_description": "...", "anchor_level": 3, "confidence": 0.85},
+  "F04_function_visibility": {"visual_description": "...", "anchor_level": 4, "confidence": 0.9},
+  "F05_photogenic":     {"visual_description": "...", "anchor_level": 1, "confidence": 0.6},
+  "F06_wearability":    {"visual_description": "...", "anchor_level": null, "confidence": 0.0},
+  "F07_pairing":        {"visual_description": "...", "anchor_level": null, "confidence": 0.0},
+  "F08_fabric_perception": {"visual_description": "...", "anchor_level": 3, "confidence": 0.7},
+  "F09_brand_tone":     {"visual_description": "...", "anchor_level": 2, "confidence": 0.5},
+  "F10_uniqueness":     {"visual_description": "...", "anchor_level": 4, "confidence": 0.75}
 }''')
+    lines.append("")
+    lines.append("confidence 说明你对自己的视觉判断有多确定（不是对销量判断有多确定）：")
+    lines.append("  1.0 = 看得很清楚，100%确定")
+    lines.append("  0.5 = 看不太清楚，大概猜的")
+    lines.append("  0.0 = 完全看不清，放弃判断")
     return "\n".join(lines)
 
 
@@ -160,31 +157,183 @@ class FeatureExtractionEngine:
             f"品牌定位：{self.brand_cfg.brand_name}。",
         )
 
+# ========== 视觉锚定辅助函数（模块级）==========
+def _anchor_to_score(feat_def: dict[str, Any], anchor_level: int | None) -> float | None:
+    """给定 anchor_level (1-5)，返回该锚定档 range 的中点作为 score。
+    anchor_level=None 时返回 None（表示无法判断）。"""
+    if anchor_level is None:
+        return None
+    anchors = feat_def.get("anchors", {})
+    anchor = anchors.get(str(anchor_level)) or anchors.get(anchor_level)
+    if anchor is None:
+        return None
+    rng = anchor.get("range", [5, 6])
+    return round((rng[0] + rng[1]) / 2, 1)
+
+
+def _resolve_anchor_label(feat_def: dict[str, Any], anchor_level: int | None) -> str:
+    """给定 anchor_level 返回 label 文本（如 "宽松oversize"），供 _feat_summary 使用。"""
+    if anchor_level is None:
+        return "未判断"
+    anchors = feat_def.get("anchors", {})
+    anchor = anchors.get(str(anchor_level)) or anchors.get(anchor_level)
+    if anchor is None:
+        return f"档{anchor_level}"
+    return anchor.get("label", f"档{anchor_level}")
+
+
+def _resolve_feat_item(item: Any, feat_def: dict[str, Any]) -> dict[str, Any]:
+    """统一解析单个模型对单个特征的输出，兼容新旧两种格式。
+
+    v1.4.90+ 新格式: {"visual_description": "...", "anchor_level": 3, "confidence": 0.85}
+    v1.4.90- 旧格式: {"score": 7.2, "confidence": 0.85, "reason": "..."}
+    返回统一 dict: {visual_description, anchor_level, score, confidence, is_old_format}
+    """
+    if not isinstance(item, dict):
+        return {}
+    visual_desc = str(item.get("visual_description", "") or "")
+    anchor_level = item.get("anchor_level")
+    # anchor_level 可能被 VLM 输出成字符串 "3" 而非 int
+    if anchor_level is not None:
+        try:
+            anchor_level = int(anchor_level)
+            if not 1 <= anchor_level <= 5:
+                anchor_level = None
+        except (TypeError, ValueError):
+            anchor_level = None
+    confidence = safe_float(item.get("confidence"), 0.5)
+
+    # 兼容旧格式：有 score 但没 anchor_level
+    old_score = item.get("score")
+    is_old_format = old_score is not None and anchor_level is None
+
+    if is_old_format:
+        # 旧格式：score 是 VLM 直接给的，没有 anchor 映射
+        score = clamp(safe_float(old_score, 5.0), 1.0, 10.0)
+        # 尝试从 reason 字段提取 visual_description（旧格式里 reason 含视觉描述）
+        if not visual_desc:
+            reason = str(item.get("reason", "") or "")
+            if reason.startswith("[视觉观察]"):
+                visual_desc = reason.split("；")[0].replace("[视觉观察]", "").strip()
+            elif reason:
+                visual_desc = reason[:80]
+    else:
+        # 新格式：score 从 anchor_level 派生
+        score = _anchor_to_score(feat_def, anchor_level)
+        if score is None and anchor_level is None:
+            score = None
+        elif score is None:
+            score = 5.5
+
+    return {
+        "visual_description": visual_desc,
+        "anchor_level": anchor_level,
+        "score": score,
+        "confidence": clamp(confidence, 0.0, 1.0),
+        "is_old_format": is_old_format,
+    }
+
+
+def _make_mock_feat_entry(
+    feat_def: dict[str, Any],
+    seed_str: str,
+    fixed_anchor_level: int | None = None,
+) -> dict[str, Any]:
+    """为单个特征生成 mock 的 anchor_level + visual_description。"""
+    import random
+    random.seed(zlib.crc32(seed_str.encode()))
+
+    if fixed_anchor_level is not None:
+        al = fixed_anchor_level
+    else:
+        r = random.random()
+        if r < 0.15: al = 1
+        elif r < 0.35: al = 2
+        elif r < 0.65: al = 3
+        elif r < 0.85: al = 4
+        else: al = 5
+
+    anchors = feat_def.get("anchors", {})
+    anchor = anchors.get(str(al)) or anchors.get(al)
+    anchor_label = anchor.get("label", f"档{al}") if anchor else f"档{al}"
+    score = _anchor_to_score(feat_def, al) or 5.5
+
+    # 从 anchor.description 里取前 30 字当 visual_description
+    anchor_desc = anchor.get("description", "") if anchor else ""
+    visual_desc = anchor_desc[:40] if anchor_desc else f"{anchor_label}"
+
+    return {
+        "visual_description": visual_desc,
+        "anchor_level": al,
+        "score": score,
+        "confidence": round(random.uniform(0.7, 0.95), 2),
+    }
+
+
+# ========== FeatureExtractionEngine 类 ==========
+class FeatureExtractionEngine:
+    """基于 BrandConfig 的特征提取引擎
+
+    向后兼容：不传 brand_cfg 时默认使用 mipo 品牌配置。
+    """
+
+    def __init__(
+        self,
+        brand_cfg: BrandConfig | None = None,
+        *,
+        llm_backend: str = "mock",
+    ) -> None:
+        if brand_cfg is None:
+            brand_cfg = load_brand_profile("mipo")
+        self.brand_cfg = brand_cfg
+        self.llm_backend = llm_backend
+        self._bars_cfg = brand_cfg.features_bars
+
+    @property
+    def bars_prompt(self) -> str:
+        return _get_bars_prompt(self._bars_cfg)
+
+    def _resolve_brand_context(self) -> str:
+        personas_cfg = {"personas": self.brand_cfg.personas}
+        if self.brand_cfg.persona_axes:
+            personas_cfg.update(self.brand_cfg.persona_axes)
+        return personas_cfg.get(
+            "brand_context",
+            f"品牌定位：{self.brand_cfg.brand_name}。",
+        )
+
     def extract_mock(self, style_id: str, *, fixed_feature_scores: list[float] | None = None) -> StyleFeatures:
-        """mock mode：生成兼容的特征分数（向后兼容旧mock逻辑）
-        - fixed_feature_scores 传10个浮点数时，按BARS量表顺序覆盖F01-F10分数，用于冒烟测试确定性结果
+        """mock mode：生成基于视觉锚定档的特征结果。
+
+        - fixed_feature_scores 传10个浮点数时，覆盖 anchor_level 按比例映射：
+          score→anchor_level: 1-2→1, 3-4→2, 5-6→3, 7-8→4, 9-10→5
         """
         import random
-        # 注：原 hash() 跨进程随机化（PYTHONHASHSEED），导致 mock 特征每进程不同、
-        # smoke test 跨进程非确定性（sp_sales 在 0.90~0.99 漂移、阈值 0.92 随机失败）。
-        # 改用 zlib.crc32 提供确定性 hash。
         random.seed(zlib.crc32(style_id.encode()))
         result = StyleFeatures(style_id=style_id)
         keys_ordered = list(self._bars_cfg["features"].keys())
         for i, key in enumerate(keys_ordered):
             fd = self._bars_cfg["features"][key]
+            # 决定 anchor_level
+            fixed_al: int | None = None
             if fixed_feature_scores is not None and i < len(fixed_feature_scores):
-                score = float(fixed_feature_scores[i])
-            else:
-                base = random.uniform(4.0, 8.0)
-                score = round(base, 1)
+                fs = fixed_feature_scores[i]
+                if fs <= 2: fixed_al = 1
+                elif fs <= 4: fixed_al = 2
+                elif fs <= 6: fixed_al = 3
+                elif fs <= 8: fixed_al = 4
+                else: fixed_al = 5
+
+            entry = _make_mock_feat_entry(fd, f"{style_id}_{key}", fixed_anchor_level=fixed_al)
             result.features[key] = FeatureScore(
                 key=key,
                 name=fd.get("name", key),
                 category=fd.get("category", "design"),
-                score=score,
-                confidence=0.78,
-                reason=f"视觉判断该特征锚定匹配度约{score:.0f}/10",
+                score=entry["score"],
+                confidence=entry["confidence"],
+                visual_description=entry["visual_description"],
+                anchor_level=entry["anchor_level"],
+                reason="",
             )
         return result
 
@@ -216,63 +365,49 @@ def _extract_one_model(
     model: str,
     brand_context: str,
 ) -> dict[str, dict[str, Any]]:
-    """对一个款式用指定模型跑特征提取，返回 {feat_key: {score, confidence, reason}}"""
+    """对一个款式用指定模型跑纯视觉锚定，返回 {feat_key: {visual_description, anchor_level, confidence}}"""
     user_msg = f"""
-【品牌背景】
-{brand_context}
+【款式基础信息】
+FAB描述：{info.fab_description or '无FAB信息，仅从图片判断'}
+品类：{info.category or '未标注'}
+（价格/季节/品牌信息对你的视觉观察任务无关，忽略即可）
 
-【款式FAB描述】
-{info.fab_description or '无FAB信息，仅从图片判断'}
-
-【品类】{info.category or '未标注'}
-【价格】{info.price}元
-【季节】{info.season or '未标注'}
-
-请根据下面的BARS量表，对提供的图片中的款式进行10个特征评分。
+你现在只做一件事：观察图片中这个款式的视觉特征。
 
 ⚠️ 关键约束（请严格遵守）：
-- 图片中可能是模特全身照，**只评价本款主产品**（FAB描述中提到的品类），不要评价模特身上的其他搭配（裤子、内搭、帽子、鞋子等）
-- 例如：FAB描述是"户外机能外套" → 只评价外套，裤子/内搭完全忽略
-- 例如：FAB描述是"速干运动短裤" → 只评价短裤，上衣/外套完全忽略
-- 如果图片中模特身上有多个单品，以FAB描述中的品类为准锁定评价对象
+- 图片中可能是模特全身照，**只观察本款主产品**（FAB描述中提到的品类），不要描述模特身上的其他搭配（裤子、内搭、帽子、鞋子等）
+- 例：FAB是"户外机能外套" → 只看外套，裤子/内搭全部忽略
+- 例：FAB是"速干运动短裤" → 只看短裤，上衣/外套全部忽略
 
-⚠️ 品类专属评分注意事项（不同品类看不同细节）：
+⚠️ 品类专属观察要点（不同品类看不同部位）：
 【短裤/裤类】
-- F01廓形：看裤腿剪裁（直筒/宽松/收脚），不是"裤腿堆积"（短裤没有裤腿堆积问题！那是长裤的垮感）
-- F02利落感：看腰头规整度、松紧带是否平整、裤脚剪裁是否干净、侧开叉/下摆是否有毛边，不要提"裤腿堆积"！
+- F01廓形：看裤腿剪裁（直筒/宽松/收脚），短裤没有裤腿堆积问题
+- F02利落感：看腰头规整度、松紧带是否平整、裤脚剪裁是否干净
 - F04功能可见：看口袋设计、松紧调节、反光条位置
 【外套/上衣类】
 - F01廓形：看肩线、衣长、下摆处理
 - F02利落感：看领口是否规整、袖口剪裁、纽扣/拉链是否平顺
 - F04功能可见：看帽檐调节、口袋系统、防水压胶条
 【连衣裙/裙类】
-- F01廓形：看腰线位置、裙摆形状（A字/直筒/鱼尾）
-- F02利落感：看裙边是否整齐、接缝是否平整、侧开叉处理
+- F01廓形：看腰线位置、裙摆形状
+- F02利落感：看裙边是否整齐、接缝是否平整
 - F04功能可见：看口袋位置、腰带扣、防晒处理
 
-⚠️ F03色彩风险评分规则：
-- 一款可能有多个颜色（如藏青/芥黄/粉色/紫色/蓝色/黄色），但F03**只看主图/主推色**的风险等级
-- 不要因为非主推色含亮色/粉色就拉高整款F03分数
-- 多色覆盖是优点（覆盖不同偏好客群），不是色彩风险
-- 如果FAB描述中提到颜色列表，以主图看到的颜色为准评分
+⚠️ F03颜色判断规则（最高优先级）：
+- 一款可能有多个颜色SKU（藏青/芥黄/粉色/紫色等），但F03**只看主图/主推色**
+- 多色SKU覆盖是正常铺货，不是视觉撞色设计
 
-评分原则：
-1. 先匹配"最接近的锚定档描述"，给出客观档位分。
-2. 再站在品牌目标客群的购买决策角度，判断这个档位对销量的影响：
-   - 该特征表现越好，越能打动目标客群并促成购买 → 取该档位高分区
-   - 该特征表现越差，越容易劝退目标客群 → 取该档位低分区
-3. 最终分数要体现"这款相对本品牌其他款式的畅销潜力"，而不是单纯"图片好不好看"。
-
-请对每个特征给出分数(1-10)、置信度(0-1)和一句话理由，理由要说明为什么这个分数意味着高/中/低销量潜力。
+下面是视觉锚定量表（每档只描述视觉属性，不含销量判断）：
 
 {_get_bars_prompt(features_cfg)}
 """.strip()
 
+    # v1.4.90: temperature 0.2→0.1 强制严格输出纯视觉JSON，减少模型"自作主张加价值判断"
     resp: LLMResponse = client.generate_multimodal(
         user_msg,
         image_paths=info.images,
         model=model,
-        temperature=0.2,
+        temperature=0.1,
         max_tokens=3000,
     )
     if not resp.ok:
@@ -412,11 +547,10 @@ def extract_style_features(
                 f"所有模型特征提取均失败: {'; '.join(errors)}"
             )
 
-        # ========== VLM 级 Fallback 第 3 层：brand 默认特征分兜底 ==========
-        # 两个 VLM 都挂 → 用 BARS anchors 中点作为默认分，让 pipeline 继续跑
-        # 精度会降（所有款都是 brand 平均水平），但不会整批废
+        # ========== VLM 级 Fallback 第 3 层：brand 默认视觉锚定档兜底 ==========
+        # 两个 VLM 都挂 → 用 anchor 档3的区间中点作为默认锚定（视觉中性档）
         log.warning(
-            "[%s] 所有 VLM 均失败 (%s)，使用 brand 默认特征分兜底",
+            "[%s] 所有 VLM 均失败 (%s)，使用 brand 默认视觉锚定档兜底",
             info.style_id, "; ".join(errors[:2]),
         )
         if brand_cfg is None:
@@ -424,14 +558,10 @@ def extract_style_features(
         feat_defs = features_cfg["features"]
         default_result = {}
         for key, fd in feat_defs.items():
-            anchors = fd.get("anchors", {})
-            low_score = float(anchors.get("low", {}).get("score", 3.0))
-            high_score = float(anchors.get("high", {}).get("score", 8.0))
-            mid_score = round((low_score + high_score) / 2, 1)
             default_result[key] = {
-                "score": mid_score,
+                "visual_description": f"VLM全部失败，使用brand默认视觉锚定：{fd.get('name', key)}取档3",
+                "anchor_level": 3,  # 视觉中性档
                 "confidence": 0.3,  # 低置信度，校准层会忽略
-                "reason": f"VLM 全部失败，使用 brand 默认分（BARS anchors 中点 {mid_score}）",
             }
         model_results.append(default_result)
         errors = []
@@ -444,40 +574,74 @@ def extract_style_features(
         fd = feat_defs[key]
         per_model_scores: list[float] = []
         per_model_conf: list[float] = []
-        per_model_reasons: list[str] = []
+        per_model_anchors: list[int] = []
+        per_model_descs: list[tuple[str, float]] = []  # (visual_desc, confidence)
         model_map: dict[str, float] = {}
 
         for m_idx, mr in enumerate(model_results):
             if key not in mr:
                 continue
             item = mr[key]
-            # 防御：Ollama 偶尔把单个特征包装成 list（如 {"quality": [{"score": 7}]}）
+            # 防御：Ollama 偶尔把单个特征包装成 list
             if isinstance(item, list):
                 if len(item) > 0 and isinstance(item[0], dict):
                     item = item[0]
                 else:
-                    log.warning("[%s] %s 模型%s 特征%s值异常: list 长度=%d 元素类型=%s，跳过",
-                                info.style_id, models[m_idx] if m_idx < len(models) else f"model{m_idx}",
-                                m_idx, key, len(item), type(item[0]) if item else "empty")
                     continue
             if not isinstance(item, dict):
-                log.warning("[%s] 模型%s 特征%s值类型异常: %s，跳过",
-                            info.style_id, m_idx, key, type(item))
                 continue
-            sc = clamp(safe_float(item.get("score"), 5.0), 1.0, 10.0)
-            cf = clamp(safe_float(item.get("confidence"), 0.5), 0.0, 1.0)
+
+            # 统一解析：兼容新旧两种 VLM 输出格式
+            parsed = _resolve_feat_item(item, fd)
+            if not parsed:
+                continue
+
+            sc = parsed["score"]
+            if sc is None:
+                continue  # VLM 明确说无法判断，跳过这个模型
+
+            cf = parsed["confidence"]
+            al = parsed["anchor_level"]
+            vd = parsed["visual_description"]
+
             per_model_scores.append(sc)
             per_model_conf.append(cf)
-            if item.get("reason"):
-                per_model_reasons.append(str(item["reason"]))
+            if al is not None:
+                per_model_anchors.append(al)
+            if vd and cf > 0:
+                per_model_descs.append((vd, cf))
+
             m_name = models[m_idx] if m_idx < len(models) else f"model{m_idx}"
             model_map[m_name] = sc
+
+        if not per_model_scores:
+            # 所有模型都无法判断这个特征
+            result.features[key] = FeatureScore(
+                key=key, name=fd["name"], category=fd["category"],
+                score=5.5, confidence=0.0,  # 中性+零置信度
+                visual_description="无法判断（所有模型均放弃）",
+                anchor_level=None,
+                needs_review=True,
+            )
+            continue
 
         final_score = clamp(median_aggregate(per_model_scores), 1.0, 10.0)
         final_conf = float(sum(per_model_conf) / max(1, len(per_model_conf)))
         div = divergence(per_model_scores)
         needs_review = (div > div_thr) or (final_conf < conf_thr)
-        reason = per_model_reasons[0] if per_model_reasons else ""
+
+        # anchor_level 取中位数
+        if per_model_anchors:
+            sorted_anchors = sorted(per_model_anchors)
+            final_anchor = sorted_anchors[len(sorted_anchors) // 2]
+        else:
+            final_anchor = None
+
+        # visual_description 取置信度最高的那个
+        if per_model_descs:
+            final_desc = max(per_model_descs, key=lambda x: x[1])[0]
+        else:
+            final_desc = ""
 
         result.features[key] = FeatureScore(
             key=key,
@@ -485,7 +649,9 @@ def extract_style_features(
             category=fd["category"],
             score=final_score,
             confidence=final_conf,
-            reason=reason,
+            visual_description=final_desc,
+            anchor_level=final_anchor,
+            reason="",  # v1.4.90+: 不再生成销量预判理由
             model_scores=model_map,
             divergence=div,
             needs_review=needs_review,
