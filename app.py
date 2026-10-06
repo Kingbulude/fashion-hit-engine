@@ -1765,10 +1765,10 @@ def render_page_detail():
     # ===== 统一裁剪缩略图的 CSS（object-fit: cover 填满 160×200）=====
     st.markdown("""
     <style>
-    .thumb-wrap { display:flex; flex-direction:column; align-items:center; gap:4px; }
-    .thumb-box { width:160px; height:200px; overflow:hidden; border-radius:6px;
+    .thumb-wrap { display:flex; flex-direction:column; align-items:center; gap:6px; }
+    .thumb-box { width:240px; height:300px; overflow:hidden; border-radius:8px;
                  display:flex; align-items:center; justify-content:center;
-                 background:#f5f2ec; }
+                 background:#f5f2ec; border:1px solid #e0dcd5; }
     .thumb-box img { width:100%; height:100%; object-fit:cover; }
     .thumb-caption { font-size:12px; color:#8a857d; }
     .info-kv { display:flex; gap:24px; flex-wrap:wrap; margin:4px 0 8px; }
@@ -1778,7 +1778,7 @@ def render_page_detail():
     """, unsafe_allow_html=True)
 
     # ===== 上方：统一规格图片 + 基本信息（并排）=====
-    def _thumb_b64(ipath: str, size=(160, 200)) -> str:
+    def _thumb_b64(ipath: str, size=(240, 300)) -> str:
         """PIL 中心裁剪 + 缩放到统一规格 → base64 data URI（绕开 file:// 安全限制）"""
         try:
             img = Image.open(ipath).convert("RGB")
@@ -1798,7 +1798,7 @@ def render_page_detail():
         except Exception:
             return ""
 
-    left, right = st.columns([1.1, 1.4])
+    left, right = st.columns([1.3, 1.4])
     with left:
         st.subheader("📷 款式图片")
         image_paths = st.session_state.get("image_paths_map", {}).get(p.info.style_id, [])
@@ -1821,16 +1821,6 @@ def render_page_detail():
                 st.caption(f"（共 {len(image_paths)} 张，仅显示前 3 张）")
         else:
             st.caption("（无图片）")
-
-        # —— 优势 / 劣势（图片下方 inline）——
-        strength_items = g.strengths or []
-        weakness_items = g.weaknesses or []
-        if strength_items or weakness_items:
-            st.markdown("**🏆 优劣势速览**")
-            if strength_items:
-                st.caption("✅ 优势：" + " · ".join(strength_items[:4]))
-            if weakness_items:
-                st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:4]))
 
     with right:
         # —— 基本信息（补全所有可用字段）——
@@ -1957,6 +1947,16 @@ def render_page_detail():
                             unsafe_allow_html=True)
                 st.caption(row["VLM理由"])
                 st.divider()
+
+        # —— 优劣势速览（BARS 评分下方，独立一整行）——
+        strength_items = g.strengths or []
+        weakness_items = g.weaknesses or []
+        if strength_items or weakness_items:
+            st.subheader("🏆 优劣势速览")
+            if strength_items:
+                st.caption("✅ 优势：" + " · ".join(strength_items[:4]))
+            if weakness_items:
+                st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:4]))
 
     # ===== 下方：三列指标（图片下方一屏看完）=====
     # —— 分数→5档颜色 映射（与 BARS 因果链一致）——
