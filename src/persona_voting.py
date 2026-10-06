@@ -20,6 +20,7 @@ from typing import Any
 from tqdm import tqdm
 
 from .config import AppConfig
+from .domain_knowledge import assemble_domain_knowledge, get_expert_credentials
 from .llm_client import BailianClient, resolve_and_dedupe_models
 from .types import (
     BrandConfig,
@@ -869,10 +870,11 @@ def _render_expert_challenge_prompt(
         if brand_cfg.target_size_range:
             lo, hi = brand_cfg.target_size_range
             target_size = f"{lo}-{hi}码"
-        if brand_cfg.brand_domain_knowledge:
-            domain_knowledge_text = brand_cfg.brand_domain_knowledge
         default_target_age = brand_cfg.decision_structure.default_target_age
         age_weight_rules = brand_cfg.decision_structure.age_weight_rules or []
+
+        # 用 assemble_domain_knowledge：自动匹配 segment base 模板 + 叠加 brand overlay
+        domain_knowledge_text = assemble_domain_knowledge(brand_cfg) or ""
 
         # 根据默认目标年龄生成决策权重提示（让专家知道该年龄段谁说话更算数）
         for rule in age_weight_rules:
@@ -883,15 +885,12 @@ def _render_expert_challenge_prompt(
                 age_decision_hint = f"{default_target_age}岁属于「{label}」区间：妈妈决策权重 {mom_w}%、孩子影响权重 {child_w}%"
                 break
 
-    # ===== System prompt：建立具体的童装户外品类总监人设 =====
+    # ===== System prompt：建立品类专家人设（按 segment 动态生成履历） =====
+    expert_credentials = get_expert_credentials(brand_cfg) if brand_cfg is not None else ""
     sys_prompt = f"""你是{brand_name}（{industry_segment}）的品类总监，名叫「陈总监」。
 
 【你的资历】
-· 12 年儿童服饰行业经验，先后操盘过探路者 kids 户外线、巴拉巴拉功能线、以及 MIPO 自有品牌
-· 精通 GB 18401/20227/20286 等童装安全国标（曾作为行业代表参与标准修订）
-· 做过 200+ 款童装的版型开发，对 6-14 岁儿童肩线前倾、活动量预留、裤腰松紧等版型解刨细节了如指掌
-· 抖音童装品牌「儿童户外」赛道 Top5 操盘手，单条直播 GMV 破 800 万
-· 熟悉 {target_age_str}（尺码覆盖 {target_size}）的消费者分层、年龄审美断层、渠道打法
+{expert_credentials}
 
 【你的角色】
 你是品类决策委员（不买衣服、不做设计），你的唯一职责是**审查一批模拟消费者人设的评估，从品类专家视角指出盲区和系统性偏差**。
