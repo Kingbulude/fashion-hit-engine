@@ -2214,11 +2214,17 @@ def render_page_detail():
                     _col_html = _chip_row("偏好颜色", _cols_pref, "#eef3f9", "#5772a0")
                     _veto_html = _chip_row("否决雷区", _veto_dim, "#fdecea", "#b14a4a")
 
-                    # 主体理由：取最长的那条层理由
+                    # 主体理由：优先最长的层理由，否则反对理由，否则兜底
                     _main_reason = ""
                     for lr in v.layer_reasons.values():
                         if lr and len(lr) > len(_main_reason):
                             _main_reason = lr
+                    if not _main_reason and v.opposing_reason:
+                        _main_reason = v.opposing_reason
+                    if not _main_reason:
+                        # 兜底：从决策反推一句话
+                        _lbl_for = _decision_label(v.final_score)[1]
+                        _main_reason = f"该人群综合判断为「{_lbl_for}」，LLM 未返回详细理由。"
 
                     _card_html = f"""
 <div style="border-left:4px solid {_col};padding:10px 14px;margin:8px 0;background:#faf8f5;border-radius:6px">
@@ -2240,17 +2246,48 @@ def render_page_detail():
 </div>"""
                     st.markdown(_card_html, unsafe_allow_html=True)
 
-                    # 各决策层详细理由（默认折叠，不再显示分数）
+                    # 各决策层详情 —— 不管 layer_reasons 空不空都要有内容
                     with st.expander(f"📄 该人群三层判断详情"):
-                        for layer_id in v.layer_reasons:
+                        # 优先按 decision_structure.layers 顺序遍历（确保每个层都出现）
+                        _all_layer_ids = list(v.layer_scores.keys()) or list(v.layer_reasons.keys())
+                        if not _all_layer_ids and brand_cfg:
+                            _all_layer_ids = [l.id for l in brand_cfg.decision_structure.layers]
+                        for layer_id in _all_layer_ids:
+                            layer_score = v.layer_scores.get(layer_id)
                             layer_reason = v.layer_reasons.get(layer_id, "")
                             layer_cn = _layer_name_map.get(layer_id, layer_id)
                             if layer_reason:
-                                st.markdown(f"**{layer_cn}**")
+                                _score_tag = (
+                                    f" <span style='color:#8a857d;font-size:0.8em'>"
+                                    f"（{layer_score:.1f}分）</span>"
+                                ) if layer_score is not None else ""
+                                st.markdown(f"**{layer_cn}**{_score_tag}")
                                 st.caption(layer_reason)
+                            elif layer_score is not None:
+                                # 有分数但没理由（LLM fallback 场景）
+                                st.markdown(
+                                    f"**{layer_cn}** "
+                                    f"<span style='color:#8a857d;font-size:0.8em'>"
+                                    f"（{layer_score:.1f}分 · LLM 未返回理由）</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                st.markdown(
+                                    f"**{layer_cn}** "
+                                    f"<span style='color:#c0b9ad;font-size:0.8em'>"
+                                    f"（无数据）</span>",
+                                    unsafe_allow_html=True,
+                                )
                         if v.opposing_reason:
                             st.markdown("**反对理由**")
                             st.caption(v.opposing_reason)
+                        # 真的啥也没有（极罕见）
+                        if (
+                            not v.opposing_reason
+                            and not any(v.layer_reasons.values())
+                            and not v.layer_scores
+                        ):
+                            st.caption("（该人群无详细理由，可能是 LLM 调用失败走了 fallback）")
 
     # —— 改款建议 ——
     st.subheader("🔧 改款建议")
