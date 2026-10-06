@@ -150,6 +150,11 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         category_registry = _load_yaml(brand_dir / "category_registry.yaml")
 
         brand_name = profile_yaml.get("brand_name", brand_id)
+        # v1.4.94+: 品牌品类基本信息（注入专家 prompt 用）
+        industry_segment = profile_yaml.get("industry_segment") or None
+        target_age_range = profile_yaml.get("target_age_range") or None
+        target_size_range = profile_yaml.get("target_size_range") or None
+        brand_domain_knowledge = profile_yaml.get("brand_domain_knowledge") or None
         decision_structure = _parse_decision_structure(
             profile_yaml.get("decision_structure", {"type": "single_layer", "layers": []})
         )
@@ -299,6 +304,10 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         sales_label_mapping=sales_label_mapping,
         calibration_group_by_year=calibration_group_by_year,
         has_internal_review=has_internal_review,
+        industry_segment=industry_segment,
+        target_age_range=target_age_range,
+        target_size_range=target_size_range,
+        brand_domain_knowledge=brand_domain_knowledge,
     )
 
 

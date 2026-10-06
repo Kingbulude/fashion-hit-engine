@@ -811,11 +811,16 @@ def _render_expert_challenge_prompt(
 ) -> tuple[str, str]:
     """渲染品类专家 prompt — 独立于所有人设的外部质疑视角。
 
-    专家不是"另一类人设"，而是"品类总监"——她不买衣服，但负责判断
-    这批人设的评估有没有系统性偏差。
+    v1.4.95 重写（深度版）：
+      · System prompt 升级为具体的「童装户外品类总监」人设（12年经验、国标专家）
+      · User prompt 注入童装专属口语映射、目标年龄检查清单、场景适配推断
+      · 专家任务扩展：不仅找偏差，还要评估品类成功要素命中、反模式红线、定价合理性
+      · 纠正"口语≠没评估"的误判（保留 v1.4.94 口语→维度映射但大幅扩充童装特有表达）
 
-    v1.4.90+: feat_brief 改为展示视觉锚定档标签 + visual_description，
-    让专家基于视觉事实而非 VLM 预判分做判断。
+    专家不是"另一类人设"，而是"品类决策委员"——她不买衣服，但负责判断：
+      (a) 人设有没有漏关键品类维度
+      (b) 这款是否踩了品类成功要素 / 反模式红线
+      (c) 定价是否匹配目标客群心智
     """
     features_cfg = brand_cfg.features_bars if brand_cfg else None
 
@@ -837,34 +842,207 @@ def _render_expert_challenge_prompt(
         feat_brief.append(_feat_entry(f))
 
     layers_desc = "、".join(l.name for l in layers)
-    sys_prompt = f"""你是{brand_name}的品类总监，有10年服装电商经验。
-你的任务不是买衣服，而是审查一群模拟消费者人设的评估，找出他们的盲区和系统性偏差。"""
+
+    # ===== 注入品牌品类 domain knowledge =====
+    industry_segment = "服饰品类"
+    target_age_str = ""
+    target_size = ""
+    domain_knowledge_text = ""
+    default_target_age = 10
+    age_decision_hint = ""
+    if brand_cfg is not None:
+        seg_map = {
+            "children_outdoor": "儿童户外功能服饰",
+            "children_fashion": "儿童时尚服饰",
+            "women_fashion": "女装",
+            "men_fashion": "男装",
+            "sportswear": "运动服饰",
+            "outdoor": "户外服饰",
+        }
+        industry_segment = seg_map.get(
+            brand_cfg.industry_segment or "",
+            brand_cfg.industry_segment or "服饰品类",
+        )
+        if brand_cfg.target_age_range:
+            lo, hi = brand_cfg.target_age_range
+            target_age_str = f"{lo}-{hi}岁"
+        if brand_cfg.target_size_range:
+            lo, hi = brand_cfg.target_size_range
+            target_size = f"{lo}-{hi}码"
+        if brand_cfg.brand_domain_knowledge:
+            domain_knowledge_text = brand_cfg.brand_domain_knowledge
+        default_target_age = brand_cfg.decision_structure.default_target_age
+        age_weight_rules = brand_cfg.decision_structure.age_weight_rules or []
+
+        # 根据默认目标年龄生成决策权重提示（让专家知道该年龄段谁说话更算数）
+        for rule in age_weight_rules:
+            if rule.get("age_range") and rule["age_range"][0] <= default_target_age <= rule["age_range"][1]:
+                label = rule.get("label", "")
+                mom_w = int(rule.get("mom_weight", 0) * 100)
+                child_w = int(rule.get("child_weight", 0) * 100)
+                age_decision_hint = f"{default_target_age}岁属于「{label}」区间：妈妈决策权重 {mom_w}%、孩子影响权重 {child_w}%"
+                break
+
+    # ===== System prompt：建立具体的童装户外品类总监人设 =====
+    sys_prompt = f"""你是{brand_name}（{industry_segment}）的品类总监，名叫「陈总监」。
+
+【你的资历】
+· 12 年儿童服饰行业经验，先后操盘过探路者 kids 户外线、巴拉巴拉功能线、以及 MIPO 自有品牌
+· 精通 GB 18401/20227/20286 等童装安全国标（曾作为行业代表参与标准修订）
+· 做过 200+ 款童装的版型开发，对 6-14 岁儿童肩线前倾、活动量预留、裤腰松紧等版型解刨细节了如指掌
+· 抖音童装品牌「儿童户外」赛道 Top5 操盘手，单条直播 GMV 破 800 万
+· 熟悉 {target_age_str}（尺码覆盖 {target_size}）的消费者分层、年龄审美断层、渠道打法
+
+【你的角色】
+你是品类决策委员（不买衣服、不做设计），你的唯一职责是**审查一批模拟消费者人设的评估，从品类专家视角指出盲区和系统性偏差**。
+你看的不是"这个人设喜不喜欢"，而是：
+  1. 这批人设作为一个整体，有没有遗漏该品类特有的关键评估维度？
+  2. 这款产品本身，有没有反模式红线（用成人版型、假功能面料、绳带超标等）？
+  3. 定价、版型、功能、配色的组合，对不对得齐目标客群？
+
+【你的判断准则】
+· 只说人设没说的，不说人设已经说过的
+· 把消费者口语翻译成品类维度再判断"有没有覆盖"——"料子硬邦邦"就是在评估面料，别再说"人设没评估面料"
+· 对照国标、竞品、渠道数据做判断，不要凭感觉
+· 能引用 GB 号就引用，能对比赛款就对比
+""".strip()
+
+    # ===== User prompt =====
+    # 知识段（有就加）
+    domain_block = ""
+    if domain_knowledge_text:
+        domain_block = f"""
+【品牌/品类专业知识（以此为基准判断人设是否遗漏关键维度）】
+{domain_knowledge_text}
+"""
+
+    # 目标年龄检查清单（根据 domain_knowledge 里的年龄分层动态生成）
+    age_checklist = ""
+    if brand_cfg is not None and brand_cfg.industry_segment == "children_outdoor":
+        age_checklist = f"""
+【目标年龄层（{default_target_age}岁）的专属检查清单 — 请逐条核对人设是否覆盖】
+{age_decision_hint}
+  ▢ 安全合规：面料是 A 类吗？绳带长度符合 GB 20227 吗？有荧光剂风险吗？
+  ▢ 版型适配：肩线是不是前倾设计（不是成人版缩小）？活动量够不够（孩子跑跳不卡）？
+  ▢ 裆部/裤腰：有没有 U 型裆布？裤腰是不是松紧/抽绳（6-12岁直上直下没腰型）？
+  ▢ 功能真实性：防晒衣有 UPF 50+ 吗？速干衣是聚酯纤维 ≥85% 吗？还是假功能？
+  ▢ 孩子审美：{default_target_age}岁的孩子会不会觉得幼稚/丑/不好意思穿去学校？
+  ▢ 耐造程度：面料抗起球/抗缩水/耐摩擦吗？（童装高频洗涤）
+  ▢ 场景适配：穿去学校会不会太夸张？穿去户外够不够功能？还是只能看不能穿？
+  ▢ 定价合理性：¥{info.price} 对 {default_target_age}岁妈妈来说，和竞品（探路者kids ¥300-600 / 骆驼kids ¥180-350）比够不够有竞争力？
+"""
+
+    # 童装专属口语→维度映射
+    oral_mapping = """
+【口语→维度映射（⚠️ 这是童装宝妈/孩子的真实表达，不是分析术语）】
+  版型相关：
+    → 肩线问题："肩膀那里垮垮的""溜肩""穿上显壮""腋下卡得慌"
+    → 活动量："跑两步裤腿就往上滑""蹲不下去""胳膊抬不起来""总卡裆"
+    → 裤腰/裤型："腰那里总是往下滑""掉裤子""勒肚子""太紧了穿不进去"
+    → 衣长/版型："太长了""压个子""又长又肥""袖子长一截"
+  面料/耐造：
+    → 手感："料子硬邦邦""摸着扎皮肤""起静电""孩子说痒"
+    → 耐造："洗两次就起球了""洗一次就变形""洗了缩水穿不下""一蹭就勾丝"
+    → 透气/功能："闷得慌""后背湿一大片""不透气""出汗贴身上"
+  安全：
+    → 绳带："绳子会不会缠脖子""帽绳太长了怕绕""抽绳会刮到东西"
+    → 其他："会不会有荧光剂""摸起来会不会过敏""拉链会不会夹肉"
+  孩子审美：
+    → 妈妈："颜色太花我家娃 hold 不住""图案太幼稚""这个款他穿去学校会被同学笑"
+    → 孩子（妈妈转述）："他说丑""孩子说丑不要""不要这个颜色""像小女生穿的""太幼稚了我不穿"
+  场景：
+    → "穿去学校不合适""户外活动穿这个不够暖""周末露营穿这个会被刮坏"
+"""
+
+    # 正确/错误偏差示例（童装专属）
+    bias_examples = """
+✅ 正确的系统性偏差示例（具体、有依据、非词面判断）：
+  · "所有人设都因为粉白配色打高分，但没人提这件防晒衣的面料成分是 100% 纯棉——纯棉没有 UPF 防护（GB/T 18830），宝妈收到货会发现被骗直接退款"
+  · "妈妈层都在夸面料软，但没人提绳带长度——从 FAB 描述看帽绳长 20cm，远超 GB 20227 的 14cm 上限，过不了天猫品控"
+  · "30 个人设里，12+ 岁相关的评价都没出现'会不会觉得幼稚'类似表达——这是目标客群核心盲区，9-11岁喜欢的卡通图案对12+是致命的"
+  · "所有人设都夸'这个价值'，但没人对比赛竞品——探路者kids同功能面料卖 ¥329，这款 ¥399 贵了 21%，直播间转化率会掉"
+
+❌ 错误的系统性偏差示例（词面判断，绝对不要这么做）：
+  · "所有人设均未对版型/设计/品牌调性等核心特征进行评估" → 他们说"跑两步裤腿就往上滑"就是在评版型
+  · "人设理由里没提到'面料'这个词" → 他们说"料子硬邦邦""洗两次起球"就是在评面料
+  · "消费者评估维度不完整" → 太笼统，要具体说"没人检查绳带长度是否符合 GB 20227"
+"""
 
     user_prompt = f"""
 请审查以下评估：
 
-【款式】{info.style_id} · {info.category} · ¥{info.price} · {info.fab_description or ''}
-【核心特征】
+═══════════════ 待评估款式 ═══════════════
+【款号】{info.style_id}
+【品类】{info.category}
+【价格】¥{info.price}
+【季节】{info.season or '未标注'}
+【FAB描述】{info.fab_description or '无FAB描述'}
+【核心特征（视觉锚定档）】
 {chr(10).join(feat_brief)}
-【当前批次整体状态】加权分={voting.weighted_score:.1f}/10  反对率={voting.opposition_rate:.0%}  支持率={voting.support_rate:.0%}
 
-【{layers_desc}层的人设初评结果】
+═══════════════ 批次整体数据 ═══════════════
+加权分 = {voting.weighted_score:.1f}/10    反对率 = {voting.opposition_rate:.0%}    支持率 = {voting.support_rate:.0%}
+
+{domain_block}
+{age_checklist}
+{oral_mapping}
+{bias_examples}
+
+═══════════════ {layers_desc} 层的人设初评结果 ═══════════════
 {layers_summary}
 
-【你的任务】请严格按 JSON 输出，给出：
+═══════════════ 你的任务 ═══════════════
+
+你需要做三件事（全部按 JSON 输出）：
+
+【任务1：系统性偏差与盲区】
+  审查所有人设的评估理由作为一个整体，找出：
+  - 他们**共同遗漏**了哪些品类特有的关键维度？
+  - 有没有某个决策层（妈妈/孩子）在某类问题上集体失明？
+  - 有没有明显的"妈妈觉得好但孩子不会穿"或"孩子觉得酷但妈妈不敢买"的断层？
+
+【任务2：产品反模式检查】
+  对照【反模式红线】（在专业知识段里），检查这款产品本身：
+  - 有没有成人版型缩小？
+  - 有没有假功能面料？
+  - 有没有安全合规风险（绳带、荧光剂、面料等级）？
+  - 有没有其他反模式？
+
+【任务3：定价与成功要素评估】
+  这款产品要卖爆，需要命中哪些成功要素？人设评估里有没有覆盖这些要素？
+  - 定价在竞品比价的 -10% ~ +15% 区间吗？
+  - 功能卖点对不对得起这个价？
+  - 渠道适配性（适合抖音直播冲量？适合天猫搜索承接？）
+
+═══════════════ 输出格式 ═══════════════
+
 {{
-  "systematic_bias": "最突出的系统性偏差是什么？（一句话，比如'所有人设都因为颜色打高分但都忽略了面料质感'）",
+  "systematic_bias": "最突出的系统性偏差（一句话，具体到'没人提XX'，禁止笼统说'评估维度不完整'）",
   "challenges": [
-    {{"layer": "层名", "issue": "具体问题", "severity": "high/medium/low", "suggestion": "应该怎么修正"}}
+    {{
+      "layer": "妈妈决策者层",
+      "issue": "具体问题（引用人设实际说的原话 + 你对品类知识的分析）",
+      "severity": "high/medium/low",
+      "suggestion": "人设应该从什么角度补充评估"
+    }}
   ],
-  "highlighted_blind_spots": ["盲区1", "盲区2"],
-  "confidence_in_assessment": "float 0-1"
+  "highlighted_blind_spots": ["具体盲区描述（如'没人检查绳带长度是否符合 GB 20227'）"],
+  "pattern_red_flags": ["命中的反模式（如'绳带长度疑似超标'），没有就输出 []"],
+  "category_success_score": 7.5,
+  "category_success_rationale": "这款在品类成功要素上的命中情况分析（定价、功能、版型、配色的组合对不对）",
+  "price_positioning": "overpriced/competitive/below_market + 一句话理由",
+  "confidence_in_assessment": 0.85
 }}
 
-规则：
-- 你的目标是找盲区，不是给这款打高分/低分
-- 如果人设评估没有明显偏差，可以说"无显著系统性偏差"
-- 不要重复所有人设已经说了的理由，只说他们没说的
+═══════════════ 规则 ═══════════════
+1. 你的目标是**指盲区**，不是给这款打高分/低分
+2. 如果人设评估确实没有明显盲区，可以说"无显著系统性偏差"
+3. 绝对不要用人设理由里有没有出现"版型""面料""设计"这些词来判断他们是否评估了对应维度
+4. 先把口语翻译成品类维度，再判断"有没有被覆盖"
+5. 能引用具体国标号、竞品数据、渠道数据就引用——这是你作为品类总监的价值
+6. 不要重复所有人设已经说过的理由，只说他们**没说的**
+7. 如果 FAB 描述里有矛盾或缺失（如写了"防晒"但没提 UPF），直接指出
+8. {age_decision_hint}
 """.strip()
     return sys_prompt, user_prompt
 

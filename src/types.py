@@ -259,6 +259,11 @@ class BrandConfig:
     has_internal_review: bool = True
     # 洞察阈值（覆盖 grading.py 里 consumer_insights 生成的硬阈值）
     insight_thresholds: Optional[dict[str, float]] = None
+    # v1.4.94+: 品牌品类信息（注入专家 prompt 让专家懂行）
+    industry_segment: Optional[str] = None
+    target_age_range: Optional[list[int]] = None
+    target_size_range: Optional[list[int]] = None
+    brand_domain_knowledge: Optional[str] = None
 
 
 # ========== 结构化解析 ==========
