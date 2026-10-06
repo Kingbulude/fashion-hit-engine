@@ -2326,11 +2326,68 @@ def render_page_calibration():
 """, unsafe_allow_html=True)
 
     preds: list[FullPrediction] = st.session_state.get("preds", [])
+
+    # —— 历史校准数据累积面板（v1.4.81: 跨 session 不丢）——
+    _acc_path = Path(brand_cfg.calibrated_dir) / "history_accumulated.csv"
+    _acc_n = 0
+    _acc_df: pd.DataFrame | None = None
+    if _acc_path.exists():
+        try:
+            _acc_df = pd.read_csv(_acc_path)
+            _acc_n = len(_acc_df)
+        except Exception:
+            pass
+
+    _acc_col1, _acc_col2, _acc_col3 = st.columns([1.2, 1, 1])
+    with _acc_col1:
+        st.markdown(
+            f"**📦 历史校准数据** 累积 **{_acc_n}** 款"
+            + ("（≥30 样本量门槛，Loop3 引擎权重可拟合）"
+               if _acc_n >= 30 else f"（还差 {max(0, 30 - _acc_n)} 款到 30 样本门槛）")
+        )
+    with _acc_col2:
+        if _acc_df is not None:
+            st.download_button(
+                "⬇️ 下载累积 CSV",
+                data=_acc_df.to_csv(index=False).encode(),
+                file_name=f"history_accumulated_{brand_cfg.brand_id}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+    with _acc_col3:
+        _reset = st.button("🗑️ 清空历史", use_container_width=True)
+        if _reset and _acc_path.exists():
+            _acc_path.unlink()
+            st.success("已清空历史累积，下次回测校准会从头开始。")
+
+    # 导入外部 CSV（合并去重，用于迁移/备份恢复）
+    _up = st.file_uploader("⬆️ 导入历史 CSV（合并去重）", type=["csv"],
+                           help="格式同 history_accumulated.csv，按 style_id 合并（新覆盖旧）")
+    if _up is not None:
+        try:
+            _up_df = pd.read_csv(_up)
+            # 合并
+            if _acc_df is not None:
+                _merged = pd.concat([_acc_df, _up_df]).drop_duplicates(
+                    subset=["style_id"], keep="last"
+                )
+            else:
+                _merged = _up_df
+            _acc_path.parent.mkdir(parents=True, exist_ok=True)
+            _merged.to_csv(_acc_path, index=False)
+            st.success(f"✅ 合并完成：{len(_acc_df) if _acc_df is not None else 0} + "
+                      f"{len(_up_df)} → {len(_merged)} 款")
+            _acc_df, _acc_n = _merged, len(_merged)
+        except Exception as e:
+            st.error(f"导入失败：{e}")
+
+    if _acc_df is not None and len(_acc_df) > 0:
+        with st.expander(f"预览（前 5 行，共 {_acc_n} 款）"):
+            st.dataframe(_acc_df.head(5), use_container_width=True)
+
     if not preds:
-        st.info("当前没有评估结果。请先运行评估，或上传历史批次的preds.json缓存。")
-        cached = st.file_uploader("上传历史缓存 predictions.json", type=["json"])
-        if cached:
-            st.info("（上传历史缓存功能：后续版本从FullPrediction JSON恢复）")
+        st.info("ℹ️ 当前没有新的评估结果。请先在「📤 上传批次」跑评估，"
+                "或直接用累积 CSV 重新跑回测校准。")
 
     xlsx = st.file_uploader("上传带真实销量的 Excel（含「款式编号」+「真实销售结果/真实销量」列）",
                             type=["xlsx", "csv"])
@@ -2384,26 +2441,26 @@ def render_page_calibration():
             st.error(f"Excel读取失败：{e}")
 
     # ---------- 回测校准按钮（3Loop内核：Spearman对比+残差分离）----------
+    # v1.4.81+: 有累积 CSV 时 preds 可以为空 — run_backtest_calibration 会自动从 CSV 加载
+    _has_data_source = (preds and len(preds) >= 8) or (_acc_n >= 8)
     do_3loop = st.button("🤖 运行3Loop核心优化内核 + 残差分离",
                          type="primary",
-                         disabled=(not preds or not truth_map_ready or len(preds) < 8),
-                         help="至少8款数据才能启动Lasso人设分布拟合")
+                         disabled=(not truth_map_ready or not _has_data_source),
+                         help="至少8款数据（session preds 或累积 CSV 二选一）"
+                              " + 真实销量 Excel 才能启动校准")
 
-    if do_3loop and truth_map_ready and preds:
+    if do_3loop and truth_map_ready:
         with st.spinner("3Loop校准运行中（Loop1→Loop2→Loop3→残差分离，20秒）…"):
-            # 调用 PredictionPipeline.run_backtest_calibration（spec §9）
-            # 内部封装：build_history_df + run_all_loops + 残差归一化
-            # 产物写 brand_cfg.calibrated_dir（下次评估自动加载，越用越准）
             try:
-                # 校准不需要调LLM，但要同一个品牌配置
-                _llm_backend = st.session_state.get("llm_backend", "mock")
+                from src.pipeline import PredictionPipeline
                 pl = PredictionPipeline(
                     brand_id=brand_cfg.brand_id,
-                    llm_backend=_llm_backend,
+                    llm_backend=st.session_state.get("llm_backend", "mock"),
                     api_key=st.session_state.get("api_key_for_backend", "") or None,
                 )
+                # predictions 为空时 run_backtest_calibration 自动从累积 CSV 加载
                 loop_result = pl.run_backtest_calibration(
-                    predictions=preds,
+                    predictions=preds if preds else None,
                     sales_lookup=truth_map_ready,
                 )
             except RuntimeError as re:
@@ -2414,7 +2471,12 @@ def render_page_calibration():
                 loop_result = None
 
             if loop_result is None:
-                matched = sum(1 for p in preds if p.info.style_id in (truth_map_ready or {}))
+                if preds:
+                    matched = sum(1 for p in preds if p.info.style_id in (truth_map_ready or {}))
+                elif _acc_df is not None:
+                    matched = _acc_df["style_id"].isin(truth_map_ready or {}).sum()
+                else:
+                    matched = 0
                 if matched == 0:
                     st.error("❌ 没有款能匹配到真实销量，请检查「款式编号」列是否一致。")
                 elif matched < 8:
