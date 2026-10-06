@@ -43,6 +43,83 @@ VETO_PENALTY_FACTOR = 0.70
 _DEFAULT_PERSONA_MODELS = ["qwen-max", "deepseek-v3"]
 
 
+# v1.4.91+: LLM 偶尔会在理由开头自动加分类标签前缀（如"稳定：""普通，""基本无""设计/面料"），
+# 这些是分析词而非真实的人会说的话，需要在解析后剥掉。
+# 正则顺序：从最具体（复合标签）到最模糊（单个词），避免短词抢先匹配长复合标签。
+
+# 所有前缀类分析词 → 直接剥掉整个前缀（匹配词本身 + 可选标点）
+# 注意：分析维度词后面**必须跟标点**才视为标签（避免剥掉"面料摸着挺舒服"里的主语）
+_JUDGE_WORDS = r"(?:稳定|基本稳定|很稳定|普通|比较普通|一般|比较一般|较差|较好|良好|优秀|差|一般般|尚可|中等|偏普通|基本没变化|局部|基本无|基本没有|基本没|没什么|没啥|尚可)"
+_DIMENSION_WORDS = r"(?:版型|面料|设计|剪裁|廓形|材质|色彩|价格|尺码|做工|细节|功能|质感|手感|外观|上身效果|面料质感|面料成分|面料厚度|面料手感)"
+_REPORT_WORDS = r"(?:判断|结论|综合来看|整体来看|总体来说|简单说|简而言之|总结|总结一下|总评|总体评价|综合评价|个人觉得|我觉得)"
+_SCORE_PREFIX = r"(?:\d+分|打\d+分|评分\d+|[Ss]core:?\s*\d+)"
+
+# 标点集合（真正的 Python str 字符集合，用于 lstrip）
+_PUNCT_CHARS = " ：:·—/·,，。;；\t\n"
+# 标点 regex（用于 pattern 匹配）
+_PUNCT = r"[：:·—/·\s,，。;；]"
+
+
+def _strip_analysis_prefix(text: str) -> str:
+    """剥掉 LLM 在理由开头加的分析词/分类标签前缀。
+
+    v1.4.91+：LLM 会"自作主张"在 reason 字段开头加分析词，如：
+    - "稳定：面料质感不错，小孩穿了不闷" → "面料质感不错，小孩穿了不闷"
+    - "普通，没有什么特别吸引我的点" → "没有什么特别吸引我的点"
+    - "基本无明显硬伤" → "明显硬伤"（无标点也能匹配判断词）
+    - "设计/面料：整体还行" → "整体还行"
+    - "综合来看：颜色太花我家娃hold不住" → "颜色太花我家娃hold不住"
+    - "版型：太宽松了" → "太宽松了"
+
+    原则：
+    - 复合标签（"设计/面料"）、分析维度词（"面料："）、报告式词（"判断："）
+      → 后面**必须跟标点**才剥（避免误伤"面料摸着挺舒服"这种正常口语）
+    - 判断词（"稳定""普通""基本无""局部"）→ 有无标点都剥
+    """
+    if not text:
+        return text
+
+    cleaned = text.strip()
+
+    # 1) 复合标签："设计/面料" "版型·面料" "色彩/尺码" 等 —— 必须跟标点
+    pat_compound = re.compile(
+        r"^[\u4e00-\u9fa5]{1,4}[/／·,，·][\u4e00-\u9fa5]{1,4}" + _PUNCT + r"+"
+    )
+    m = pat_compound.match(cleaned)
+    if m:
+        cleaned = cleaned[m.end():].lstrip(_PUNCT_CHARS)
+
+    # 2) 分析维度词（版型/面料/设计...）—— 必须跟标点
+    pat_dim = re.compile(r"^" + _DIMENSION_WORDS + _PUNCT + r"+")
+    m = pat_dim.match(cleaned)
+    if m:
+        cleaned = cleaned[m.end():].lstrip(_PUNCT_CHARS)
+
+    # 3) 报告式开头（判断/结论/综合来看...）—— 必须跟标点
+    pat_report = re.compile(r"^" + _REPORT_WORDS + _PUNCT + r"+")
+    m = pat_report.match(cleaned)
+    if m:
+        cleaned = cleaned[m.end():].lstrip(_PUNCT_CHARS)
+
+    # 4) 判断词/评分前缀 —— 有无标点都剥（这些本身就是分析标签）
+    pat_judge = re.compile(r"^(?:" + _JUDGE_WORDS + r"|" + _SCORE_PREFIX + r")" + _PUNCT + r"*")
+    m = pat_judge.match(cleaned)
+    if m:
+        cleaned = cleaned[m.end():].lstrip(_PUNCT_CHARS)
+
+    # 如果剥完过短（≤2字），尝试从原文后半段提取
+    if len(cleaned) <= 2:
+        for sep in ["，", ",", "。", ";", "；", "：", ":"]:
+            if sep in text:
+                parts = text.split(sep, 1)
+                candidate = parts[1].strip()
+                if len(candidate) > 2:
+                    return candidate
+        return text.strip() if text.strip() else text
+
+    return cleaned
+
+
 def _persona_key(p: dict[str, Any]) -> str:
     return str(p.get("id", p.get("persona_id", "")))
 
@@ -181,7 +258,11 @@ def _render_persona_vote_system(layers: list[DecisionLayer], brand_name: str) ->
 
 核心行为准则：
 1. 你就是那个人设本人，从她/他的眼睛看这件衣服，从她/他的脑子里冒出真实的想法
-2. 说人话。不要说"版型/设计/廓形/剪裁/面料质感"这种分析词——要说"这裤子太宽我儿子穿得像麻袋""这颜色配家里那件T恤肯定好看""领口卡脖子不舒服""这个价直播间好像见过差不多的"
+2. 说人话，绝对不能像分析师。❌禁止的开头方式：
+   - 禁止在理由开头加判断标签：「稳定：……」「普通，……」「基本无……」「局部……」「一般……」「尚可……」
+   - 禁止在理由开头加分析维度：「版型……」「面料……」「设计/面料……」「色彩……」「尺码……」
+   - 禁止写"判断：……""综合来看：……""结论：……"这类报告式开头
+   ✅正确方式：直接写你脑子里冒出的那句完整的话，比如：「这裤子太宽我儿子穿得像麻袋」「这颜色配家里那件T恤肯定好看」「领口卡脖子不舒服」「这个价直播间好像见过差不多的」「面料摸着挺舒服就是颜色太浅容易脏」
 3. 每个决策层分别独立想一遍，但理由要口语化——是她/他脑子里闪过的念头，不是写测评
 4. 评分1-10分：1=看都不想看，10=立刻想买
 5. 输出纯JSON，不要任何额外解释文字"""
@@ -264,8 +345,8 @@ def _render_persona_prompt(
     score_tasks = "\n\n".join(
         f"{i+1}) {l.name} 打分（{l.id}_score，1-10）\n"
         f"   设想你作为这个人设，看到这件衣服时，在{l.name}这个角度心里冒出来的真实念头。\n"
-        f"   {l.id}_reason：写你脑子里冒出的那句话，比如：「这件颜色太花我家娃hold不住」「领口这么设计我老公肯定嫌麻烦」「这个价位在直播间见过更便宜的」。"
-        f"不要写『版型/设计/廓形/面料』这种分析词。"
+        f"   {l.id}_reason：直接写你脑子里冒出的那句完整的话，比如：「这件颜色太花我家娃hold不住」「领口这么设计我老公肯定嫌麻烦」「这个价位在直播间见过更便宜的」。"
+        f"绝对禁止开头加「稳定：」「普通，」「基本无」「设计/面料」「版型」这类分析标签，也不要写「判断：」「综合来看：」。"
         for i, l in enumerate(layers)
     )
     veto_hint = (
@@ -452,8 +533,10 @@ def vote_persona(
 
     # 选首个成功模型的理由文本
     sample = per_model[0]
+    # v1.4.91+: 剥掉 LLM 在理由开头自动加的分析词/分类标签前缀
     layer_reasons: dict[str, str] = {
-        l.id: str(sample.get(f"{l.id}_reason", "")) for l in layers
+        l.id: _strip_analysis_prefix(str(sample.get(f"{l.id}_reason", "")))
+        for l in layers
     }
     # 否决：LLM 明确输出，或决策者层低分
     decider_low = any(
@@ -468,7 +551,7 @@ def vote_persona(
         layer_scores=layer_scores,
         layer_reasons=layer_reasons,
         final_score=float(final_score_from_layers),
-        opposing_reason=str(sample.get("opposing_reason", "")),
+        opposing_reason=_strip_analysis_prefix(str(sample.get("opposing_reason", ""))),
         vetoed=vetoed,
         model_scores=per_model_scores,
     )
