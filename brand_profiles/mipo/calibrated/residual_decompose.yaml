@@ -1,10 +1,17 @@
 residual_mean: 0.0
-residual_std: 0.27666443551086073
+residual_std: 0.2939723678960656
 system_bias_flag: NO_SIGNIFICANT_BIAS
 marketing_available: true
 attribution_summary:
+  漏网爆款：没推也超预期，应追加投放: 1
   资源错配：投放了仍不及预期: 2
-overperformers: []
+overperformers:
+- style_id: T251005
+  residual: 0.4444444444444444
+  was_pushed: false
+  y_true: 0.4444444444444444
+  y_pred: 0.0
+  attribution: 漏网爆款：没推也超预期，应追加投放
 underperformers:
 - style_id: T251001
   residual: -0.4444444444444444

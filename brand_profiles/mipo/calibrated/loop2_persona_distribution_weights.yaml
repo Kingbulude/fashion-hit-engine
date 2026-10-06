@@ -1,10 +1,10 @@
 applied: false
-old_spearman: 0.5151515151515151
-new_spearman: 0.5151515151515151
-delta_spearman: 0.0
+old_spearman: -0.37690143708164003
+new_spearman: -0.406060606060606
+delta_spearman: -0.029159168978965977
 classification:
-  old_f1: 0.20833333333333331
-  new_f1: 0.20833333333333331
+  old_f1: 0.05555555555555555
+  new_f1: 0.05555555555555555
   delta_f1: 0.0
   old_precision_at_k: 0.0
   new_precision_at_k: 0.0
