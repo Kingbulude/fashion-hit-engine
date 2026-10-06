@@ -1850,20 +1850,20 @@ def render_page_detail():
             st.caption(f"**FAB**：{p.info.fab_description}")
         st.divider()
 
-        # —— 10 特征 BARS 评分（右列内，位置不动）——
-        st.subheader("🎯 10特征BARS评分 · 因果链")
-        st.caption("每个特征的分数段颜色对应品牌 anchors 里的销量影响判断：🔴高风险 → 🌿销冠潜力")
+        # —— 10 特征视觉锚定（右列内，位置不动）——
+        st.subheader("🎯 10特征视觉锚定 · VLM 纯客观描述")
+        st.caption("v1.4.90+：分数是视觉锚定档的区间中点（档1=[1,2]中点=1.5 ... 档5=[9,10]中点=9.5），仅描述视觉分类，不含销量预判。颜色区分锚定档，不代表好坏。")
 
-        # 从 brand_cfg.features_bars 读 anchors，构建分数段→颜色+标签的映射
         _bars_cfg = brand_cfg.features_bars.get("features", {}) if brand_cfg else {}
-        _risk_buckets = [
-            # (max_score_exclusive, color, bucket_label)
-            (2.5,  "#d64545", "🔴 高风险"),
-            (4.5,  "#e8923d", "🟠 偏低风险"),
-            (6.5,  "#a8b5c4", "⚪ 常规"),
-            (8.5,  "#6ca060", "🟢 高销区"),
-            (10.1, "#3d7d3c", "🌿 销冠潜力"),
-        ]
+
+        # v1.4.90+: 颜色按 anchor_level 分（5 档，每档一种中性色，无好坏语义）
+        _anchor_colors = {
+            1: "#c85a5a",   # 档1
+            2: "#d68c45",   # 档2
+            3: "#a8b5c4",   # 档3 中性灰
+            4: "#5a8a9a",   # 档4
+            5: "#3d7d8a",   # 档5
+        }
 
         feat_rows = []
         for key, f in p.features.features.items():
@@ -1873,99 +1873,95 @@ def render_page_detail():
             else:
                 anchors = list(_raw_anchors)
             anchor_label = ""
-            anchor_impact = ""
+            anchor_level = f.anchor_level
             for a in anchors:
-                lo, hi = a.get("range", [0, 0])
-                if lo <= f.score <= hi:
-                    anchor_label = a.get("label", "")
-                    ad = a.get("description", "")
-                    for kw in ["销冠", "主推", "高销", "标杆", "潜力", "风险", "退货", "销量", "不稳定"]:
-                        if kw in ad:
-                            for clause in ad.split("；") + ad.split("，"):
-                                if kw in clause:
-                                    anchor_impact = clause.strip("。，；")
-                                    break
-                            if anchor_impact:
-                                break
-                    if not anchor_impact and ad:
-                        anchor_impact = ad[:40]
+                if a.get("label") and (
+                    (f.score != 0 and a.get("range", [0, 0])[0] <= f.score <= a.get("range", [0, 0])[1])
+                    or (f.score != 0 and a.get("range", [0, 0])[0] <= f.score <= a.get("range", [0, 0])[1])
+                ):
+                    anchor_label = a["label"]
                     break
+            if not anchor_label and anchor_level is not None:
+                anchor_label = f"档{anchor_level}"
 
-            _color = _risk_buckets[-1][1]
-            _bucket_label = ""
-            for (mx, col, bl) in _risk_buckets:
-                if f.score < mx:
-                    _color, _bucket_label = col, bl
-                    break
+            _color = _anchor_colors.get(anchor_level or 3, "#a8b5c4")
+            _visual_desc = f.visual_description or ""
 
             feat_rows.append({
                 "key": key,
                 "特征": f.name,
-                "分数": f.score,
-                "VLM理由": f.reason or "（无）",
-                "锚点档位": anchor_label,
-                "销量影响": anchor_impact,
-                "风险段": _bucket_label,
+                "锚定点": f.score,
+                "视觉档": f"档{anchor_level}" if anchor_level else "未判断",
+                "锚定标签": anchor_label,
+                "视觉观察": _visual_desc[:80] + ("..." if len(_visual_desc) > 80 else ""),
                 "颜色": _color,
             })
 
-        df_feat = pd.DataFrame(feat_rows).sort_values("分数")
+        df_feat = pd.DataFrame(feat_rows).sort_values("锚定点")
 
-        # Plotly 水平条形图（分段染色 + 标签）
+        # Plotly 水平条形图（按 anchor_level 着色，无好坏语义）
         fig = go.Figure()
         fig.add_bar(
             y=df_feat["特征"],
-            x=df_feat["分数"],
+            x=df_feat["锚定点"],
             orientation="h",
             marker_color=df_feat["颜色"],
-            text=[f"{s:.1f}  {lbl}" for s, lbl in zip(df_feat["分数"], df_feat["锚点档位"])],
+            text=[f"档{row['视觉档'].replace('档','')} {row['锚定标签']}" for _, row in df_feat.iterrows()],
             textposition="outside",
-            hovertemplate="<b>%{y}</b><br>"
-                          "VLM 理由：%{customdata[0]}<br>"
-                          "档位：%{customdata[1]}<br>"
-                          "销量影响：%{customdata[2]}<extra></extra>",
-            customdata=df_feat[["VLM理由", "锚点档位", "销量影响"]],
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "视觉档：%{customdata[0]}<br>"
+                "锚定标签：%{customdata[1]}<br>"
+                "视觉观察：%{customdata[2]}<extra></extra>"
+            ),
+            customdata=df_feat[["视觉档", "锚定标签", "视觉观察"]],
         )
         fig.update_layout(
             height=max(280, len(df_feat) * 32),
             margin=dict(l=80, r=180, t=10, b=10),
-            xaxis=dict(range=[0, 11], showgrid=False, zeroline=False),
+            xaxis=dict(range=[0, 11], showgrid=False, zeroline=False,
+                       tickvals=[1.5, 3.5, 5.5, 7.5, 9.5],
+                       ticktext=["档1", "档2", "档3", "档4", "档5"]),
             yaxis=dict(showgrid=False),
             showlegend=False,
             uniformtext_minsize=10,
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # 风险段图例
+        # anchor 档图例（中性色，无好坏）
         _legend_html = "｜".join(
-            f'<span style="color:{c}">■</span> {bl}'
-            for (_, c, bl) in _risk_buckets
+            f'<span style="color:{col}">■</span> 档{lv}'
+            for lv, col in sorted(_anchor_colors.items())
         )
         st.markdown(f"<div style='font-size:0.8em;color:#8a857d'>{_legend_html}</div>",
                     unsafe_allow_html=True)
 
-        # VLM 理由 + 销量影响展开区
-        with st.expander("🔍 每个特征的 VLM 判断理由 + 销量影响", expanded=False):
+        # v1.4.90+: 视觉观察展开区（纯客观描述，无销量判断）
+        with st.expander("🔍 VLM 视觉观察细节（VLM 纯客观描述，人设 LLM 基于此独立判断好不好卖）", expanded=False):
             for _, row in df_feat.iterrows():
-                _impact_html = f"<span style='color:{row['颜色']};font-weight:bold'>【{row['风险段']}】{row['销量影响']}</span>" if row["销量影响"] else ""
-                st.markdown(f"**{row['特征']} · {row['分数']:.1f}/10 · {row['锚点档位']}**  {_impact_html}",
-                            unsafe_allow_html=True)
-                st.caption(row["VLM理由"])
+                _level_html = f"<span style='color:{row['颜色']};font-weight:bold'>【{row['视觉档']} · {row['锚定标签']}】</span>"
+                st.markdown(f"**{row['特征']}** {_level_html}", unsafe_allow_html=True)
+                st.caption(row["视觉观察"] or "（无视觉描述）")
                 st.divider()
 
     st.divider()
 
     # ===== 下方：三列指标（全宽）=====
-    def _score_color(score: float, *, lo_high: float = 8.5, lo_mid: float = 6.5,
-                     hi_low: float = 2.5, hi_mid: float = 4.5) -> str:
-        """分数越高越好，跟 BARS 的区间方向一致：
-        🌿销冠潜力≥8.5 / 🟢高销区≥6.5 / ⚪常规 4.5-6.5 / 🟠偏低风险≥2.5 / 🔴高风险<2.5
-        """
-        if score >= lo_high:   return "#3d7d3c"  # 🌿 销冠潜力
-        if score >= lo_mid:    return "#6ca060"  # 🟢 高销区
-        if score >= hi_mid:    return "#a8b5c4"  # ⚪ 常规
-        if score >= hi_low:    return "#e8923d"  # 🟠 偏低风险
-        return "#d64545"                           # 🔴 高风险
+    def _anchor_color(anchor_level: int | None) -> str:
+        """v1.4.90+: 按视觉锚定档着色，无好坏语义"""
+        _map = {1: "#c85a5a", 2: "#d68c45", 3: "#a8b5c4",
+                4: "#5a8a9a", 5: "#3d7d8a"}
+        return _map.get(anchor_level or 3, "#a8b5c4")
+
+    def _score_color_v1490(score: float) -> str:
+        """v1.4.90+: 三列指标的颜色：score 是 anchor 区间中点（1.5/3.5/5.5/7.5/9.5），
+        无绝对好坏语义，但 anchor 跨度越大通常表示视觉特征越极端——用于辨识度提醒。"""
+        if score >= 8.5:   return "#3d7d8a"  # 档5 视觉上较突出
+        if score >= 6.5:   return "#5a8a9a"  # 档4
+        if score >= 4.5:   return "#a8b5c4"  # 档3 中性
+        if score >= 2.5:   return "#d68c45"  # 档2
+        return "#c85a5a"                       # 档1
+
 
     # engine 权重（取已校准 weights，兜底 yaml 默认 0.35/0.30/0.35）
     _ew = getattr(brand_cfg, "engine_weights", None) or {}
@@ -1981,7 +1977,7 @@ def render_page_detail():
         st.subheader("👥 购买决策投票")
         st.caption(f"加权权重 {_w_persona:.0%} ｜ 30 类目标人群的综合判断")
         v = p.voting
-        _sc = _score_color(v.weighted_score)
+        _sc = _score_color_v1490(v.weighted_score)
         s_pct = int(v.support_rate * 100)
         w_pct = int(getattr(v, "wait_rate", max(0.0, 1.0 - v.support_rate - v.opposition_rate)) * 100)
         o_pct = int(v.opposition_rate * 100)
@@ -2031,7 +2027,7 @@ def render_page_detail():
             ("感知价值", p.channels.perceived_value, _w_price),
         ]
         for name, score, w in rows:
-            sc = _score_color(score)
+            sc = _score_color_v1490(score)
             st.markdown(
                 f"<div style='display:flex;justify-content:space-between;align-items:center;padding:3px 0'>"
                 f"<span style='color:#8a857d;font-size:0.9em'>{name} <span style='font-size:0.8em;color:#b3aea3'>({w:.0%})</span></span>"
