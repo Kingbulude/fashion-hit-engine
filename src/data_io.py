@@ -52,16 +52,19 @@ def resolve_category(
     raw = (raw_category_name or "").strip()
     if not raw:
         return ""
+    _raw_lower = raw.lower()  # 英文品类名大小写不敏感
 
     if brand_cfg is None:
         brand_cfg = load_brand_profile("mipo")
     registry = brand_cfg.category_registry or {}
     aliases: dict[str, Any] = registry.get("category_aliases", {}) or {}
     categories: list[dict[str, Any]] = registry.get("categories", []) or []
+    # aliases 查找也对 key 做 lower 归一化
+    _aliases_lower = {str(k).lower(): v for k, v in aliases.items()}
 
-    # 1) 别名精确匹配 → ID
-    if raw in aliases:
-        return str(aliases[raw])
+    # 1) 别名精确匹配 → ID（大小写不敏感）
+    if _raw_lower in _aliases_lower:
+        return str(_aliases_lower[_raw_lower])
 
     # 2) categories[].name 精确匹配 → ID
     for cat in categories:
@@ -77,6 +80,12 @@ def resolve_category(
             cid = cat.get("id")
             if cid is not None:
                 return str(cid)
+
+    # 3.5) 输入本身就是 registry 里的 id（大小写不敏感，兜底英文 id 直灌场景）
+    _known_ids = {str(c.get("id", "")) for c in categories if c.get("id")}
+    _known_ids_lower = {i.lower(): i for i in _known_ids}
+    if _raw_lower in _known_ids_lower:
+        return _known_ids_lower[_raw_lower]
 
     # 4) 都不认识 → Warning + _unknown
     warnings.warn(

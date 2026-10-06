@@ -1834,9 +1834,15 @@ def render_page_detail():
 
     with right:
         st.subheader("📝 基本信息")
+        # v1.4.91+: 品类 id → 中文名映射（category_registry 维护）
+        _cat_id_to_name: dict[str, str] = {
+            c["id"]: c.get("name", c["id"])
+            for c in (brand_cfg.category_registry.get("categories", []) if brand_cfg else [])
+        }
+        _cat_display = _cat_id_to_name.get(p.info.category, p.info.category or "—")
         info_items = [
             ("款号", p.info.style_id),
-            ("品类", p.info.category or "—"),
+            ("品类", _cat_display),
             ("售价", f"¥{p.info.price:.0f}" if p.info.price else "—"),
             ("季节", p.info.season or "—"),
             ("年份", p.info.year or "—"),
