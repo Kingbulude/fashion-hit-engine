@@ -106,6 +106,7 @@ class VotingResult:
     weighted_score: float = 0.0          # 人设分布加权后的总分（0-10）
     opposition_rate: float = 0.0         # 反对率（<4分的人设比例）
     support_rate: float = 0.0            # 支持率（>7分的人设比例）
+    wait_rate: float = 0.0               # 观望率（4-7分中间段人设比例）= 1 - support - opposition
     top_buy_reasons: list[str] = field(default_factory=list)
     top_oppose_reasons: list[str] = field(default_factory=list)
     # 分歧度
@@ -247,6 +248,8 @@ class BrandConfig:
     # False 时 build_history_df 跳过 grade_norm 列生成 → 3Loop 自然退回 3 引擎
     # 避免无内审品牌的空 manual_grade 干扰 grade_norm 权重
     has_internal_review: bool = True
+    # 洞察阈值（覆盖 grading.py 里 consumer_insights 生成的硬阈值）
+    insight_thresholds: Optional[dict[str, float]] = None
 
 
 # ========== 结构化解析 ==========

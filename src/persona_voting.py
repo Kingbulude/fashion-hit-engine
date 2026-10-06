@@ -637,6 +637,7 @@ def aggregate_votes(
         weighted_score=clamp(final_weighted, 1.0, 10.0),
         opposition_rate=oppose / n,
         support_rate=support / n,
+        wait_rate=max(0.0, 1.0 - support / n - oppose / n),
         top_buy_reasons=_cluster_reasons(buy_reasons_weighted),
         top_oppose_reasons=_cluster_reasons(oppose_reasons_weighted),
         score_std=pstdev(all_scores) if len(all_scores) >= 2 else 0.0,

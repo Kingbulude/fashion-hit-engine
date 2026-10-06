@@ -603,15 +603,46 @@ def decide_grade(
 
     improvements = _improvement_suggestions(feats, channels, features_cfg, info_price=info.price)
 
-    insight_parts = []
-    if voting.support_rate >= 0.4:
-        insight_parts.append(f"约{voting.support_rate:.0%}的核心客群明确愿意购买")
-    if voting.opposition_rate >= 0.2:
-        insight_parts.append(f"约{voting.opposition_rate:.0%}的人设存在顾虑")
+    # —— 洞察生成（阈值从 brand_cfg.insight_thresholds 取，兜底硬编码）——
+    _th = getattr(brand_cfg, "insight_thresholds", None) or {} if brand_cfg else {}
+    TH_SUPPORT = float(_th.get("support_min", 0.35))    # 支持率达此比例才说"有客群支持"
+    TH_OPPOSE = float(_th.get("oppose_min", 0.15))      # 反对率达此比例才说"有客群反对"
+    TH_WAIT = float(_th.get("wait_dominant", 0.55))     # 观望率占此比例以上 = "全在观望"
+
+    insight_parts: list[str] = []
+
+    # 1. 人设三段比叙事
+    s, w, o = voting.support_rate, voting.wait_rate, voting.opposition_rate
+    if s >= TH_SUPPORT and s >= o and s >= w:
+        insight_parts.append(f"客群态度积极（{s:.0%}明确愿意购买）")
+    elif o >= TH_OPPOSE and o >= s:
+        insight_parts.append(f"存在客群顾虑（{o:.0%}明确反对）")
+    elif w >= TH_WAIT:
+        insight_parts.append(f"客群态度分化不大，观望为主（{w:.0%}持中性态度）")
+    else:
+        insight_parts.append(f"客群态度分裂（支持{s:.0%} / 观望{w:.0%} / 反对{o:.0%}）")
+
+    # 2. 人设核心卖点/顾虑（不依赖硬阈值，只要有就说）
     if voting.top_buy_reasons:
         insight_parts.append("核心卖点：" + "；".join(voting.top_buy_reasons[:2]))
     if voting.top_oppose_reasons:
         insight_parts.append("主要顾虑：" + "；".join(voting.top_oppose_reasons[:2]))
+
+    # 3. 渠道 + 价格（合入洞察区，不再塞在 bar chart caption 里）
+    price_bucket = {
+        "低风险": "🟢低价格风险", "中风险": "🟡中价格风险", "高风险": "🔴高价格风险",
+    }.get(channels.price_risk, channels.price_risk)
+    insight_parts.append(f"价格{price_bucket}（百分位{channels.price_percentile:.0%}）")
+
+    # 4. 渠道强弱对比
+    diff = channels.live_score - channels.natural_score
+    if diff >= 1.5:
+        insight_parts.append(f"直播渠道显著更强（{channels.live_score:.1f} vs 自然{channels.natural_score:.1f}），建议主推直播")
+    elif diff <= -1.5:
+        insight_parts.append(f"自然渠道更优（{channels.natural_score:.1f} vs 直播{channels.live_score:.1f}），适合自然流量走量")
+    else:
+        insight_parts.append(f"双渠道均衡（自然{channels.natural_score:.1f} · 直播{channels.live_score:.1f}）")
+
     consumer_insights = "。".join(insight_parts) if insight_parts else "客群态度较为中性"
 
     return GradeResult(
