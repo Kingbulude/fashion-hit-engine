@@ -1990,7 +1990,7 @@ def render_page_detail():
         )
         # 三段比 bar（支持/观望/反对）
         s_pct = int(v.support_rate * 100)
-        w_pct = int(v.wait_rate * 100)
+        w_pct = int(getattr(v, "wait_rate", max(0.0, 1.0 - v.support_rate - v.opposition_rate)) * 100)
         o_pct = 100 - s_pct - w_pct
         st.markdown(
             f"""

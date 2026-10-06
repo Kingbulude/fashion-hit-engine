@@ -611,8 +611,9 @@ def decide_grade(
 
     insight_parts: list[str] = []
 
-    # 1. 人设三段比叙事
-    s, w, o = voting.support_rate, voting.wait_rate, voting.opposition_rate
+    # 1. 人设三段比叙事（wait_rate 防御性 fallback：兼容旧版 VotingResult 无此字段）
+    w_val = getattr(voting, "wait_rate", max(0.0, 1.0 - voting.support_rate - voting.opposition_rate))
+    s, w, o = voting.support_rate, w_val, voting.opposition_rate
     if s >= TH_SUPPORT and s >= o and s >= w:
         insight_parts.append(f"客群态度积极（{s:.0%}明确愿意购买）")
     elif o >= TH_OPPOSE and o >= s:
