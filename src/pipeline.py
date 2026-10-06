@@ -829,8 +829,36 @@ class PredictionPipeline:
             predictions = self.run_smoke_test_data(n=10)
 
         from .core.optimization_kernel import build_history_df, run_all_loops
+
+        # v1.4.78+: 累积历史校准数据
+        # 每次回测的 predictions + sales_lookup 先合并到 calibrated/history_accumulated.csv
+        # 避免跨 session 数据丢失，让校准样本量逐步增长
+        _acc_path = Path(self.brand_cfg.calibrated_dir) / "history_accumulated.csv"
         history_df = build_history_df(predictions, sales_lookup=sales_lookup,
                                       has_internal_review=getattr(self.brand_cfg, "has_internal_review", True))
+
+        _n_new = len(history_df)
+        if _acc_path.exists():
+            import pandas as _pd
+            _old = _pd.read_csv(_acc_path)
+            # 按 style_id 合并：新数据优先覆盖旧数据（sales_lookup 可能更新）
+            # 做法：history_df 设 style_id 为 index，覆盖 _old 里同 style_id 的行
+            _old_idx = _old.set_index("style_id")
+            _new_idx = history_df.set_index("style_id")
+            # 用 _combine_first 保证旧数据有但新数据没有的列不丢
+            history_df = _new_idx.combine_first(_old_idx).reset_index()
+            _n_added = len(history_df) - len(_old)
+            log.info(
+                "📦 校准数据累积：旧 %d 款 + 新 %d 款 → 去重后共 %d 款（新增 %d 款）",
+                len(_old), _n_new, len(history_df), max(_n_added, 0),
+            )
+        else:
+            log.info("📦 首次建立校准累积：%d 款 → %s", _n_new, _acc_path)
+
+        # 持久化（即使后续因为样本不足跳过校准，数据也不丢）
+        _acc_path.parent.mkdir(parents=True, exist_ok=True)
+        history_df.to_csv(_acc_path, index=False)
+
         sales_col = "sales"
         if sales_col not in history_df.columns or history_df[sales_col].sum() == 0:
             log.warning(
