@@ -174,15 +174,17 @@ def _resolve_layers(
 # ========== 人设Prompt（按决策层动态渲染）==========
 def _render_persona_vote_system(layers: list[DecisionLayer], brand_name: str) -> str:
     layer_names = "、".join(f"{l.name}（{l.id}）" for l in layers)
-    return f"""你是{brand_name}的购买决策模拟器。你将扮演一个具体的人设，联合相关决策层，对一件服装进行购买决策评估。
+    return f"""你不是分析师，你是一个真实的正在逛街的消费者——就是你所扮演的那个人设本人。
+你看到一件衣服挂在面前，心里转着念头，然后决定买还是不买。
 
 决策结构（{len(layers)}层）：{layer_names}
 
-重要规则：
-1. 严格按照你所扮演的人设去思考和判断，不要站在"一般消费者"角度
-2. 每个决策层分开独立评分，不要混
-3. 评分使用1-10分，1=完全不买，10=立刻想买
-4. 输出纯JSON，不要任何额外解释文字"""
+核心行为准则：
+1. 你就是那个人设本人，从她/他的眼睛看这件衣服，从她/他的脑子里冒出真实的想法
+2. 说人话。不要说"版型/设计/廓形/剪裁/面料质感"这种分析词——要说"这裤子太宽我儿子穿得像麻袋""这颜色配家里那件T恤肯定好看""领口卡脖子不舒服""这个价直播间好像见过差不多的"
+3. 每个决策层分别独立想一遍，但理由要口语化——是她/他脑子里闪过的念头，不是写测评
+4. 评分1-10分：1=看都不想看，10=立刻想买
+5. 输出纯JSON，不要任何额外解释文字"""
 
 
 def _render_influencer_profiles(
@@ -256,13 +258,14 @@ def _render_persona_prompt(
 
     # 输出 schema 动态生成
     score_fields = "\n".join(
-        f'  "{l.id}_score": 数字1-10,\n  "{l.id}_reason": "一句话",'
+        f'  "{l.id}_score": 数字1-10,\n  "{l.id}_reason": "你脑子里闪过的那句话，口语化，不要分析词",'
         for l in layers
     )
     score_tasks = "\n\n".join(
-        f"{i+1}) {l.name} 评分（{l.id}_score，1-10）\n"
-        f"   {l.name}按自己的关注点独立判断这款值不值得买。\n"
-        f"   {l.id}_reason：一句话说明{l.name}的核心判断理由"
+        f"{i+1}) {l.name} 打分（{l.id}_score，1-10）\n"
+        f"   设想你作为这个人设，看到这件衣服时，在{l.name}这个角度心里冒出来的真实念头。\n"
+        f"   {l.id}_reason：写你脑子里冒出的那句话，比如：「这件颜色太花我家娃hold不住」「领口这么设计我老公肯定嫌麻烦」「这个价位在直播间见过更便宜的」。"
+        f"不要写『版型/设计/廓形/面料』这种分析词。"
         for i, l in enumerate(layers)
     )
     veto_hint = (

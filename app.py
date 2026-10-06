@@ -2242,48 +2242,25 @@ def render_page_detail():
 </div>"""
                     st.markdown(_card_html, unsafe_allow_html=True)
 
-                    # 各决策层详情 —— 不管 layer_reasons 空不空都要有内容
+                    # 各决策层详情 —— 只展示层中文名 + 消费者心理活动（不展示分数）
                     with st.expander(f"📄 该人群三层判断详情"):
-                        # 优先按 decision_structure.layers 顺序遍历（确保每个层都出现）
                         _all_layer_ids = list(v.layer_scores.keys()) or list(v.layer_reasons.keys())
                         if not _all_layer_ids and brand_cfg:
                             _all_layer_ids = [l.id for l in brand_cfg.decision_structure.layers]
                         for layer_id in _all_layer_ids:
-                            layer_score = v.layer_scores.get(layer_id)
                             layer_reason = v.layer_reasons.get(layer_id, "")
                             layer_cn = _layer_name_map.get(layer_id, layer_id)
                             if layer_reason:
-                                _score_tag = (
-                                    f" <span style='color:#8a857d;font-size:0.8em'>"
-                                    f"（{layer_score:.1f}分）</span>"
-                                ) if layer_score is not None else ""
-                                st.markdown(f"**{layer_cn}**{_score_tag}")
+                                st.markdown(f"**{layer_cn}**")
                                 st.caption(layer_reason)
-                            elif layer_score is not None:
-                                # 有分数但没理由（LLM fallback 场景）
-                                st.markdown(
-                                    f"**{layer_cn}** "
-                                    f"<span style='color:#8a857d;font-size:0.8em'>"
-                                    f"（{layer_score:.1f}分 · LLM 未返回理由）</span>",
-                                    unsafe_allow_html=True,
-                                )
-                            else:
-                                st.markdown(
-                                    f"**{layer_cn}** "
-                                    f"<span style='color:#c0b9ad;font-size:0.8em'>"
-                                    f"（无数据）</span>",
-                                    unsafe_allow_html=True,
-                                )
                         if v.opposing_reason:
                             st.markdown("**反对理由**")
                             st.caption(v.opposing_reason)
-                        # 真的啥也没有（极罕见）
                         if (
                             not v.opposing_reason
                             and not any(v.layer_reasons.values())
-                            and not v.layer_scores
                         ):
-                            st.caption("（该人群无详细理由，可能是 LLM 调用失败走了 fallback）")
+                            st.caption("（该人群无详细理由）")
 
     # —— 改款建议 ——
     st.subheader("🔧 改款建议")
