@@ -402,12 +402,12 @@ FAB描述：{info.fab_description or '无FAB信息，仅从图片判断'}
 {_get_bars_prompt(features_cfg)}
 """.strip()
 
-    # v1.4.90: temperature 0.2→0.1 强制严格输出纯视觉JSON，减少模型"自作主张加价值判断"
+    # v1.4.90: temperature 0.2→0.0 强制严格输出纯视觉JSON，减少模型"自作主张加价值判断"
     resp: LLMResponse = client.generate_multimodal(
         user_msg,
         image_paths=info.images,
         model=model,
-        temperature=0.1,
+        temperature=0.0,
         max_tokens=3000,
     )
     if not resp.ok:
