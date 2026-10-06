@@ -131,8 +131,8 @@ html, body, [class*="css"] {
 }
 
 /* 2. 旧版 Streamlit 的 sidebar testid（1.35~1.50）*/
-[data-testid="stSidebar"] > div:first-child { padding-top: 5.5rem; }
-[data-testid="stSidebar"] .block-container { padding: 5.5rem 1.25rem 2rem; }
+[data-testid="stSidebar"] > div:first-child { padding-top: 2rem; }
+[data-testid="stSidebar"] .block-container { padding: 1.25rem 1.25rem 2rem; }
 [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
   font-family: 'Inter', sans-serif !important;
   letter-spacing: -0.01em;
@@ -141,7 +141,7 @@ html, body, [class*="css"] {
 /* 3. 新版 Streamlit sidebar（1.55+）— 用 emotion class 匹配 */
 [class*="stSidebarContainer"] [class*="block-container"],
 [class*="SidebarContainer"] [class*="block-container"] {
-  padding: 5.5rem 1.25rem 2rem !important;  /* top 足够容纳绝对定位的 header */
+  padding: 1.25rem 1.25rem 2rem !important;
 }
 
 /* 4. 防止 sidebar 被误伤 — 全局重置（安全兜底）*/
@@ -526,15 +526,7 @@ div[data-baseweb="slider"] > div > div:first-child {
 
 /* ---------- Sidebar header ---------- */
 .sb-brand {
-  /* 绝对定位到 sidebar 顶部，覆盖在 selectbox 上方；
-     代码顺序是 selectbox → header，视觉顺序靠此 CSS 反转 */
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  padding: 0.75rem 0.75rem 0.5rem;
-  background: var(--surface, #fafaf7);
-  z-index: 10;
+  padding: 1rem 0.25rem 0.75rem;
 }
 .sb-brand-name {
   font-family: 'Fraunces', serif;
@@ -725,7 +717,8 @@ button[kind="icon"]:hover,
 """, unsafe_allow_html=True)
 
 # --- 侧边栏：品牌选择 & Header ---
-# 设计原则：selectbox 返回值 = 真实选中品牌；brand_cfg 从返回值加载 → 100% 同步，不依赖 session_state
+# 设计原则：用 st.empty() 占位符实现"视觉上 header 在上，逻辑上 selectbox 先渲染"
+# selectbox 返回值 = 真实选中品牌 → brand_cfg 从返回值加载 → 100% 同步，不依赖 session_state
 available_brands = list_available_brands()
 if "brand_id" not in st.session_state:
     st.session_state.brand_id = available_brands[0] if available_brands else "mipo"
@@ -749,7 +742,13 @@ def _brand_label(bid: str) -> str:
 def _cached_load_brand(brand_id_key: str) -> BrandConfig:
     return load_brand_profile(brand_id_key)
 
-# ===== 1. selectbox 先渲染 —— 返回值就是真实选中的品牌 =====
+# ===== 1. 在 sidebar 最顶部创建 header 占位符 =====
+# Streamlit 会把它渲染在 sidebar 第一个位置（视觉上最顶部）
+# 之后调用 _header_ph.markdown(...) 会填充它，而不是追加新元素
+_header_ph = st.sidebar.empty()
+
+# ===== 2. selectbox 先渲染 —— 返回值就是真实选中的品牌 =====
+# 位置：占位符下方（因为占位符先创建）
 brand_id = st.sidebar.selectbox(
     "品牌",
     options=available_brands,
@@ -760,12 +759,10 @@ brand_id = st.sidebar.selectbox(
     help="每个品牌独立维护：30人设+BARS量表+品类价格带+S/A/P阈值+3Loop校准产物"
 )
 
-# ===== 2. brand_cfg 直接从 selectbox 返回值加载 —— 与下拉框 100% 同步 =====
-# 不依赖 session_state.brand_id（Streamlit 的 key= 自动同步在某些环境下不生效）
+# ===== 3. brand_cfg 直接从 selectbox 返回值加载 —— 与下拉框 100% 同步 =====
 brand_cfg: BrandConfig = _cached_load_brand(brand_id)
 
-# ===== 3. 如果品牌变了 → 清空旧缓存 + rerun =====
-# brand_cfg 已在 rerun 前从新 brand_id 加载完成，不会有中间态错位
+# ===== 4. 如果品牌变了 → 清空旧缓存 + rerun =====
 if brand_id != st.session_state.brand_id:
     st.session_state.brand_id = brand_id
     for k in ("preds", "df_input", "style_to_images", "progress_info",
@@ -788,9 +785,9 @@ try:
 except Exception:
     pass
 
-# ===== 4. Header 后渲染 —— CSS 绝对定位到 sidebar 顶部，视觉上在 selectbox 之上 =====
+# ===== 5. 往占位符填充 Header —— 视觉上仍在 sidebar 顶部 =====
 # brand_cfg 此时已经是从 selectbox 返回值加载的正确品牌名，零错位
-st.sidebar.markdown(f"""
+_header_ph.markdown(f"""
 <div class="sb-brand">
   <div class="sb-brand-name">{brand_cfg.brand_name}</div>
   <div class="sb-brand-meta">Decision Engine</div>
