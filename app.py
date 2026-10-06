@@ -1369,7 +1369,29 @@ def render_page_upload():
                     price = float(row["售价"]) if pd.notna(row.get("售价")) else 0.0
                     size = str(row["尺码"]) if "尺码" in df.columns else ""
                     color = str(row["颜色"]) if "颜色" in df.columns else ""
-                    season = str(row["上架季节"]) if "上架季节" in df.columns else ""
+                    # 季节：兼容多种列名（上架季节/季节/上市季节）
+                    season_col_candidates = ["上架季节", "季节", "上市季节"]
+                    season = ""
+                    for _sc in season_col_candidates:
+                        if _sc in df.columns:
+                            _v = str(row[_sc]).strip() if pd.notna(row[_sc]) else ""
+                            if _v and _v != "nan":
+                                season = _v; break
+                    # 年份：兼容多种列名，兜底 batch_name 正则提取
+                    year_col_candidates = ["年份", "上架年份", "上市年份"]
+                    year = ""
+                    for _yc in year_col_candidates:
+                        if _yc in df.columns:
+                            _v = str(row[_yc]).strip() if pd.notna(row[_yc]) else ""
+                            if _v and _v != "nan":
+                                year = _v; break
+                    if not year:
+                        _m = re.search(r"(20\d{2})", str(st.session_state.get("batch_name", "")))
+                        if _m: year = _m.group(1)
+                    if not season:
+                        _m = re.search(r"(春|夏|秋|冬|春夏|秋冬|春季|夏季|秋季|冬季)",
+                                       str(st.session_state.get("batch_name", "")))
+                        if _m: season = _m.group(1)
                     fab_parts = []
                     if size: fab_parts.append(f"尺码：{size}")
                     fab_content = str(row.get("面料成分", "")).strip() if "面料成分" in df.columns else ""
@@ -1384,7 +1406,7 @@ def render_page_upload():
 
                     style_infos.append(StyleInfo(
                         style_id=sid, category=cat,
-                        price=price, season=season, fab_description=fab_text,
+                        price=price, season=season, year=year, fab_description=fab_text,
                         # 回测字段默认空值 — 在「📉 回测校准」页单独上传时填充
                         sales_qty=0, manual_grade="", sell_through_pct=0.0,
                         is_main_push=False, is_live_stream=False,
@@ -1833,36 +1855,48 @@ def render_page_detail():
 
         # —— 10 特征 BARS 评分（右上）——
         st.subheader("🎯 10特征BARS评分")
+        st.caption("VLM 对 10 个视觉设计维度各打 1-10 分（越高越好），横轴分数范围 0-10")
         feat_rows = []
         for key, f in p.features.features.items():
             feat_rows.append({"特征": f.name, "分数": f.score, "理由": f.reason or "（无）"})
         df_feat = pd.DataFrame(feat_rows).sort_values("分数")
-        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True, color="#a8b5c4", height=260)
+        # 压缩高度 + 固定 x 轴 0-10，避免每次渲染随机缩放
+        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True,
+                     color="#a8b5c4", height=200, x_min=0, x_max=10)
 
     # ===== 下方：四列指标（图片下方一屏看完）=====
-    c1, c2, c3, c4 = st.columns([1, 1, 1.2, 1.2])
+    # 分数含义说明：0-10 分（越高越好），人设/渠道/价格三个引擎独立打分后加权
+    _score_tip = "【分数含义】0-10 分（越高越好），三类引擎独立打分后加权融合为最终综合分"
+    c1, c2, c3, c4 = st.columns([1, 1, 1.3, 1.3])
     with c1:
         st.subheader("👥 人设投票")
+        st.caption(_score_tip)
         st.metric("加权总分", f"{p.voting.weighted_score:.2f}")
         st.metric("支持率", f"{p.voting.support_rate:.0%}")
         st.metric("反对率", f"{p.voting.opposition_rate:.0%}")
     with c2:
         st.subheader("🛒 双渠道")
+        st.caption(_score_tip)
         st.metric("自然分", f"{p.channels.natural_score:.1f}")
         st.metric("直播分", f"{p.channels.live_score:.1f}")
         st.metric("感知价值", f"{p.channels.perceived_value:.1f}")
     with c3:
         st.subheader("⚖️ 三引擎综合")
+        st.caption("横轴：4 个引擎；纵轴 0-10 分；柱子越高该项越强")
         engine_df = pd.DataFrame({
             "引擎": ["人设", "自然", "直播", "价格"],
             "得分": [p.voting.weighted_score, p.channels.natural_score,
                      p.channels.live_score, p.channels.perceived_value],
         })
-        st.bar_chart(engine_df, x="引擎", y="得分", color="#9fb893", height=160, use_container_width=True)
-        st.caption(f"价格风险：{p.channels.price_risk} ｜ 百分位 {p.channels.price_percentile:.0%}")
+        st.bar_chart(engine_df, x="引擎", y="得分", color="#9fb893",
+                     height=180, use_container_width=True, y_min=0, y_max=10)
+        # 价格风险 + 百分位
+        _risk_map = {"低风险": "🟢 低风险", "中风险": "🟡 中风险", "高风险": "🔴 高风险"}
+        _risk_text = _risk_map.get(p.channels.price_risk, p.channels.price_risk)
+        st.caption(f"💰 {_risk_text} ｜ 价格百分位 {p.channels.price_percentile:.0%}（越低越有价格竞争力）")
     with c4:
         st.subheader("💡 洞察")
-        st.info((g.consumer_insights or "暂无人设洞察")[:200])
+        st.info((g.consumer_insights or "暂无人设洞察")[:250])
 
     # —— 改款建议 + 特征理由（底部）——
     st.subheader("🔧 改款建议")
