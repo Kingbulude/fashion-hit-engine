@@ -123,20 +123,20 @@ features:
       3:
         range: [5, 6]
         label: 常规表现
-        description: 中规中矩，没有特别吸睛也不丑
+        description: 画面普通，视觉与背景对比度低
       4:
         range: [7, 8]
         label: 有视觉记忆点
-        description: 有明显视觉标识（亮眼配色/独特廓形/吸睛细节），画面中能快速捕捉视线
+        description: 画面有明显视觉特征（高对比度配色/独特廓形/特殊细节）
       5:
         range: [9, 10]
         label: 极强镜头冲击
-        description: 画面视觉冲击力极强，一眼记住，适合做封面，画面中非常突出
+        description: 画面视觉特征极强，与背景对比度极高
 
   F06_wearability:
     name: 实穿度
     category: perceptual
-    description: 从视觉推断的日常穿着场景覆盖度（版型/廓形/设计元素是否看起来适合多场景）
+    description: 从视觉推断的日常穿着覆盖度（版型/廓形/设计元素在日常场景中的视觉适配度）
     anchors:
       1:
         range: [1, 2]
@@ -149,7 +149,7 @@ features:
       3:
         range: [5, 6]
         label: 视觉常规覆盖
-        description: 视觉上是常规版型，廓形和功能元素适中，没有特别适合或不适合的场景
+        description: 视觉上是常规版型，廓形和功能元素比例适中
       4:
         range: [7, 8]
         label: 视觉多场景适配
@@ -192,12 +192,12 @@ features:
     anchors:
       1:
         range: [1, 2]
-        label: 廉价无质感
-        description: 视觉无功能质感，显普通廉价，看起来像普通棉T或廉价化纤
+        label: 哑光无肌理
+        description: 视觉哑光无纹理，表面粗糙，无光泽或反光特征
       2:
         range: [3, 4]
         label: 普通面料感
-        description: 常规棉涤/化纤视觉感，无明显功能或高级质感特征
+        description: 常规棉涤/化纤视觉感，无明显反光或肌理
       3:
         range: [5, 6]
         label: 常规质感适中
@@ -208,18 +208,18 @@ features:
         description: 能看出科技面料视觉特征（防晒涂层光泽/防水面料微亮/速干织纹等）
       5:
         range: [9, 10]
-        label: 高级功能质感
-        description: 视觉传递出高级面料/高端工艺（天鹅绒/顶级防水布/精织肌理），质感看起来出众
+        label: 强功能肌理
+        description: 视觉有明显特殊肌理（天鹅绒绒感/精织细密纹理/防水布特殊光泽）
 
   F09_brand_tone:
     name: 品牌调性贡献
     category: brand
-    description: 视觉上是否兼具「时尚感+轻功能性户外+日常穿着」元素
+    description: 视觉上是否兼具「日常版型+户外功能元素+视觉设计感」
     anchors:
       1:
         range: [1, 2]
         label: 视觉偏离调性
-        description: 纯时尚设计（完全无功能元素）或纯专业户外（功能极夸张）或纯婴童风，视觉上看不出"户外+日常"的结合
+        description: 纯视觉设计（完全无功能元素）或纯硬核户外（功能极夸张）或纯婴童风，视觉上与日常版型完全脱节
       2:
         range: [3, 4]
         label: 视觉方向接近但弱
@@ -235,7 +235,7 @@ features:
       5:
         range: [9, 10]
         label: 视觉调性标杆款
-        description: 完美呈现"时尚+轻功能户外+日常"三要素，视觉上有强烈的品牌代表性
+        description: 完美呈现"日常版型+户外功能+视觉设计"三要素，视觉上有强烈的品牌识别性
 
   F10_uniqueness:
     name: 设计独特性
@@ -261,7 +261,7 @@ features:
       5:
         range: [9, 10]
         label: 视觉极罕见设计
-        description: 独特廓形/材料/结构，视觉上市场罕见，有明确辨识度
+        description: 独特廓形/材料/结构，视觉上相对常规款有明显差异化
 
 feature_validation:
   divergence_threshold: 2.0
