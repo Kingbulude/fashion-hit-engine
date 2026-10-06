@@ -1958,39 +1958,117 @@ def render_page_detail():
                 st.caption(row["VLM理由"])
                 st.divider()
 
-    # ===== 下方：四列指标（图片下方一屏看完）=====
-    # 分数含义说明：0-10 分（越高越好），人设/渠道/价格三个引擎独立打分后加权
-    _score_tip = "【分数含义】0-10 分（越高越好），三类引擎独立打分后加权融合为最终综合分"
-    c1, c2, c3, c4 = st.columns([1, 1, 1.3, 1.3])
+    # ===== 下方：三列指标（图片下方一屏看完）=====
+    # —— 分数→5档颜色 映射（与 BARS 因果链一致）——
+    def _score_color(score: float, *, lo_high: float = 8.5, lo_mid: float = 6.5,
+                     hi_low: float = 2.5, hi_mid: float = 4.5) -> str:
+        """分数越高越好，跟 BARS 的区间方向一致：
+        🌿销冠潜力≥8.5 / 🟢高销区≥6.5 / ⚪常规 4.5-6.5 / 🟠偏低风险≥2.5 / 🔴高风险<2.5
+        """
+        if score >= lo_high:   return "#3d7d3c"  # 🌿 销冠潜力
+        if score >= lo_mid:    return "#6ca060"  # 🟢 高销区
+        if score >= hi_mid:    return "#a8b5c4"  # ⚪ 常规
+        if score >= hi_low:    return "#e8923d"  # 🟠 偏低风险
+        return "#d64545"                           # 🔴 高风险
+
+    # engine 权重（取已校准 weights，兜底 yaml 默认 0.35/0.30/0.35）
+    _ew = getattr(brand_cfg, "engine_weights", None) or {}
+    defw = brand_cfg.default_engine_weights if brand_cfg else {}
+    _w_persona = float(_ew.get("persona_voting", defw.get("persona_voting", 0.35)))
+    _w_channel = float(_ew.get("channel_scoring", defw.get("channel_scoring", 0.30)))
+    _w_price = float(_ew.get("price_value", defw.get("price_value", 0.35)))
+    _w_natural = _w_channel * 0.5   # 自然/直播平分 channel 权重
+    _w_live = _w_channel * 0.5
+
+    c1, c2, c3 = st.columns([1.0, 1.0, 1.5])
     with c1:
         st.subheader("👥 人设投票")
-        st.caption(_score_tip)
-        st.metric("加权总分", f"{p.voting.weighted_score:.2f}")
-        st.metric("支持率", f"{p.voting.support_rate:.0%}")
-        st.metric("反对率", f"{p.voting.opposition_rate:.0%}")
+        st.caption(f"加权权重 {_w_persona:.0%} ｜ 0-10 分越高越好")
+        v = p.voting
+        _sc = _score_color(v.weighted_score)
+        st.markdown(
+            f"### 加权总分 <span style='color:{_sc};font-size:1.3em;font-weight:bold'>"
+            f"{v.weighted_score:.2f}</span> /10",
+            unsafe_allow_html=True,
+        )
+        # 三段比 bar（支持/观望/反对）
+        s_pct = int(v.support_rate * 100)
+        w_pct = int(v.wait_rate * 100)
+        o_pct = 100 - s_pct - w_pct
+        st.markdown(
+            f"""
+            <div style="display:flex;height:18px;border-radius:6px;overflow:hidden;margin:4px 0;border:1px solid #e0dcd5">
+              <div style="width:{s_pct}%;background:#3d7d3c"></div>
+              <div style="width:{w_pct}%;background:#a8b5c4"></div>
+              <div style="width:{o_pct}%;background:#d64545"></div>
+            </div>
+            <div style="font-size:0.8em;color:#8a857d;display:flex;justify-content:space-between">
+              <span style="color:#3d7d3c">■ 支持 {s_pct}%</span>
+              <span style="color:#a8b5c4">■ 观望 {w_pct}%</span>
+              <span style="color:#d64545">■ 反对 {o_pct}%</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption(f"分歧度 σ={v.score_std:.1f}")
+
     with c2:
-        st.subheader("🛒 双渠道")
-        st.caption(_score_tip)
-        st.metric("自然分", f"{p.channels.natural_score:.1f}")
-        st.metric("直播分", f"{p.channels.live_score:.1f}")
-        st.metric("感知价值", f"{p.channels.perceived_value:.1f}")
+        st.subheader("🛒 渠道 · 价格")
+        st.caption(f"渠道权重 {_w_channel:.0%} ｜ 价格权重 {_w_price:.0%}")
+        # 三行带色指标
+        rows = [
+            ("自然分", p.channels.natural_score, _w_natural),
+            ("直播分", p.channels.live_score, _w_live),
+            ("感知价值", p.channels.perceived_value, _w_price),
+        ]
+        for name, score, w in rows:
+            sc = _score_color(score)
+            st.markdown(
+                f"<div style='display:flex;justify-content:space-between;align-items:center;padding:3px 0'>"
+                f"<span style='color:#8a857d;font-size:0.9em'>{name} <span style='font-size:0.8em;color:#b3aea3'>({w:.0%})</span></span>"
+                f"<span style='color:{sc};font-size:1.15em;font-weight:bold'>{score:.1f}</span>"
+                f"</div>", unsafe_allow_html=True,
+            )
+
     with c3:
-        st.subheader("⚖️ 三引擎综合")
-        st.caption("横轴：4 个引擎；纵轴 0-10 分；柱子越高该项越强")
-        engine_df = pd.DataFrame({
-            "引擎": ["人设", "自然", "直播", "价格"],
-            "得分": [p.voting.weighted_score, p.channels.natural_score,
-                     p.channels.live_score, p.channels.perceived_value],
-        })
-        st.bar_chart(engine_df, x="引擎", y="得分", color="#9fb893",
-                     height=180, use_container_width=True)
-        # 价格风险 + 百分位
-        _risk_map = {"低风险": "🟢 低风险", "中风险": "🟡 中风险", "高风险": "🔴 高风险"}
-        _risk_text = _risk_map.get(p.channels.price_risk, p.channels.price_risk)
-        st.caption(f"💰 {_risk_text} ｜ 价格百分位 {p.channels.price_percentile:.0%}（越低越有价格竞争力）")
-    with c4:
-        st.subheader("💡 洞察")
-        st.info((g.consumer_insights or "暂无人设洞察")[:250])
+        st.subheader("⚖️ 四引擎加权对比")
+        st.caption("条长 = 引擎分 × 权重，直接看对最终分的贡献度")
+
+        engine_data = [
+            ("人设投票", p.voting.weighted_score, _w_persona, "#b98888"),
+            ("自然流量", p.channels.natural_score, _w_natural, "#c8a272"),
+            ("直播带货", p.channels.live_score, _w_live, "#9fb893"),
+            ("价格价值", p.channels.perceived_value, _w_price, "#b5a9c4"),
+        ]
+        # Plotly 横向 bar（按加权贡献度排序）
+        fig = go.Figure()
+        engine_data_sorted = sorted(engine_data, key=lambda x: -x[1] * x[2])
+        for name, raw, w, col in engine_data_sorted:
+            weighted = raw * w
+            fig.add_bar(
+                y=[name], x=[weighted], orientation="h",
+                marker_color=col,
+                text=[f"贡献 {weighted:.2f}（{raw:.1f} × {w:.0%}）"],
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>"
+                              "原始分: %{customdata[0]}/10<br>"
+                              "权重: %{customdata[1]:.0%}<br>"
+                              "加权贡献: %{x:.2f}<extra></extra>",
+                customdata=[[raw, w]],
+            )
+        fig.update_layout(
+            height=200,
+            margin=dict(l=80, r=220, t=10, b=10),
+            xaxis=dict(range=[0, 10 * max(_w_persona, _w_natural, _w_live, _w_price)],
+                       showgrid=False, zeroline=False, title="加权贡献度"),
+            yaxis=dict(showgrid=False),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # —— 洞察区（单独一整行，比之前宽）——
+    st.subheader("💡 综合洞察")
+    st.info((g.consumer_insights or "暂无人设洞察")[:500])
 
     # —— 30 人设真实投票详情（横跨整行，默认展开）——
     votes = p.voting.votes

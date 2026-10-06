@@ -177,6 +177,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
             "a": 5.2,
             "p": 0.0,
         })
+        insight_thresholds = profile_yaml.get("insight_thresholds") or None
 
         personas_list = personas_raw.get("personas", [])
         # ===== 🔧 合并孩子人设（之前漏掉了！）=====
@@ -289,6 +290,7 @@ def load_brand_profile(brand_id: str) -> BrandConfig:
         default_engine_weights=default_engine_weights,
         default_channel_split=default_channel_split,
         grading_thresholds=grading_thresholds,
+        insight_thresholds=insight_thresholds,
         calibrated_dir=str(calibrated_dir),
         persona_axes=persona_axes or None,
         personas_weights=personas_weights,

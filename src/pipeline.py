@@ -575,6 +575,7 @@ class PredictionPipeline:
             weighted_score=round(sum(all_scores) / len(all_scores), 2),
             opposition_rate=oppose / len(all_scores),
             support_rate=support / len(all_scores),
+            wait_rate=max(0.0, 1.0 - support / len(all_scores) - oppose / len(all_scores)),
             top_buy_reasons=top_buy,
             top_oppose_reasons=top_opp,
             score_std=round(pstdev(all_scores), 2) if len(all_scores) >= 2 else 0.0,
