@@ -1704,11 +1704,6 @@ def render_page_summary():
             mime="application/zip", use_container_width=True,
         )
 
-    st.divider()
-    st.info("👉 点击下方款号可跳转到「🔍 单款详情报告」：")
-    sel_style_id = st.selectbox("选择查看的款号", options=[p.info.style_id for p in preds])
-    st.session_state.selected_style_id = sel_style_id
-
 
 # ============================================================
 # 页面 3：🔍 单款详情报告
