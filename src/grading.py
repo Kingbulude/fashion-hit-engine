@@ -277,14 +277,18 @@ def _default_aggregate(
     final = clamp(final_0_10 * 10.0 * marketing_multiplier, 0.0, 100.0)
 
     # —— 优劣势提取 ——
+    # v1.4.90+: score 是视觉锚定档 range 中点（1.5/3.5/5.5/7.5/9.5），
+    # 阈值语义：>=7.5=视觉上较突出的特征，<=3.5=视觉上不突出的特征
     strengths: list[str] = []
     weaknesses: list[str] = []
     for f in sorted(feats.features.values(), key=lambda x: -x.score)[:3]:
         if f.score >= 6.5:
-            strengths.append(f"{f.name}（{f.score:.1f}/10）— {f.reason[:30]}")
+            desc = (f.visual_description or "")[:30]
+            strengths.append(f"{f.name}（视觉档{f.anchor_level}）— {desc}")
     for f in feats.lowest_features(3):
         if f.score <= 5.0:
-            weaknesses.append(f"{f.name}偏低（{f.score:.1f}/10）— {f.reason[:30]}")
+            desc = (f.visual_description or "")[:30]
+            weaknesses.append(f"{f.name}偏低（视觉档{f.anchor_level}）— {desc}")
     if voting.opposition_rate >= 0.3:
         weaknesses.append(f"人设反对率偏高（{voting.opposition_rate:.0%}）")
     if channels.value_match <= -0.15:
@@ -534,9 +538,10 @@ def _improvement_suggestions(
             _next_lv, next_a = anchors[current_idx - 1]
             next_level_desc = f"提升到'{next_a['label']}'：{next_a['description'][:50]}"
         if next_level_desc:
-            suggestions.append(f"{f.name}（{f.score:.1f}/10）：{next_level_desc}")
+            suggestions.append(f"{f.name}（视觉档{f.anchor_level}）：{next_level_desc}")
         else:
-            suggestions.append(f"优化{f.name}：{f.reason[:40]}")
+            desc = (f.visual_description or "")[:40]
+            suggestions.append(f"优化{f.name}（视觉档{f.anchor_level}）：{desc}")
 
     if channels.value_match <= -0.15:
         suggestions.append(

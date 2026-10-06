@@ -48,39 +48,43 @@ def _persona_key(p: dict[str, Any]) -> str:
 
 
 # ========== 特征摘要（喂给人设 LLM 的视觉事实）==========
-def _feat_summary(feats: StyleFeatures, *, top_n: int = 3, max_reason_len: int = 60) -> str:
+def _feat_summary(
+    feats: StyleFeatures,
+    *,
+    top_n: int = 3,
+    max_reason_len: int = 60,
+    features_cfg: dict[str, Any] | None = None,
+) -> str:
     """v1.4.90+: 基于视觉锚定档 + visual_description 生成特征摘要。
 
-    设计哲学：人设 LLM 不再收到被 VLM 预判过的"加分/减分"信号，
-    而是收到纯视觉事实（锚定档标签 + VLM 看到的具体细节），
-    让它自己判断对自己来说好不好卖。
+    features_cfg 传入时用真正的 anchor label（如 "宽松oversize"），
+    不传入时 fallback 到 "档4" 这种编号。
     """
-    # 需要 feat_defs 来查 anchor label — 但 _feat_summary 没有 brand_cfg 引用
-    # 简化：从 score 值反推档（score 是 anchor range 中点）
-    def _anchor_label_from_score(sc: float) -> str:
-        """根据 score 大致推断 anchor 档标签（score 是视觉档的区间中点）"""
-        if sc <= 2: return "极低视觉档"
-        elif sc <= 4: return "偏低视觉档"
-        elif sc <= 6: return "常规视觉档"
-        elif sc <= 8: return "较高视觉档"
-        elif sc <= 9.5: return "高视觉档"
-        else: return "极高视觉档"
+    def _get_anchor_label(f: "FeatureScore") -> str:
+        """从 feat_defs 或 score 反推 anchor label"""
+        if features_cfg:
+            feat_defs = features_cfg.get("features", {})
+            fd = feat_defs.get(f.key) if f.key in feat_defs else None
+            if fd is not None:
+                from .feature_extraction import _resolve_anchor_label
+                return _resolve_anchor_label(fd, f.anchor_level)
+        # fallback
+        if f.anchor_level is not None:
+            return f"档{f.anchor_level}"
+        return ""
 
     def _feat_line(f: "FeatureScore") -> str:
         """为单个特征生成一行摘要"""
-        # 优先用 anchor_level（v1.4.90+），fallback 从 score 反推
-        if f.anchor_level is not None:
-            # anchor_level 1-5 只是视觉分类，不是好坏
-            level_note = f"档{f.anchor_level}"
-        else:
-            level_note = _anchor_label_from_score(f.score)
+        label = _get_anchor_label(f)
+        level_note = f"{label}（档{f.anchor_level}）" if label else ""
 
-        # visual_description（VLM 看到的具体细节）
-        desc = f.visual_description or f.reason or ""
+        desc = f.visual_description or ""
         if desc and len(desc) > max_reason_len:
             desc = desc[:max_reason_len] + "..."
 
-        line = f"· {f.name} [{level_note}]"
+        line = f"· {f.name}"
+        if level_note:
+            line += f" [{level_note}]"
         if desc:
             line += f"：{desc}"
         return line
@@ -289,7 +293,7 @@ FAB描述：
 {info.fab_description or '无FAB描述，请根据以下结构化特征判断'}
 
 【关键服装特征（精简版，只列最重要的）】
-{_feat_summary(feats)}
+{_feat_summary(feats, features_cfg=brand_cfg.features_bars if brand_cfg else None)}
 
 【任务】各决策层独立评分：
 
@@ -485,13 +489,18 @@ def _primary_reason(v: PersonaVote) -> str:
 
 
 def _extract_style_keywords(feats: StyleFeatures, info: StyleInfo) -> list[str]:
-    """从features_bars分+FAB描述+颜色描述提取关键词，用于否决层匹配"""
+    """从 VLM visual_description + FAB 描述提取关键词，用于否决层匹配。
+
+    v1.4.90+: 用 visual_description（VLM 纯视觉事实）替代旧的 f.reason
+    （VLM 销量预判理由），让 veto_when 关键词能直接匹配视觉特征。
+    """
     keywords: list[str] = []
     fab_text = (info.fab_description or "").lower()
     keywords.extend(re.findall(r"[\u4e00-\u9fa5a-zA-Z]+", fab_text))
     for f in feats.features.values():
-        reason = (f.reason or "").lower()
-        keywords.extend(re.findall(r"[\u4e00-\u9fa5a-zA-Z]+", reason))
+        # 优先 visual_description，fallback reason（向后兼容旧数据）
+        text = (f.visual_description or f.reason or "").lower()
+        keywords.extend(re.findall(r"[\u4e00-\u9fa5a-zA-Z]+", text))
     return [k for k in keywords if len(k) >= 2]
 
 
@@ -706,19 +715,39 @@ def _render_expert_challenge_prompt(
     voting: VotingResult,
     layers: list[DecisionLayer],
     layers_summary: str,
+    *,
+    brand_cfg: BrandConfig | None = None,
 ) -> tuple[str, str]:
     """渲染品类专家 prompt — 独立于所有人设的外部质疑视角。
-    
+
     专家不是"另一类人设"，而是"品类总监"——她不买衣服，但负责判断
     这批人设的评估有没有系统性偏差。
+
+    v1.4.90+: feat_brief 改为展示视觉锚定档标签 + visual_description，
+    让专家基于视觉事实而非 VLM 预判分做判断。
     """
-    layers_desc = "、".join(l.name for l in layers)
-    sys_prompt = f"""你是{brand_name}的品类总监，有10年服装电商经验。
-你的任务不是买衣服，而是审查一群模拟消费者人设的评估，找出他们的盲区和系统性偏差。"""
+    features_cfg = brand_cfg.features_bars if brand_cfg else None
+
+    def _feat_entry(f: "FeatureScore") -> str:
+        label = ""
+        if features_cfg:
+            fd = features_cfg.get("features", {}).get(f.key)
+            if fd is not None:
+                from .feature_extraction import _resolve_anchor_label
+                label = _resolve_anchor_label(fd, f.anchor_level)
+        desc = (f.visual_description or "")[:40]
+        al = f.anchor_level or "-"
+        if label:
+            return f"  {f.name}：{label}（档{al}）{('— ' + desc) if desc else ''}"
+        return f"  {f.name}：档{al}{('— ' + desc) if desc else ''}"
 
     feat_brief = []
     for key, f in sorted(feats.features.items(), key=lambda kv: -kv[1].score):
-        feat_brief.append(f"  {f.name}：{f.score:.1f}/10")
+        feat_brief.append(_feat_entry(f))
+
+    layers_desc = "、".join(l.name for l in layers)
+    sys_prompt = f"""你是{brand_name}的品类总监，有10年服装电商经验。
+你的任务不是买衣服，而是审查一群模拟消费者人设的评估，找出他们的盲区和系统性偏差。"""
 
     user_prompt = f"""
 请审查以下评估：
@@ -773,7 +802,7 @@ def _expert_challenge(
 
         layers_summary = _persona_scores_summary(votes_initial, layers)
         sys_p, usr_p = _render_expert_challenge_prompt(
-            brand_name, info, feats, voting_initial, layers, layers_summary,
+            brand_name, info, feats, voting_initial, layers, layers_summary, brand_cfg=brand_cfg,
         )
 
         resp = client.generate_text(
@@ -856,7 +885,7 @@ def _render_review_prompt(
 
 【款式】{info.style_id} · {info.category} · ¥{info.price}
 【核心特征摘要】
-{_feat_summary(feats)}
+{_feat_summary(feats, features_cfg=brand_cfg.features_bars if brand_cfg else None)}
 
 【你的初评结果（Phase1）】
 {chr(10).join(initial_brief)}
