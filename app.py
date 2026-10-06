@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
 
@@ -1853,16 +1854,112 @@ def render_page_detail():
             st.caption(f"**FAB**：{p.info.fab_description}")
         st.divider()
 
-        # —— 10 特征 BARS 评分（右上）——
-        st.subheader("🎯 10特征BARS评分")
-        st.caption("VLM 对 10 个视觉设计维度各打 1-10 分（越高越好），横轴分数范围 0-10")
+        # —— 10 特征 BARS 评分 —— 带因果链（anchors 分段染色 + VLM reason）
+        st.subheader("🎯 10特征BARS评分 · 因果链")
+        st.caption("每个特征的分数段颜色对应品牌 anchors 里的销量影响判断：🔴高风险 → 🌿销冠潜力")
+
+        # 从 brand_cfg.features_bars 读 anchors，构建分数段→颜色+标签的映射
+        _bars_cfg = brand_cfg.features_bars.get("features", {}) if brand_cfg else {}
+        _risk_buckets = [
+            # (max_score_exclusive, color, bucket_label)
+            (2.5,  "#d64545", "🔴 高风险"),
+            (4.5,  "#e8923d", "🟠 偏低风险"),
+            (6.5,  "#a8b5c4", "⚪ 常规"),
+            (8.5,  "#6ca060", "🟢 高销区"),
+            (10.1, "#3d7d3c", "🌿 销冠潜力"),
+        ]
+
         feat_rows = []
         for key, f in p.features.features.items():
-            feat_rows.append({"特征": f.name, "分数": f.score, "理由": f.reason or "（无）"})
+            # 找 anchors 里匹配这个分数的 bucket（兼容 dict 和 list）
+            _raw_anchors = _bars_cfg.get(key, {}).get("anchors") or {}
+            if isinstance(_raw_anchors, dict):
+                anchors = list(_raw_anchors.values())
+            else:
+                anchors = list(_raw_anchors)
+            anchor_label = ""
+            anchor_impact = ""
+            for a in anchors:
+                lo, hi = a.get("range", [0, 0])
+                if lo <= f.score <= hi:
+                    anchor_label = a.get("label", "")
+                    ad = a.get("description", "")
+                    # 从 description 里提取销量影响短语（含"销冠"/"主推"/"高销"/"风险"等关键词）
+                    for kw in ["销冠", "主推", "高销", "标杆", "潜力", "风险", "退货", "销量", "不稳定"]:
+                        if kw in ad:
+                            # 找到含关键词的子句
+                            for clause in ad.split("；") + ad.split("，"):
+                                if kw in clause:
+                                    anchor_impact = clause.strip("。，；")
+                                    break
+                            if anchor_impact:
+                                break
+                    if not anchor_impact and ad:
+                        anchor_impact = ad[:40]
+                    break
+
+            # 按分数确定颜色
+            _color = _risk_buckets[-1][1]
+            _bucket_label = ""
+            for (mx, col, bl) in _risk_buckets:
+                if f.score < mx:
+                    _color, _bucket_label = col, bl
+                    break
+
+            feat_rows.append({
+                "key": key,
+                "特征": f.name,
+                "分数": f.score,
+                "VLM理由": f.reason or "（无）",
+                "锚点档位": anchor_label,
+                "销量影响": anchor_impact,
+                "风险段": _bucket_label,
+                "颜色": _color,
+            })
+
         df_feat = pd.DataFrame(feat_rows).sort_values("分数")
-        # 压缩高度（height=200）避免每次渲染撑满一屏
-        st.bar_chart(df_feat, x="特征", y="分数", horizontal=True,
-                     color="#a8b5c4", height=200)
+
+        # Plotly 水平条形图（分段染色 + 标签）
+        fig = go.Figure()
+        fig.add_bar(
+            y=df_feat["特征"],
+            x=df_feat["分数"],
+            orientation="h",
+            marker_color=df_feat["颜色"],
+            text=[f"{s:.1f}  {lbl}" for s, lbl in zip(df_feat["分数"], df_feat["锚点档位"])],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>"
+                          "VLM 理由：%{customdata[0]}<br>"
+                          "档位：%{customdata[1]}<br>"
+                          "销量影响：%{customdata[2]}<extra></extra>",
+            customdata=df_feat[["VLM理由", "锚点档位", "销量影响"]],
+        )
+        fig.update_layout(
+            height=max(280, len(df_feat) * 32),
+            margin=dict(l=80, r=180, t=10, b=10),
+            xaxis=dict(range=[0, 11], showgrid=False, zeroline=False),
+            yaxis=dict(showgrid=False),
+            showlegend=False,
+            uniformtext_minsize=10,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 风险段图例
+        _legend_html = "｜".join(
+            f'<span style="color:{c}">■</span> {bl}'
+            for (_, c, bl) in _risk_buckets
+        )
+        st.markdown(f"<div style='font-size:0.8em;color:#8a857d'>{_legend_html}</div>",
+                    unsafe_allow_html=True)
+
+        # VLM 理由 + 销量影响展开区
+        with st.expander("🔍 每个特征的 VLM 判断理由 + 销量影响", expanded=False):
+            for _, row in df_feat.iterrows():
+                _impact_html = f"<span style='color:{row['颜色']};font-weight:bold'>【{row['风险段']}】{row['销量影响']}</span>" if row["销量影响"] else ""
+                st.markdown(f"**{row['特征']} · {row['分数']:.1f}/10 · {row['锚点档位']}**  {_impact_html}",
+                            unsafe_allow_html=True)
+                st.caption(row["VLM理由"])
+                st.divider()
 
     # ===== 下方：四列指标（图片下方一屏看完）=====
     # 分数含义说明：0-10 分（越高越好），人设/渠道/价格三个引擎独立打分后加权
@@ -1898,19 +1995,80 @@ def render_page_detail():
         st.subheader("💡 洞察")
         st.info((g.consumer_insights or "暂无人设洞察")[:250])
 
-    # —— 改款建议 + 特征理由（底部）——
+    # —— 30 人设真实投票详情（横跨整行，默认展开）——
+    votes = p.voting.votes
+    if votes:
+        # 按 final_score 排序（高分→低分，两边极端在前，中间在最后）
+        votes_sorted = sorted(votes, key=lambda v: v.final_score)
+        # 聚合洞察
+        std = p.voting.score_std
+        if std >= 2.0:
+            _divergence = f"⚠️ **分歧较大**（σ={std:.1f}）—— 不同人设意见明显分裂"
+        elif std >= 1.2:
+            _divergence = f"⚖️ **意见有一定分歧**（σ={std:.1f}）"
+        else:
+            _divergence = f"✅ **意见高度一致**（σ={std:.1f}）"
+
+        with st.expander(f"👁 30 人设真实投票详情（{len(votes)} 人设）", expanded=True):
+            st.markdown(f"**{_divergence}**")
+
+            # Top 买/反对理由
+            br = p.voting.top_buy_reasons[:5] if p.voting.top_buy_reasons else []
+            or_ = p.voting.top_oppose_reasons[:5] if p.voting.top_oppose_reasons else []
+            if br or or_:
+                c_r1, c_r2 = st.columns(2)
+                with c_r1:
+                    st.markdown("✅ **高频购买理由**")
+                    for r in br:
+                        st.markdown(f"- {r}")
+                with c_r2:
+                    st.markdown("❌ **高频反对理由**")
+                    for r in or_:
+                        st.markdown(f"- {r}")
+
+            # 分歧最大的人设
+            if p.voting.high_divergence_personas:
+                st.caption("🔥 **分歧最大的人设**：" + "、".join(p.voting.high_divergence_personas[:5]))
+
+            st.divider()
+
+            # 人设卡片列表（一行 2 张）
+            card_cols = st.columns(2)
+            for i, v in enumerate(votes_sorted):
+                with card_cols[i % 2]:
+                    # 分数染色
+                    if v.final_score >= 7:
+                        _sc = "#6ca060"
+                    elif v.final_score >= 4:
+                        _sc = "#a8b5c4"
+                    else:
+                        _sc = "#d64545"
+                    _veto_tag = " 🔴**否决**" if v.vetoed else ""
+                    # 人设名 + 综合分（小卡片样式）
+                    _html = f"""<div style="border-left:4px solid {_sc};padding:8px 12px;margin:4px 0;background:#faf8f5;border-radius:4px">
+                        <b>{v.persona_name}</b> <span style="color:{_sc};font-size:1.1em;font-weight:bold">{v.final_score:.1f}/10</span>{_veto_tag}
+                    </div>"""
+                    st.markdown(_html, unsafe_allow_html=True)
+
+                    # 展开看各层判断
+                    with st.expander(f"看 {v.persona_name} 的具体判断"):
+                        for layer_id, layer_score in v.layer_scores.items():
+                            layer_reason = v.layer_reasons.get(layer_id, "")
+                            st.markdown(f"**层 {layer_id} · {layer_score:.1f}/10**")
+                            if layer_reason:
+                                st.caption(layer_reason)
+                        if v.opposing_reason:
+                            st.markdown("**反对理由**")
+                            st.caption(v.opposing_reason)
+                    st.markdown("---")
+
+    # —— 改款建议 ——
     st.subheader("🔧 改款建议")
     if g.improvements:
         for i, s in enumerate(g.improvements[:5], 1):
             st.write(f"{i}. {s}")
     else:
         st.caption("（暂无改款建议）")
-
-    with st.expander("🔍 查看每个特征的 VLM 判断理由", expanded=False):
-        for _, row in df_feat.iterrows():
-            st.markdown(f"**{row['特征']} · {row['分数']:.1f}/10**")
-            st.caption(row['理由'])
-            st.divider()
 
     st.divider()
     md_text = render_single_report_markdown(p)
