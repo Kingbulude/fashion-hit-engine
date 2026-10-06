@@ -2073,6 +2073,13 @@ def render_page_detail():
     # —— 30 人设真实投票详情（横跨整行，默认展开）——
     votes = p.voting.votes
     if votes:
+        # layer_id → 中文层名（截断括号里的描述）
+        _layer_name_map: dict[str, str] = {}
+        if brand_cfg and hasattr(brand_cfg, "decision_structure"):
+            for _l in brand_cfg.decision_structure.layers:
+                _n = (_l.name or _l.id).split("（")[0].split("(")[0].strip()
+                _layer_name_map[_l.id] = _n
+
         # 按 final_score 排序（高分→低分，两边极端在前，中间在最后）
         votes_sorted = sorted(votes, key=lambda v: v.final_score)
         # 聚合洞察
@@ -2129,7 +2136,8 @@ def render_page_detail():
                     with st.expander(f"看 {v.persona_name} 的具体判断"):
                         for layer_id, layer_score in v.layer_scores.items():
                             layer_reason = v.layer_reasons.get(layer_id, "")
-                            st.markdown(f"**层 {layer_id} · {layer_score:.1f}/10**")
+                            layer_cn = _layer_name_map.get(layer_id, layer_id)
+                            st.markdown(f"**{layer_cn} · {layer_score:.1f}/10**")
                             if layer_reason:
                                 st.caption(layer_reason)
                         if v.opposing_reason:
