@@ -1762,23 +1762,25 @@ def render_page_detail():
         unsafe_allow_html=True,
     )
 
-    # ===== 统一裁剪缩略图的 CSS（object-fit: cover 填满 160×200）=====
+    # ===== 统一裁剪缩略图的 CSS（全宽自适应 + 紧密排列）=====
     st.markdown("""
     <style>
-    .thumb-wrap { display:flex; flex-direction:column; align-items:center; gap:6px; }
-    .thumb-box { width:240px; height:300px; overflow:hidden; border-radius:8px;
+    .images-row { display:flex; gap:8px; width:100%; }
+    .images-row > .thumb-wrap { flex:1 1 0; min-width:0; }
+    .thumb-wrap { display:flex; flex-direction:column; align-items:center; }
+    .thumb-box { width:100%; height:320px; overflow:hidden; border-radius:8px;
                  display:flex; align-items:center; justify-content:center;
                  background:#f5f2ec; border:1px solid #e0dcd5; }
     .thumb-box img { width:100%; height:100%; object-fit:cover; }
-    .thumb-caption { font-size:12px; color:#8a857d; }
+    .thumb-caption { font-size:12px; color:#8a857d; text-align:center; padding-top:4px; }
     .info-kv { display:flex; gap:24px; flex-wrap:wrap; margin:4px 0 8px; }
     .info-kv div { font-size:13px; }
     .info-kv b { color:#8699ab; font-weight:500; margin-right:4px; }
     </style>
     """, unsafe_allow_html=True)
 
-    # ===== 上方：统一规格图片 + 基本信息（并排）=====
-    def _thumb_b64(ipath: str, size=(240, 300)) -> str:
+    # ===== 上方 1/3：全宽款式图片（3 张紧密铺开）=====
+    def _thumb_b64(ipath: str, size=(480, 320)) -> str:
         """PIL 中心裁剪 + 缩放到统一规格 → base64 data URI（绕开 file:// 安全限制）"""
         try:
             img = Image.open(ipath).convert("RGB")
@@ -1798,33 +1800,42 @@ def render_page_detail():
         except Exception:
             return ""
 
-    left, right = st.columns([1.3, 1.4])
-    with left:
-        st.subheader("📷 款式图片")
-        image_paths = st.session_state.get("image_paths_map", {}).get(p.info.style_id, [])
-        if image_paths:
-            _thumbs = st.columns(min(len(image_paths), 3))
-            for i, ipath in enumerate(image_paths[:3]):
-                with _thumbs[i % 3]:
-                    _img = _thumb_b64(str(ipath))
-                    if _img:
-                        st.markdown(
-                            f'<div class="thumb-wrap">'
-                            f'<div class="thumb-box">{_img}</div>'
-                            f'<div class="thumb-caption">图 {i+1}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.caption(f"无法加载图 {i+1}")
-            if len(image_paths) > 3:
-                st.caption(f"（共 {len(image_paths)} 张，仅显示前 3 张）")
-        else:
-            st.caption("（无图片）")
+    st.subheader("📷 款式图片")
+    image_paths = st.session_state.get("image_paths_map", {}).get(p.info.style_id, [])
+    if image_paths:
+        _thumbs_html = ['<div class="images-row">']
+        for i, ipath in enumerate(image_paths[:3]):
+            _img = _thumb_b64(str(ipath))
+            _thumbs_html.append(
+                f'<div class="thumb-wrap">'
+                f'<div class="thumb-box">{_img or "（无法加载）"}</div>'
+                f'<div class="thumb-caption">图 {i+1}</div>'
+                f'</div>'
+            )
+        _thumbs_html.append("</div>")
+        st.markdown("".join(_thumbs_html), unsafe_allow_html=True)
+        if len(image_paths) > 3:
+            st.caption(f"（共 {len(image_paths)} 张，仅显示前 3 张）")
+    else:
+        st.caption("（无图片）")
 
-    with right:
-        # —— 基本信息（补全所有可用字段）——
-        st.markdown("**📝 基本信息**")
+    # ===== 上方 2/3：全宽优劣势速览（紧跟图片下方）=====
+    strength_items = g.strengths or []
+    weakness_items = g.weaknesses or []
+    if strength_items or weakness_items:
+        st.subheader("🏆 优劣势速览")
+        if strength_items:
+            st.caption("✅ 优势：" + " · ".join(strength_items[:4]))
+        if weakness_items:
+            st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:4]))
+        st.divider()
+    else:
+        st.divider()
+
+    # ===== 中间：左右分栏 —— 基本信息 (1.0) + BARS 因果链 (1.4) =====
+    left2, right2 = st.columns([1.0, 1.4])
+    with left2:
+        st.subheader("📝 基本信息")
         info_items = [
             ("款号", p.info.style_id),
             ("品类", p.info.category or "—"),
@@ -1839,8 +1850,8 @@ def render_page_detail():
         st.markdown(kv_html, unsafe_allow_html=True)
         if p.info.fab_description:
             st.caption(f"**FAB**：{p.info.fab_description}")
-        st.divider()
 
+    with right2:
         # —— 10 特征 BARS 评分 —— 带因果链（anchors 分段染色 + VLM reason）
         st.subheader("🎯 10特征BARS评分 · 因果链")
         st.caption("每个特征的分数段颜色对应品牌 anchors 里的销量影响判断：🔴高风险 → 🌿销冠潜力")
@@ -1858,7 +1869,6 @@ def render_page_detail():
 
         feat_rows = []
         for key, f in p.features.features.items():
-            # 找 anchors 里匹配这个分数的 bucket（兼容 dict 和 list）
             _raw_anchors = _bars_cfg.get(key, {}).get("anchors") or {}
             if isinstance(_raw_anchors, dict):
                 anchors = list(_raw_anchors.values())
@@ -1871,10 +1881,8 @@ def render_page_detail():
                 if lo <= f.score <= hi:
                     anchor_label = a.get("label", "")
                     ad = a.get("description", "")
-                    # 从 description 里提取销量影响短语（含"销冠"/"主推"/"高销"/"风险"等关键词）
                     for kw in ["销冠", "主推", "高销", "标杆", "潜力", "风险", "退货", "销量", "不稳定"]:
                         if kw in ad:
-                            # 找到含关键词的子句
                             for clause in ad.split("；") + ad.split("，"):
                                 if kw in clause:
                                     anchor_impact = clause.strip("。，；")
@@ -1885,7 +1893,6 @@ def render_page_detail():
                         anchor_impact = ad[:40]
                     break
 
-            # 按分数确定颜色
             _color = _risk_buckets[-1][1]
             _bucket_label = ""
             for (mx, col, bl) in _risk_buckets:
@@ -1948,18 +1955,7 @@ def render_page_detail():
                 st.caption(row["VLM理由"])
                 st.divider()
 
-        # —— 优劣势速览（BARS 评分下方，独立一整行）——
-        strength_items = g.strengths or []
-        weakness_items = g.weaknesses or []
-        if strength_items or weakness_items:
-            st.subheader("🏆 优劣势速览")
-            if strength_items:
-                st.caption("✅ 优势：" + " · ".join(strength_items[:4]))
-            if weakness_items:
-                st.caption("⚠️ 劣势：" + " · ".join(weakness_items[:4]))
-
-    # ===== 下方：三列指标（图片下方一屏看完）=====
-    # —— 分数→5档颜色 映射（与 BARS 因果链一致）——
+    # ===== 下方：三列指标（全宽）=====
     def _score_color(score: float, *, lo_high: float = 8.5, lo_mid: float = 6.5,
                      hi_low: float = 2.5, hi_mid: float = 4.5) -> str:
         """分数越高越好，跟 BARS 的区间方向一致：
