@@ -1119,6 +1119,7 @@ def _try_load_pattern_context(
                         break
 
         if yaml_path is None:
+            log.debug("PatternMiner YAML 未找到（memory 目录或 calibrated/memory 均无 *_patterns.yaml）")
             return ""
 
         # 构造特征 dict（F01~F10 的 score）
@@ -1128,6 +1129,9 @@ def _try_load_pattern_context(
                 feat_dict[key] = float(fscore.score)
 
         ctx = build_fewshot_context(yaml_path, feat_dict, brand_suffix="历史")
+        if not ctx:
+            log.debug("PatternMiner YAML 已加载（%s），但无规则匹配（Few-shot 跳过，"
+                      "可能缺失 Pxx 人设特征或 min_score 未达）", yaml_path.name)
         return ctx
     except Exception as e:
         log.warning("PatternMiner 上下文加载失败（优雅降级）: %s", e)
@@ -1183,7 +1187,7 @@ def run_persona_voting(
     if pattern_context:
         log.info("[%s] Few-shot 模式已注入（%d字）", info.style_id, len(pattern_context))
     else:
-        log.info("[%s] 未找到历史模式 YAML，跳过注入", info.style_id)
+        log.debug("[%s] Few-shot 未注入（原因见上一条 debug 日志）", info.style_id)
 
     log.info("[%s] Phase1 人设初评（%d 人设）", info.style_id, len(persona_list))
     votes: list[PersonaVote] = []

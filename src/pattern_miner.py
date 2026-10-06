@@ -728,11 +728,13 @@ def match_rules_for_style(
 
         matched = 0
         strength_sum = 0.0
+        effective_n = 0   # v1.4.93+: 只有有值的特征才计入分母（缺失的 Pxx 不惩罚 coverage）
         for col, op, thresh in zip(cols, ops, threshs):
             val = style_features.get(col)
             if val is None:
-                strength_sum += 0.5   # 特征缺失 → 中性 strength
+                strength_sum += 0.5   # 特征缺失 → 中性 strength，不算入分母
                 continue
+            effective_n += 1
             ok = (val <= thresh) if op == "<=" else (val > thresh)
             if ok:
                 matched += 1
@@ -743,8 +745,11 @@ def match_rules_for_style(
             strength_sum += min(raw_dist, 1.0)     # 上限 1.0 防异常值
 
         n_total = len(cols)
-        coverage = matched / n_total
-        mean_strength = strength_sum / n_total
+        # v1.4.93+: 至少有 1 个特征有值才继续，否则整条规则跳过（全缺失无意义）
+        if effective_n == 0:
+            continue
+        coverage = matched / effective_n     # 只在可评估条件里算覆盖率
+        mean_strength = strength_sum / effective_n
         # 只在至少命中一条规则时给高 coverage 规则优先
         if matched == 0:
             continue
@@ -800,6 +805,11 @@ def build_fewshot_context(
         matches = match_cbr_cases(
             cbr_cases_path, style_features, top_k=top_k_rules,
         )
+        # v1.4.93+: CBR 没匹配到 → fallback 到 rules 匹配（不要直接放弃）
+        if not matches:
+            matches = match_rules_for_style(
+                patterns_yaml_path, style_features, top_k=top_k_rules,
+            )
     else:
         matches = match_rules_for_style(
             patterns_yaml_path, style_features, top_k=top_k_rules,
