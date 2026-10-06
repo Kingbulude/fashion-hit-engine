@@ -511,6 +511,15 @@ class EnsembleWeightTuner:
     CHANNEL_COLS = ["natural_score", "live_score"]
     FLOOR = 0.05
     SHIFT = 0.3
+    # v1.4.78+: 最低样本量和 rho 显著性保护，防止小样本/噪声数据把核心引擎压掉
+    MIN_SAMPLES_FOR_ENGINE = 30      # <30 样本时不应用引擎权重，退回默认
+    MIN_SAMPLES_FOR_CHANNEL = 15     # <15 样本时不应用渠道权重
+    DEFAULT_ENGINE_WEIGHTS = {       # 回退默认（与 brand_profiles/*/profile.yaml 对齐）
+        "persona_score": 0.35,
+        "channel_score": 0.30,
+        "price_value_score": 0.35,
+    }
+    ENGINE_MIN_FLOOR = 0.10          # 任何引擎权重不低于 10%（防止塌缩）
 
     @classmethod
     def _resolve_engine_cols(cls, df: pd.DataFrame) -> list[str]:
@@ -587,6 +596,35 @@ class EnsembleWeightTuner:
             tot = sum(raw_engine.values())
             new_engine_weights = {c: v / tot for c, v in raw_engine.items()}
 
+            # === v1.4.78+: 样本量 + 权重塌缩保护 ===
+            _core_cols_present = [c for c in cls.BASE_ENGINE_COLS if c in new_engine_weights]
+            _sample_too_small = len(df_work) < cls.MIN_SAMPLES_FOR_ENGINE
+            _core_engine_collapsed = any(
+                new_engine_weights[c] < cls.ENGINE_MIN_FLOOR for c in _core_cols_present
+            )
+            if _sample_too_small:
+                # 样本太少，信号不可靠，直接退回默认权重
+                new_engine_weights = dict(cls.DEFAULT_ENGINE_WEIGHTS)
+                if "grade_norm" in new_engine_weights:
+                    del new_engine_weights["grade_norm"]
+                log.warning(
+                    "Loop3 引擎样本量保护：n=%d < %d，退回默认权重。engine_rho=%s",
+                    len(df_work), cls.MIN_SAMPLES_FOR_ENGINE, engine_rho,
+                )
+            elif _core_engine_collapsed:
+                # 某个核心引擎塌到 <10% — 极可能是小样本噪声，
+                # 给塌缩引擎保底权重，其他引擎按比例压缩后重新归一化
+                for c in _core_cols_present:
+                    if new_engine_weights[c] < cls.ENGINE_MIN_FLOOR:
+                        new_engine_weights[c] = cls.ENGINE_MIN_FLOOR
+                tot2 = sum(new_engine_weights.values())
+                new_engine_weights = {c: v / tot2 for c, v in new_engine_weights.items()}
+                log.warning(
+                    "Loop3 引擎塌缩保护：某核心引擎权重 <%.0f%%，已保底并重新归一化。"
+                    "修复后 weights=%s",
+                    cls.ENGINE_MIN_FLOOR * 100, new_engine_weights,
+                )
+
             new_engine_score = sum(
                 df_work[c].values * new_engine_weights[c] for c in engine_cols
             )
@@ -639,6 +677,14 @@ class EnsembleWeightTuner:
             raw_chan = {c: max(cls.FLOOR, channel_rho[c] + cls.SHIFT) for c in cls.CHANNEL_COLS}
             tot_chan = sum(raw_chan.values())
             new_chan_weights = {c: v / tot_chan for c, v in raw_chan.items()}
+
+            # v1.4.78+: 渠道样本量保护
+            if len(df_work) < cls.MIN_SAMPLES_FOR_CHANNEL:
+                new_chan_weights = uniform_channel
+                log.warning(
+                    "Loop3 渠道样本量保护：n=%d < %d，退回均匀权重",
+                    len(df_work), cls.MIN_SAMPLES_FOR_CHANNEL,
+                )
 
             new_chan_score = (
                 df_work[cls.CHANNEL_COLS[0]] * new_chan_weights[cls.CHANNEL_COLS[0]]
