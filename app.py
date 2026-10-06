@@ -1978,19 +1978,32 @@ def render_page_detail():
 
     c1, c2, c3 = st.columns([1.0, 1.0, 1.5])
     with c1:
-        st.subheader("👥 人设投票")
-        st.caption(f"加权权重 {_w_persona:.0%} ｜ 0-10 分越高越好")
+        st.subheader("👥 购买决策投票")
+        st.caption(f"加权权重 {_w_persona:.0%} ｜ 30 类目标人群的综合判断")
         v = p.voting
         _sc = _score_color(v.weighted_score)
+        s_pct = int(v.support_rate * 100)
+        w_pct = int(getattr(v, "wait_rate", max(0.0, 1.0 - v.support_rate - v.opposition_rate)) * 100)
+        o_pct = int(v.opposition_rate * 100)
+        # 核心决策一句话
+        if s_pct >= 60:
+            _verdict = "**主推款**"
+            _verdict_col = "#3d7d3c"
+        elif o_pct >= 50:
+            _verdict = "**谨慎上**"
+            _verdict_col = "#d64545"
+        else:
+            _verdict = "**观望款**"
+            _verdict_col = "#a8b5c4"
         st.markdown(
-            f"### 加权总分 <span style='color:{_sc};font-size:1.3em;font-weight:bold'>"
-            f"{v.weighted_score:.2f}</span> /10",
+            f"### 综合判定 <span style='color:{_verdict_col};font-size:1.1em;font-weight:bold'>"
+            f"{_verdict}</span>"
+            f"<span style='margin-left:10px;color:{_sc};font-weight:bold'>"
+            f"加权分 {v.weighted_score:.1f}</span>",
             unsafe_allow_html=True,
         )
         # 三段比 bar（支持/观望/反对）
-        s_pct = int(v.support_rate * 100)
-        w_pct = int(getattr(v, "wait_rate", max(0.0, 1.0 - v.support_rate - v.opposition_rate)) * 100)
-        o_pct = 100 - s_pct - w_pct
+        # s_pct / w_pct / o_pct 已在上方计算过，直接复用
         st.markdown(
             f"""
             <div style="display:flex;height:18px;border-radius:6px;overflow:hidden;margin:4px 0;border:1px solid #e0dcd5">
@@ -2031,7 +2044,7 @@ def render_page_detail():
         st.caption("条长 = 引擎分 × 权重，直接看对最终分的贡献度")
 
         engine_data = [
-            ("人设投票", p.voting.weighted_score, _w_persona, "#b98888"),
+            ("人群决策", p.voting.weighted_score, _w_persona, "#b98888"),
             ("自然流量", p.channels.natural_score, _w_natural, "#c8a272"),
             ("直播带货", p.channels.live_score, _w_live, "#9fb893"),
             ("价格价值", p.channels.perceived_value, _w_price, "#b5a9c4"),
@@ -2066,29 +2079,57 @@ def render_page_detail():
     st.subheader("💡 综合洞察")
     st.info((g.consumer_insights or "暂无人设洞察")[:500])
 
-    # —— 30 人设真实投票详情（横跨整行，默认展开）——
+    # —— 人设购买决策投票（基于 MIPO 真实消费人群画像）——
     votes = p.voting.votes
     if votes:
-        # layer_id → 中文层名（截断括号里的描述）
+        # layer_id → 中文层名
         _layer_name_map: dict[str, str] = {}
         if brand_cfg and hasattr(brand_cfg, "decision_structure"):
             for _l in brand_cfg.decision_structure.layers:
                 _n = (_l.name or _l.id).split("（")[0].split("(")[0].strip()
                 _layer_name_map[_l.id] = _n
 
-        # 按 final_score 排序（高分→低分，两边极端在前，中间在最后）
-        votes_sorted = sorted(votes, key=lambda v: v.final_score)
+        # yaml 人设查询表
+        _yaml_personas = getattr(brand_cfg, "personas", None) or []
+        _p_lookup: dict[str, dict] = {
+            str(pp.get("persona_id", "")): pp for pp in _yaml_personas
+        } if _yaml_personas else {}
+
+        # yaml 轴 id → 中文名
+        _axis_name_map: dict[str, str] = {}
+        try:
+            import yaml as _yl
+            _p_yaml_path = ROOT / "brand_profiles" / (
+                brand_cfg.brand_id if brand_cfg else "mipo"
+            ) / "personas.yaml"
+            if _p_yaml_path.exists():
+                _p_ax = _yl.safe_load(_p_yaml_path.read_text()).get("identity_axes_definition", {})
+                for _ak in _p_ax:
+                    for _av in _p_ax[_ak]:
+                        _axis_name_map[_av.get("id", "")] = _av.get("name", "")
+        except Exception:
+            pass
+
         # 聚合洞察
         std = p.voting.score_std
         if std >= 2.0:
-            _divergence = f"⚠️ **分歧较大**（σ={std:.1f}）—— 不同人设意见明显分裂"
+            _divergence = f"⚠️ **分歧较大**（σ={std:.1f}）—— 不同人群意见明显分裂"
         elif std >= 1.2:
             _divergence = f"⚖️ **意见有一定分歧**（σ={std:.1f}）"
         else:
             _divergence = f"✅ **意见高度一致**（σ={std:.1f}）"
 
-        with st.expander(f"👁 30 人设真实投票详情（{len(votes)} 人设）", expanded=True):
+        with st.expander(f"👥 {len(votes)} 类人群真实购买决策投票", expanded=True):
             st.markdown(f"**{_divergence}**")
+
+            # 总体决策分布
+            _n_buy = sum(1 for v in votes if v.final_score >= 7)
+            _n_wait = sum(1 for v in votes if 4 <= v.final_score < 7)
+            _n_opp = sum(1 for v in votes if v.final_score < 4)
+            _nc1, _nc2, _nc3 = st.columns(3)
+            _nc1.markdown(f"✅ **会买** {_n_buy} 类人群")
+            _nc2.markdown(f"⏳ **观望** {_n_wait} 类人群")
+            _nc3.markdown(f"❌ **不买** {_n_opp} 类人群")
 
             # Top 买/反对理由
             br = p.voting.top_buy_reasons[:5] if p.voting.top_buy_reasons else []
@@ -2096,50 +2137,120 @@ def render_page_detail():
             if br or or_:
                 c_r1, c_r2 = st.columns(2)
                 with c_r1:
-                    st.markdown("✅ **高频购买理由**")
+                    st.markdown("✅ **高频购买触发点**")
                     for r in br:
                         st.markdown(f"- {r}")
                 with c_r2:
-                    st.markdown("❌ **高频反对理由**")
+                    st.markdown("❌ **高频否决雷区**")
                     for r in or_:
                         st.markdown(f"- {r}")
 
-            # 分歧最大的人设
-            if p.voting.high_divergence_personas:
-                st.caption("🔥 **分歧最大的人设**：" + "、".join(p.voting.high_divergence_personas[:5]))
-
             st.divider()
 
-            # 人设卡片列表（一行 2 张）
+            # 卡片：按 yaml weight 降序（核心人群优先）
+            def _vote_sort_key(vv):
+                pp = _p_lookup.get(vv.persona_id, {})
+                return -float(pp.get("weight", 0.0))
+
+            votes_sorted = sorted(votes, key=_vote_sort_key)
+
+            def _decision_label(sc: float) -> tuple[str, str, str]:
+                """(emoji, 中文, 主色)"""
+                if sc >= 7:
+                    return "✅", "会买", "#6ca060"
+                if sc >= 4:
+                    return "⏳", "观望", "#a8b5c4"
+                return "❌", "不买", "#d64545"
+
+            # 一行 2 张
             card_cols = st.columns(2)
             for i, v in enumerate(votes_sorted):
                 with card_cols[i % 2]:
-                    # 分数染色
-                    if v.final_score >= 7:
-                        _sc = "#6ca060"
-                    elif v.final_score >= 4:
-                        _sc = "#a8b5c4"
-                    else:
-                        _sc = "#d64545"
-                    _veto_tag = " 🔴**否决**" if v.vetoed else ""
-                    # 人设名 + 综合分（小卡片样式）
-                    _html = f"""<div style="border-left:4px solid {_sc};padding:8px 12px;margin:4px 0;background:#faf8f5;border-radius:4px">
-                        <b>{v.persona_name}</b> <span style="color:{_sc};font-size:1.1em;font-weight:bold">{v.final_score:.1f}/10</span>{_veto_tag}
-                    </div>"""
-                    st.markdown(_html, unsafe_allow_html=True)
+                    pp = _p_lookup.get(v.persona_id, {})
+                    # 人设名：优先 yaml 里的真实名字
+                    real_name = str(pp.get("name") or v.persona_name or v.persona_id)
+                    # 三维轴中文标签
+                    axes_dict = pp.get("axes", {}) if isinstance(pp, dict) else {}
+                    _scene = _axis_name_map.get(axes_dict.get("scene", ""), "")
+                    _aesth = _axis_name_map.get(axes_dict.get("aesthetic", ""), "")
+                    _price = _axis_name_map.get(axes_dict.get("price", ""), "")
+                    axis_tags_html = ""
+                    for _tag in [_scene, _aesth, _price]:
+                        if _tag:
+                            axis_tags_html += (
+                                f'<span style="background:#eef0f3;color:#6d7b8a;'
+                                f'padding:1px 7px;border-radius:10px;font-size:0.7em;margin:0 2px">'
+                                f'{_tag}</span>'
+                            )
 
-                    # 展开看各层判断
-                    with st.expander(f"看 {v.persona_name} 的具体判断"):
-                        for layer_id, layer_score in v.layer_scores.items():
+                    # 决策徽章
+                    _em, _lbl, _col = _decision_label(v.final_score)
+                    _weight = float(pp.get("weight", 0.0)) * 100 if pp else 0
+                    _weight_html = (
+                        f'<span style="font-size:0.7em;color:#8a857d;'
+                        f'margin-left:6px">权重 {_weight:.1f}%</span>'
+                    )
+
+                    # fab / 颜色 / 否决 三行画像
+                    _fab = pp.get("fab_focus", []) if isinstance(pp, dict) else []
+                    _cols_pref = pp.get("color_preference", []) if isinstance(pp, dict) else []
+                    _veto_dim = pp.get("child_veto_dimensions", []) if isinstance(pp, dict) else []
+
+                    def _chip_row(title, items, col_bg="#fff7f0", col_txt="#a06830"):
+                        if not items:
+                            return ""
+                        chips_html = "".join(
+                            f'<span style="background:{col_bg};color:{col_txt};'
+                            f'padding:0 6px;border-radius:4px;font-size:0.72em;'
+                            f'margin:1px 2px;display:inline-block">{it}</span>'
+                            for it in items[:4]
+                        )
+                        return (
+                            f'<div style="margin:3px 0;font-size:0.75em;color:#6b655d">'
+                            f'· {title}：{chips_html}</div>'
+                        )
+
+                    _fab_html = _chip_row("在意", _fab, "#e8f0ea", "#3d7d3c")
+                    _col_html = _chip_row("偏好颜色", _cols_pref, "#eef3f9", "#5772a0")
+                    _veto_html = _chip_row("否决雷区", _veto_dim, "#fdecea", "#b14a4a")
+
+                    # 主体理由：取最长的那条层理由
+                    _main_reason = ""
+                    for lr in v.layer_reasons.values():
+                        if lr and len(lr) > len(_main_reason):
+                            _main_reason = lr
+
+                    _card_html = f"""
+<div style="border-left:4px solid {_col};padding:10px 14px;margin:8px 0;background:#faf8f5;border-radius:6px">
+  <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+    <b style="font-size:1.02em">{real_name}</b>
+    {_weight_html}
+  </div>
+  <div style="margin:3px 0">{axis_tags_html}</div>
+  <div style="margin:4px 0">
+    <span style="background:{_col};color:#fff;padding:2px 10px;border-radius:12px;font-size:0.85em;font-weight:600">
+      {_em} {_lbl}
+    </span>
+    {"<span style='color:#d64545;font-size:0.8em;margin-left:4px'>🔴 触发否决</span>" if v.vetoed else ""}
+  </div>
+  {_fab_html}
+  {_col_html}
+  {_veto_html}
+  {"<div style='margin-top:6px;font-size:0.82em;color:#4a4540'><b>判断理由：</b>" + _main_reason + "</div>" if _main_reason else ""}
+</div>"""
+                    st.markdown(_card_html, unsafe_allow_html=True)
+
+                    # 各决策层详细理由（默认折叠，不再显示分数）
+                    with st.expander(f"📄 该人群三层判断详情"):
+                        for layer_id in v.layer_reasons:
                             layer_reason = v.layer_reasons.get(layer_id, "")
                             layer_cn = _layer_name_map.get(layer_id, layer_id)
-                            st.markdown(f"**{layer_cn} · {layer_score:.1f}/10**")
                             if layer_reason:
+                                st.markdown(f"**{layer_cn}**")
                                 st.caption(layer_reason)
                         if v.opposing_reason:
                             st.markdown("**反对理由**")
                             st.caption(v.opposing_reason)
-                    st.markdown("---")
 
     # —— 改款建议 ——
     st.subheader("🔧 改款建议")
