@@ -843,6 +843,30 @@ class PredictionPipeline:
         _sales_lookup = sales_lookup or {}
         _grade_lookup = grade_lookup or {}
 
+        # —— Pre-Step: history.db → history_accumulated.csv 自动桥接 ——
+        # 用户可能在另一台机器跑过预测（history.db 存在），但没有累积 CSV
+        if not _acc_path.exists():
+            try:
+                _db_summary = self.history.get_summary(self.brand_cfg.brand_id)
+                if _db_summary["styles"] > 0:
+                    log.info(
+                        "🔄 发现 history.db (%d 款) 但无累积 CSV — 自动桥接重建",
+                        _db_summary["styles"],
+                    )
+                    _rebuilt = self.history.to_history_accumulated_df(
+                        brand_id=self.brand_cfg.brand_id,
+                        sales_lookup=_sales_lookup or None,
+                        grade_lookup=_grade_lookup or None,
+                    )
+                    if _rebuilt is not None and len(_rebuilt) > 0:
+                        _rebuilt.to_csv(_acc_path, index=False)
+                        log.info(
+                            "✅ history.db → 累积 CSV 桥接完成：%d 款 → %s",
+                            len(_rebuilt), _acc_path,
+                        )
+            except Exception as _e:
+                log.warning("history.db 自动桥接失败（不影响后续）：%s", _e)
+
         # —— Step 1: 决定 history_df 的来源 ——
         history_df: _pd.DataFrame | None = None
         _source: str = ""  # 用于日志追踪

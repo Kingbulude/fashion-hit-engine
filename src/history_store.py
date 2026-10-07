@@ -301,3 +301,91 @@ class HistoryStore:
             "last_at": last_at or "",
             "db_path": str(self.db_path),
         }
+
+    def to_history_accumulated_df(
+        self,
+        brand_id: str | None = None,
+        sales_lookup: dict[str, float] | None = None,
+        grade_lookup: dict[str, str] | None = None,
+    ) -> pd.DataFrame | None:
+        """从 SQLite predictions 表重建完整 56 列的 history_accumulated DataFrame。
+
+        用于旧版 history.db 升级 — 用户在另一台机器跑过预测，现在要迁移到新环境做 3Loop 校准。
+
+        Args:
+            brand_id: 只导出某品牌；None 则全部
+            sales_lookup: {style_id: sales_qty} 覆盖 db 里的 sales_qty（Excel 真实销量优先）
+            grade_lookup: {style_id: "S"|"A+"|"A"|"P"} 覆盖 db 里的 manual_grade
+
+        Returns:
+            DataFrame 或 None（db 为空）
+        """
+        _f01_f10 = [f"F{i:02d}" for i in range(1, 11)]
+        _p01_p30 = [f"P{i:02d}" for i in range(1, 31)]
+
+        df = self.load(brand_id=brand_id, include_mock=True)
+        if df.empty:
+            return None
+
+        # 按 style_id 去重（最新一条为准）
+        df = df.sort_values("created_at", ascending=False).drop_duplicates(
+            subset=["style_id"], keep="first"
+        ).reset_index(drop=True)
+
+        rows: list[dict[str, Any]] = []
+        sales_map = sales_lookup or {}
+        grade_map = grade_lookup or {}
+
+        from .types import parse_grade_to_norm
+
+        for _, r in df.iterrows():
+            feat = _from_json(r.get("feature_scores"), {}) or {}
+            # F01-F10：从 JSON 取，缺的用 5.0
+            feat_row = {f: float(feat.get(f, 5.0)) for f in _f01_f10}
+
+            weighted = float(r.get("voting_weighted_score", 5.0) or 5.0)
+            # P01-P30：退化方案 — DB 没存独立人设分，全部用 weighted_score
+            persona_row = {p: weighted for p in _p01_p30}
+
+            support_rate = float(r.get("voting_support_rate", 0.5) or 0.5)
+            oppose_rate = float(r.get("voting_opposition_rate", 0.1) or 0.1)
+
+            natural = float(r.get("natural_score", 5.0) or 5.0)
+            live = float(r.get("live_score", 5.0) or 5.0)
+            perceived = float(r.get("perceived_value", 5.0) or 5.0)
+
+            sid = str(r.get("style_id", ""))
+            sales = float(sales_map.get(sid, r.get("sales_qty", 0) or 0))
+
+            manual_grade = grade_map.get(sid, r.get("manual_grade"))
+            grade_norm = parse_grade_to_norm(manual_grade)
+            # grade_num 简单映射: S=4, A+=3, A=2, P=1, 其他=-1
+            _grade_upper = str(manual_grade or "").strip().upper()
+            grade_num = {
+                "S": 4, "A+": 3, "A": 2, "P": 1,
+            }.get(_grade_upper, -1)
+
+            row: dict[str, Any] = {
+                "style_id": sid,
+                **feat_row,
+                **persona_row,
+                "persona_score": weighted,
+                # 退化的人设分布特征（3Loop 会用）
+                "persona_top8": weighted,
+                "persona_support_rate": support_rate,
+                "persona_oppose_rate": oppose_rate,
+                "persona_divergence": 0.0,
+                "persona_extreme_gap": 0.0,
+                "channel_score": (natural + live) / 2,
+                "price_value_score": perceived,
+                "natural_score": natural,
+                "live_score": live,
+                "is_main_push": 1.0 if r.get("is_main_push") else 0.0,
+                "is_live_stream": 1.0 if r.get("is_live_stream") else 0.0,
+                "sales": sales,
+                "grade_num": float(grade_num),
+                "grade_norm": grade_norm,
+            }
+            rows.append(row)
+
+        return pd.DataFrame(rows)
