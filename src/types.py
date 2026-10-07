@@ -447,6 +447,22 @@ def find_aliased_column(df_cols: list[str], aliases: list[str]) -> str | None:
     return None
 
 
+# v1.4.97: 销售标签 → 有序销量值映射（Spearman 只关心排序，绝对值不重要）
+# 来源：童装品类"上架30天销售情况"常规分级
+SALES_LABEL_TO_QTY: dict[str, float] = {
+    # 爆款 / 超旺 — top 10%
+    "爆": 10000.0, "爆款": 10000.0, "超爆": 10000.0,
+    # 旺销 — top 30%
+    "旺": 3000.0, "旺销": 3000.0, "热销": 3000.0,
+    # 平销 — 中间
+    "平": 500.0, "平销": 500.0, "一般": 500.0,
+    # 滞销 — bottom
+    "滞": 50.0, "滞销": 50.0, "差": 50.0,
+    # 无销量
+    "未销售": 0.0, "停售": 0.0, "下架": 0.0, "无销量": 0.0,
+}
+
+
 def parse_sales_value(v: Any, default: float = 0.0) -> float:
     """解析 Excel 里的销量值，支持 int/float/"9000+" / "9,000" / "约8000" 等。
 
@@ -466,6 +482,10 @@ def parse_sales_value(v: Any, default: float = 0.0) -> float:
             s = v.strip()
             if not s or s.lower() in ("nan", "none", "-"):
                 return default
+            # 提取数字部分 (去掉 "约/+/+/~" 等前后缀和千分位逗号)
+            # v1.4.97 新增：先检查是不是销售标签
+            if s in SALES_LABEL_TO_QTY:
+                return SALES_LABEL_TO_QTY[s]
             # 提取数字部分 (去掉 "约/+/+/~" 等前后缀和千分位逗号)
             digits = "".join(ch for ch in s if ch.isdigit() or ch == ".")
             if digits in ("", "."):
