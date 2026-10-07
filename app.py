@@ -58,7 +58,8 @@ from src.types import (
     SALES_QTY_COL_ALIASES, SALES_LABEL_COL_ALIASES,
     SELL_THROUGH_COL_ALIASES, MANUAL_GRADE_COL_ALIASES,
     MAIN_PUSH_COL_ALIASES, LIVE_STREAM_COL_ALIASES, STYLE_ID_COL_ALIASES,
-    find_aliased_column, parse_sales_value, safe_float,
+    find_aliased_column, parse_sales_value, parse_sales_label_to_qty,
+    parse_grade_to_norm, safe_float,
 )
 from scripts.rename_images import batch_rename_from_folders  # 图片重命名脚本
 
@@ -2347,26 +2348,70 @@ def render_page_calibration():
                 if col_label != "上架30天销售情况":
                     _rename_map[col_label] = "上架30天销售情况"
 
-            if not col_truth:
-                st.error(f"❌ 未找到销量列（支持的别名：{SALES_QTY_COL_ALIASES}）")
+            # v1.4.98: 也识别内审分级列
+            col_grade = find_aliased_column(list(df_truth.columns), MANUAL_GRADE_COL_ALIASES)
+            if col_grade:
+                if col_grade != "内审分级":
+                    _rename_map[col_grade] = "内审分级"
+
+            if not col_truth and not col_label:
+                st.error(
+                    f"❌ 未找到销量列或销售标签列（支持的销量别名：{SALES_QTY_COL_ALIASES}，"
+                    f"标签别名：{SALES_LABEL_COL_ALIASES}）"
+                )
             else:
-                st.success(f"✅ 识别到销量列「{col_truth}」，共{len(df_truth)}行")
-                if col_label:
-                    st.info(f"🏷️ 识别到销售标签列「{col_label}」（爆/旺/平/滞）")
+                _n_cols_recognized = sum(1 for c in [col_truth, col_label, col_grade] if c)
+                st.success(
+                    f"✅ 识别到 {_n_cols_recognized}/3 列 — "
+                    + (f"销量「{col_truth}」" if col_truth else "")
+                    + (" · " if col_truth and col_label else "")
+                    + (f"标签「{col_label}」" if col_label else "")
+                    + (" · " if (col_truth or col_label) and col_grade else "")
+                    + (f"分级「{col_grade}」" if col_grade else "")
+                    + f"，共 {len(df_truth)} 行"
+                )
 
                 # 预览用副本（重命名只影响展示）
                 _df_preview = df_truth.rename(columns=_rename_map) if _rename_map else df_truth
                 with st.expander("预览（前5行）"):
                     st.dataframe(_df_preview.head(5), use_container_width=True)
 
+                # —— 构建 sales_lookup（v1.4.98: 数值优先、标签兜底）——
+                # 对每行：
+                #   1) 如果销量列有非零数值 → 用数值（最精确）
+                #   2) 否则如果有销售标签列 → 用标签映射值兜底（保证 Spearman 能算）
+                #   3) 都没有 → 0
                 truth_map_ready = {}
                 for _, r in df_truth.iterrows():
                     sid = str(r["款式编号"])
-                    truth_map_ready[sid] = parse_sales_value(r[col_truth])
+                    sales_val = parse_sales_value(r[col_truth]) if col_truth else 0.0
+                    if sales_val <= 0 and col_label:
+                        # 销量列缺失/为 0 → 用销售标签兜底
+                        sales_val = parse_sales_label_to_qty(r[col_label])
+                    truth_map_ready[sid] = sales_val
 
                 non_zero = sum(1 for v in truth_map_ready.values() if v > 0)
+                st.info(
+                    f"📊 sales_lookup: {non_zero}/{len(truth_map_ready)} 款有非零值"
+                    + ("（部分来自销售标签兜底）" if col_label and non_zero < len(truth_map_ready) else "")
+                )
                 if non_zero == 0:
                     st.warning("⚠️ 识别到的销量值全为 0 — 请检查列是否匹配正确")
+
+                # —— 构建 grade_lookup（v1.4.98: 内审分级 → Loop3 第 4 引擎）——
+                grade_lookup_ready: dict[str, str] | None = None
+                if col_grade:
+                    grade_lookup_ready = {}
+                    for _, r in df_truth.iterrows():
+                        sid = str(r["款式编号"])
+                        gv = parse_grade_to_norm(r[col_grade])
+                        if gv is not None:
+                            grade_lookup_ready[sid] = str(r[col_grade]).strip().upper()
+                    _n_grade = len(grade_lookup_ready)
+                    if _n_grade > 0:
+                        st.info(f"🏷️ grade_lookup: {_n_grade}/{len(df_truth)} 款有内审分级 → Loop3 会用 grade_norm 第 4 引擎")
+                    else:
+                        grade_lookup_ready = None
         except Exception as e:
             st.error(f"Excel读取失败：{e}")
 
@@ -2392,6 +2437,7 @@ def render_page_calibration():
                 loop_result = pl.run_backtest_calibration(
                     predictions=preds if preds else None,
                     sales_lookup=truth_map_ready,
+                    grade_lookup=grade_lookup_ready,
                 )
             except RuntimeError as re:
                 st.error(f"依赖缺失：{re}")

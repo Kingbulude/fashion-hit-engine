@@ -463,6 +463,55 @@ SALES_LABEL_TO_QTY: dict[str, float] = {
 }
 
 
+def parse_sales_label_to_qty(v: Any, default: float = 0.0) -> float:
+    """解析 Excel 里的销售表现标签（爆/旺/平/滞）→ 有序销量值。
+
+    与 parse_sales_value 职责分离：
+    - parse_sales_value 只解析**纯数值**或**带数字的文本**（"7000+"、"5,800"）
+    - parse_sales_label_to_qty 只解析**纯标签**（"爆"、"旺"、"平"、"滞"、"未销售"）
+
+    3Loop 用 Spearman 秩相关，只关心排序不关心绝对值。
+    标签映射值只要保持 爆 > 旺 > 平 > 滞 这个序就行，具体数字不影响校准质量。
+
+    Returns:
+        标签对应数值；不是已知标签时返回 default（通常 0.0）
+    """
+    if v is None:
+        return default
+    s = str(v).strip()
+    if not s:
+        return default
+    return SALES_LABEL_TO_QTY.get(s, default)
+
+
+# v1.4.98: 内审分级（S/A+/A/P）→ 归一化 [0, 100]
+# 来源：品牌内审常规分级，Spearman 只关心排序
+GRADE_TO_NORM: dict[str, float] = {
+    "S": 100.0, "S款": 100.0, "S级": 100.0,
+    "A+": 75.0, "A+款": 75.0,
+    "A": 50.0, "A款": 50.0, "A级": 50.0,
+    "P": 0.0, "P款": 0.0, "P级": 0.0, "P-": 0.0,
+}
+
+
+def parse_grade_to_norm(v: Any, default: float | None = None) -> float | None:
+    """解析 Excel 里的内审分级 → grade_norm [0, 100]。
+
+    与 build_history_df 里的 grade_norm 生成逻辑对齐：
+    - S → 100, A+ → 75, A → 50, P → 0
+    - 空/未知 → None（表示"无内审分级"，不是真 P 款）
+
+    这个值会作为 Loop3 的第 4 引擎（grade_norm），Spearman 通常在 0.7+。
+    """
+    if v is None:
+        return default
+    s = str(v).strip().upper()
+    if not s or s in ("NAN", "NONE", "-", "0"):
+        return default
+    return GRADE_TO_NORM.get(s, default)
+
+
+
 def parse_sales_value(v: Any, default: float = 0.0) -> float:
     """解析 Excel 里的销量值，支持 int/float/"9000+" / "9,000" / "约8000" 等。
 
@@ -483,9 +532,6 @@ def parse_sales_value(v: Any, default: float = 0.0) -> float:
             if not s or s.lower() in ("nan", "none", "-"):
                 return default
             # 提取数字部分 (去掉 "约/+/+/~" 等前后缀和千分位逗号)
-            # v1.4.97 新增：先检查是不是销售标签
-            if s in SALES_LABEL_TO_QTY:
-                return SALES_LABEL_TO_QTY[s]
             # 提取数字部分 (去掉 "约/+/+/~" 等前后缀和千分位逗号)
             digits = "".join(ch for ch in s if ch.isdigit() or ch == ".")
             if digits in ("", "."):

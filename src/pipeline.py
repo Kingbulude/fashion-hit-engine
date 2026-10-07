@@ -818,6 +818,7 @@ class PredictionPipeline:
         self,
         predictions: list[FullPrediction] | None = None,
         sales_lookup: dict[str, float] | None = None,
+        grade_lookup: dict[str, str] | None = None,
         out_dir: Path | None = None,
     ) -> "RunAllLoopsResult | None":
         """对一批预测结果跑 3Loop 优化内核 + 残差分离（spec §5/§8/§9）。
@@ -828,6 +829,8 @@ class PredictionPipeline:
         Args:
             predictions: 已跑完的预测结果；为 None 时用 run_smoke_test_data(10) 兜底
             sales_lookup: 真实销量映射 {style_id: sales_qty}；mock 数据需注入真实销量
+            grade_lookup: v1.4.98+ 内审分级映射 {style_id: "S"|"A+"|"A"|"P"}
+                → build_history_df 自动生成 grade_norm 列 → Loop3 第 4 引擎
             out_dir: 预测产物目录；默认 brand_cfg.calibrated_dir 的父级 output
 
         Returns:
@@ -845,18 +848,29 @@ class PredictionPipeline:
                     _acc_df["sales"] = _acc_df["style_id"].map(sales_lookup).fillna(
                         _acc_df.get("sales", 0)
                     )
+                # v1.4.98: 也用 grade_lookup 更新 grade_norm 列（如果有的话）
+                if grade_lookup and "grade_norm" in _acc_df.columns:
+                    from .types import parse_grade_to_norm
+                    _new_grade_norm = _acc_df["style_id"].map(
+                        lambda sid: parse_grade_to_norm(grade_lookup.get(str(sid)))
+                    )
+                    # 只覆盖 _new_grade_norm 非 NaN 的部分（保留旧的）
+                    _mask = _new_grade_norm.notna()
+                    _acc_df.loc[_mask, "grade_norm"] = _new_grade_norm[_mask].values
                 history_df = _acc_df
             else:
                 log.warning("predictions=None 且无累积 CSV，fallback smoke test (n=10)")
                 predictions = self.run_smoke_test_data(n=10)
                 from .core.optimization_kernel import build_history_df
                 history_df = build_history_df(predictions, sales_lookup=sales_lookup,
+                    grade_lookup=grade_lookup,
                     has_internal_review=getattr(self.brand_cfg, "has_internal_review", True))
             # history_df 直接用
         else:
             from .core.optimization_kernel import build_history_df
             _acc_path = Path(self.brand_cfg.calibrated_dir) / "history_accumulated.csv"
             history_df = build_history_df(predictions, sales_lookup=sales_lookup,
+                                          grade_lookup=grade_lookup,
                                           has_internal_review=getattr(self.brand_cfg, "has_internal_review", True))
 
         # —— 累积逻辑（v1.4.78+）——
