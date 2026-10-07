@@ -414,7 +414,8 @@ def retry_with_backoff(
     # 这类错误也需要重试，而且要等更久（模型拥塞缓解比账户限流慢）
     extra_retryable_hints: tuple = (),
     # 连续多少次 1305 就提前 abort（模型真的挂了，再等也没用）
-    abort_on_consecutive_1305: int = 3,
+    # 默认 9999 = 不提前 abort，让上层决定（ZhipuClient 会显式传自己的次数）
+    abort_on_consecutive_1305: int = 9999,
     **kwargs,
 ) -> LLMResponse:
     last_err: LLMResponse | None = None
@@ -647,13 +648,16 @@ class ZhipuClient:
         self.usage_tracker.record(model, parsed.usage)
         return parsed
 
-    # ---- 指数退避重试（智谱 1305/429 都要扛过去，6 次足够了）----
+    # ---- 指数退避重试（智谱 1305/429 都要扛过去）----
     def _retry_loop(self, fn, **kwargs) -> LLMResponse:
-        # 硬编码 6 次重试：智谱免费层 1305 模型拥塞 + 429 限流都可能来，
-        # 3 次根本不够；Bailian 等其他后端可以继续用 config 默认值
+        # max(self.cfg.max_retries, 6)：智谱免费层 1305 模型拥塞 + 429 限流都可能来
         zhipu_retries = max(self.cfg.max_retries, 6)
+        # abort_on_consecutive_1305 必须显式等于 zhipu_retries ——
+        # 不能用默认 3，否则连续 3 次 1305 就提前 abort，
+        # 剩下 3 次 retry 被跳过，Ollama fallback 永远没机会触发。
         return retry_with_backoff(
-            fn, max_retries=zhipu_retries, wait_429_base=15.0, **kwargs,
+            fn, max_retries=zhipu_retries, wait_429_base=15.0,
+            abort_on_consecutive_1305=zhipu_retries, **kwargs,
         )
 
 
