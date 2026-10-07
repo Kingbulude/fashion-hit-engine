@@ -1966,7 +1966,7 @@ def render_page_detail():
         st.subheader("👥 购买决策投票")
         st.caption(f"加权权重 {_w_persona:.0%} ｜ 30 类目标人群的综合判断")
         v = p.voting
-        _sc = _score_color_v1490(v.weighted_score)
+        _sc = score_color_v1490(v.weighted_score)
         s_pct = int(v.support_rate * 100)
         w_pct = int(getattr(v, "wait_rate", max(0.0, 1.0 - v.support_rate - v.opposition_rate)) * 100)
         o_pct = int(v.opposition_rate * 100)
@@ -2016,7 +2016,7 @@ def render_page_detail():
             ("感知价值", p.channels.perceived_value, _w_price),
         ]
         for name, score, w in rows:
-            sc = _score_color_v1490(score)
+            sc = score_color_v1490(score)
             st.markdown(
                 f"<div style='display:flex;justify-content:space-between;align-items:center;padding:3px 0'>"
                 f"<span style='color:#8a857d;font-size:0.9em'>{name} <span style='font-size:0.8em;color:#b3aea3'>({w:.0%})</span></span>"
@@ -2133,6 +2133,8 @@ def render_page_detail():
             st.divider()
 
             # 卡片：按 yaml weight 降序（核心人群优先）
+            # v1.4.96.4 重构时丢失这行赋值 → votes_sorted 未定义
+            votes_sorted = sorted(votes, key=_vote_sort_key_fn)
 
             # 一行 2 张
             card_cols = st.columns(2)
