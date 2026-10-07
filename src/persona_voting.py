@@ -1431,8 +1431,8 @@ def run_persona_voting(
             )
 
             v.review_delta = {
-                l.id: review["layer_scores"].get(l.id, 5.0) - v.initial_layer_scores.get(l.id, 5.0)
-                for l in layers
+                lid: review["layer_scores"].get(lid, 5.0) - v.initial_layer_scores.get(lid, 5.0)
+                for lid in layers
             }
             v.layer_scores = review["layer_scores"]
             v.review_adopted_feedback = review["adopted_feedback"]
@@ -1446,7 +1446,7 @@ def run_persona_voting(
             )
     else:
         for v in votes:
-            v.review_delta = {l.id: 0.0 for l in layers}
+            v.review_delta = {lid: 0.0 for lid in layers}
 
     # 聚合
     if brand_cfg is not None:
