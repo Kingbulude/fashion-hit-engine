@@ -239,14 +239,17 @@ def main() -> int:
     # 1. 强制 main
     enforce_main_branch()
 
-    # 2. bump version
+    # 2. bump version（只在内存里算，暂不落盘——先同步远程再写 VERSION，
+    #     防止 ensure_remote_synced() 里 pull --rebase 把 VERSION 冲回远程旧值）
     current = read_current_version()
     new_version = bump_version(current, level)
     _ok(f"VERSION {current} → {new_version}  ({level})")
-    update_version_file(new_version)
 
-    # 3. 同步
+    # 3. 同步（先拉远程最新，确保 VERSION 不会被 rebase 覆盖）
     ensure_remote_synced()
+
+    # 3.5 写 VERSION（同步完远程后再落盘，保证这个值一定会进 commit）
+    update_version_file(new_version)
 
     # 4. commit + push
     commit_msg = custom_msg or f"chore({new_version}): release {new_version}"

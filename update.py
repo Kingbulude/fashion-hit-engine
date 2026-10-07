@@ -442,8 +442,28 @@ def kill_running_apps() -> bool:
 # Main flow
 # ---------------------------------------------------------------------------
 
+def _parse_args(argv: list[str]) -> dict:
+    """Parse simple args — supports --force / -f for refresh-bypass."""
+    return {"force": any(a in ("--force", "-f") for a in argv[1:])}
+
+
+def _extract_version_from_zip(extract_dir: Path) -> str | None:
+    """After extracting zip, walk into the single top-level dir (GitHub source
+    zips unpack as  fashion-hit-engine-<tag>/VERSION  →  we find and read VERSION."""
+    root = extract_dir
+    children = list(root.iterdir())
+    if len(children) == 1 and children[0].is_dir():
+        root = children[0]
+    ver = root / VERSION_FILE
+    if ver.is_file():
+        return ver.read_text().strip()
+    return None
+
+
 def main() -> int:
     os.chdir(Path(__file__).parent.resolve())
+    args = _parse_args(sys.argv)
+    force = args["force"]
 
     _banner("fashion-hit-engine  ·  Updater")
 
@@ -465,11 +485,15 @@ def main() -> int:
         return 1
     _ok(f"Latest version: {BOLD}{remote_tag}{RESET}")
 
-    # 3. compare
-    if _parse_version(remote_tag) <= _parse_version(local):
+    # 3. compare (--force bypasses version check — useful for repairing mixed
+    #    local files, e.g. VERSION says latest but app.py is stale / has edits)
+    if not force and _parse_version(remote_tag) <= _parse_version(local):
         _ok("Already up to date!")
+        _info("If files look broken even though VERSION is correct, run: update.bat --force")
         _pause()
         return 0
+    if force:
+        _warn(f"--force 模式：跳过版本比较，强制覆盖为 {remote_tag}")
 
     print()
     print(f"  {YELLOW}Update available: {local} → {remote_tag}{RESET}")
@@ -512,6 +536,35 @@ def main() -> int:
         _pause()
         return 4
     _ok("Extracted.")
+
+    # 6.5 完整性校验：zip 里 VERSION 是否等于远程 tag
+    # （发版脚本之前有过 VERSION 不跟着 commit 的 bug → 现在能提前警告用户）
+    zip_version = _extract_version_from_zip(extract_dir)
+    if zip_version and zip_version != remote_tag:
+        _warn(
+            f"zip 内 VERSION = {zip_version}，但远程 tag = {remote_tag}。"
+            f"说明发版脚本没把 VERSION 一起 commit。"
+            f"Updater 仍会覆盖代码并把 VERSION 强制写成 {remote_tag}，"
+            f"但请提醒维护者修发版流程。"
+        )
+
+    # 关键文件行数 sanity check：本地 vs zip 差太多可能是混合版本
+    _zip_root = extract_dir
+    _zip_children = list(_zip_root.iterdir())
+    if len(_zip_children) == 1 and _zip_children[0].is_dir():
+        _zip_root = _zip_children[0]
+    for _fname in ("app.py", "src/history_store.py", "src/pipeline.py"):
+        _local_p = Path(_fname)
+        _zip_p = _zip_root / _fname
+        if _local_p.is_file() and _zip_p.is_file():
+            _l_lines = sum(1 for _ in open(_local_p, encoding="utf-8", errors="ignore"))
+            _z_lines = sum(1 for _ in open(_zip_p, encoding="utf-8", errors="ignore"))
+            if abs(_l_lines - _z_lines) > max(500, _z_lines // 4):
+                _warn(
+                    f"{_fname}: 本地 {_l_lines} 行 vs zip {_z_lines} 行，"
+                    f"差异过大（可能是手动修改或跨大版本跳跃）。"
+                    f"Updater 会直接覆盖。"
+                )
 
     # 7. merge
     _info("Updating code files (user data is preserved)...")
