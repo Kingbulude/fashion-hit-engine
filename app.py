@@ -1950,6 +1950,11 @@ def render_page_detail():
 
     # ===== 下方：三列指标（全宽）=====
 
+    # engine weights：校准后的权重 > 默认权重
+    # v1.4.96.4 重构时意外遗漏下面两行定义 → _ew / defw 未定义
+    _ew = getattr(brand_cfg, "engine_weights", None) or {}
+    defw = getattr(brand_cfg, "default_engine_weights", {}) if brand_cfg else {}
+
     _w_persona = float(_ew.get("persona_voting", defw.get("persona_voting", 0.35)))
     _w_channel = float(_ew.get("channel_scoring", defw.get("channel_scoring", 0.30)))
     _w_price = float(_ew.get("price_value", defw.get("price_value", 0.35)))
