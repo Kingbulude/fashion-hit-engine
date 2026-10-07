@@ -383,6 +383,7 @@ FAB描述：
 你需要自己判断这个视觉特征对你来说是不是加分项。
 （例："色彩安全度 档1=高饱和撞色" — 有人喜欢撞色觉得好看，有人觉得太扎眼不好搭配，没有标准答案）
 
+___VLM_FALLBACK_WARNING_PLACEHOLDER___
 {_feat_summary(feats, features_cfg=brand_cfg.features_bars if brand_cfg else None)}
 
 【任务】各决策层独立评分：
@@ -401,6 +402,25 @@ FAB描述：
   "opposing_reason": "如果反对或否决，说明原因，否则空字符串"
 }}
 """.strip()
+
+    # v1.4.106+: VLM fallback 提示 — 让人设 LLM 知道视觉特征不可信时调整判断依据
+    fb = (feats.metadata or {}).get("fallback_used")
+    if fb == "brand_default":
+        _fallback_warn = (
+            "🚨 **视觉特征严重警告**：\n"
+            "   所有云端+本地 VLM 均已失败，以下特征是系统用 brand 默认档3 填充的占位数据，\n"
+            "   不反映真实视觉！请**完全忽略以下档1-档5视觉特征**，\n"
+            "   主要基于 FAB 描述 + Pattern 历史模式 + 款号品类 + 价格 + 季节 来判断。\n"
+        )
+    elif fb == "ollama_vlm":
+        _fallback_warn = (
+            "📝 视觉特征备注：云端 VLM 全部失败，已自动切本地 Ollama VLM 兜底，\n"
+            "   视觉质量可能略低于云端模型，但可参考。\n"
+        )
+    else:
+        _fallback_warn = ""
+    user_msg = user_msg.replace("___VLM_FALLBACK_WARNING_PLACEHOLDER___", _fallback_warn)
+
     return _render_persona_vote_system(layers, brand_name), user_msg
 
 

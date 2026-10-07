@@ -157,7 +157,15 @@ def render_diagnostic_banner(
         fb = fm.get("fallback_used")
         if fb:
             label = _FALLBACK_LABEL.get(fb, f"未知 fallback: {fb}")
-            st.warning(f"🧯 特征提取兜底触发 — {label}")
+            # brand_default = 完全无真实视觉特征 → 红色 error
+            # ollama_vlm = 本地 VLM 兜底（至少有真实视觉分析） → 黄色 warning
+            if fb == "brand_default":
+                st.error(
+                    f"🚨 **{label}** — 人设投票 & 渠道评分均基于此档3默认值，"
+                    f"结果可靠性大幅下降。请检查：① 智谱 API 额度/Key ② 图片格式/清晰度 ③ 并发 VLM 调用数"
+                )
+            else:
+                st.warning(f"🧯 特征提取兜底触发 — {label}")
             has_warning = True
         vlm_errs = fm.get("vlm_errors") or []
         if vlm_errs:
@@ -202,8 +210,20 @@ def render_diagnostic_banner(
         cal_errs = calibration_load_errors or {}
 
         parts: list[str] = []
+        has_brand_default = False
+        _fb_dist: dict[str, int] = {}
+        for p in predictions:
+            fb = (p.features.metadata or {}).get("fallback_used")
+            if fb:
+                _fb_dist[fb] = _fb_dist.get(fb, 0) + 1
+                if fb == "brand_default":
+                    has_brand_default = True
         if n_fallback:
-            parts.append(f"🧯 {n_fallback}/{n} 款用了 VLM fallback")
+            fb_detail = " · ".join(
+                f"{cnt} 款 {_FALLBACK_LABEL.get(fb, fb)}"
+                for fb, cnt in _fb_dist.items()
+            )
+            parts.append(f"🧯 {n_fallback}/{n} 款 VLM fallback ({fb_detail})")
         if n_p2_fail:
             parts.append(f"🧑‍⚕️ {n_p2_fail}/{n} 款 Phase2 失败")
         if n_p3_fail_total:
@@ -212,7 +232,12 @@ def render_diagnostic_banner(
             parts.append(f"⚙️ 校准产物加载失败 {len(cal_errs)} 个文件")
 
         if parts:
-            st.warning(" · ".join(parts))
+            # brand_default fallback = 红色严重告警
+            if has_brand_default:
+                st.error("🚨 " + " · ".join(parts) +
+                         " — 请检查智谱 VLM 可用性，否则预测质量大幅下降")
+            else:
+                st.warning(" · ".join(parts))
             # calibration 详情 expander（只在批次页展示一次）
             if cal_errs:
                 with st.expander("校准 YAML 加载失败详情", expanded=False):
@@ -220,11 +245,6 @@ def render_diagnostic_banner(
                         st.markdown(f"**{fname}** — `{err}`")
             # fallback 分布
             if n_fallback:
-                _fb_dist: dict[str, int] = {}
-                for p in predictions:
-                    fb = (p.features.metadata or {}).get("fallback_used")
-                    if fb:
-                        _fb_dist[fb] = _fb_dist.get(fb, 0) + 1
                 with st.expander("VLM fallback 类型分布", expanded=False):
                     for fb, cnt in _fb_dist.items():
                         st.caption(
