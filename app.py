@@ -2416,13 +2416,43 @@ def render_page_calibration():
             st.error(f"Excel读取失败：{e}")
 
     # ---------- 回测校准按钮（3Loop内核：Spearman对比+残差分离）----------
-    # v1.4.81+: 有累积 CSV 时 preds 可以为空 — run_backtest_calibration 会自动从 CSV 加载
-    _has_data_source = (preds and len(preds) >= 8) or (_acc_n >= 8)
+    # v1.4.98.1+: 精确匹配检查 — 累积 CSV 必须真能匹配 truth_map 才算数
+    _n_match_in_csv = 0
+    if truth_map_ready and _acc_df is not None and len(_acc_df) > 0:
+        _n_match_in_csv = int(_acc_df["style_id"].isin(truth_map_ready.keys()).sum())
+    _n_match_in_preds = sum(
+        1 for p in preds if truth_map_ready and p.info.style_id in truth_map_ready
+    ) if preds else 0
+    _has_matchable = _n_match_in_preds >= 8 or _n_match_in_csv >= 8
+
+    # 给用户清晰提示 — 区分"没跑过预测" vs "累积 CSV 不匹配" vs "样本不足"
+    if truth_map_ready:
+        if not preds and _n_match_in_csv == 0:
+            # 最常见场景: 只上传了 Excel 销量数据，没跑过任何预测
+            st.error("❌ 没有任何可校准的历史预测数据。")
+            st.info(
+                f"**3Loop 校准需要「预测产物」（VLM 特征 + 人设投票 + 渠道得分）才能运行。**\n\n"
+                f"你只上传了 **{len(truth_map_ready)}** 款的真实销量 Excel — 这是「校准目标」，"
+                f"还需要「校准素材」：\n\n"
+                f"👉 **去 「📤 上传批次」 页，上传这 {len(truth_map_ready)} 款的图片和款号，跑一轮预测，"
+                f"再回到这里点 3Loop。**"
+            )
+        elif not preds and _n_match_in_csv > 0 and _n_match_in_csv < 8:
+            st.warning(
+                f"⚠️ 累积 CSV 有 {_n_match_in_csv} 款能匹配，但不足 8 款门槛。"
+                f"请先跑更多批次，或清理累积 CSV 后重新校准。"
+            )
+        elif preds and _n_match_in_preds < 8 and _n_match_in_csv < 8:
+            st.warning(
+                f"⚠️ preds 中 {_n_match_in_preds} 款能匹配，累积 CSV 中 {_n_match_in_csv} 款能匹配 — 都不足 8 款。"
+                f"请先跑更多批次。"
+            )
+
     do_3loop = st.button("🤖 运行3Loop核心优化内核 + 残差分离",
                          type="primary",
-                         disabled=(not truth_map_ready or not _has_data_source),
-                         help="至少8款数据（session preds 或累积 CSV 二选一）"
-                              " + 真实销量 Excel 才能启动校准")
+                         disabled=(not truth_map_ready or not _has_matchable),
+                         help="至少 8 款能匹配到真实销量 — "
+                              "（session preds ∩ 销量 Excel）或（累积 CSV ∩ 销量 Excel）")
 
     if do_3loop and truth_map_ready:
         with st.spinner("3Loop校准运行中（Loop1→Loop2→Loop3→残差分离，20秒）…"):
@@ -2447,18 +2477,35 @@ def render_page_calibration():
                 loop_result = None
 
             if loop_result is None:
+                # pipeline.py 可能已自动清理了不兼容的 mock 累积 CSV
+                # 这里重新读文件系统确认状态，给用户最精准的提示
+                _acc_path_check = Path(brand_cfg.calibrated_dir) / "history_accumulated.csv"
+                _acc_still_exists = _acc_path_check.exists()
+
                 if preds:
                     matched = sum(1 for p in preds if p.info.style_id in (truth_map_ready or {}))
-                elif _acc_df is not None:
-                    matched = _acc_df["style_id"].isin(truth_map_ready or {}).sum()
+                elif _acc_still_exists:
+                    _df_now = pd.read_csv(_acc_path_check)
+                    matched = int(_df_now["style_id"].isin(truth_map_ready or {}).sum())
                 else:
                     matched = 0
-                if matched == 0:
+
+                if not preds and not _acc_still_exists:
+                    # pipeline 已经判定没有可用数据源（零匹配 + 无 CSV）
+                    st.error("❌ 没有任何可校准的历史预测数据。")
+                    st.info(
+                        f"**3Loop 校准需要 VLM 特征 + 人设投票 + 渠道得分 作为回归信号。**\n\n"
+                        f"请按以下步骤操作：\n"
+                        f"1️⃣ 去 **📤 上传批次** 页，上传你 Excel 里这 **{len(truth_map_ready)}** 款的图片和款号\n"
+                        f"2️⃣ 跑一轮预测（自动调 VLM 分析图片特征 + 人设投票）\n"
+                        f"3️⃣ 回到这里点 3Loop — 系统会用你这批预测产物 + 真实销量做校准"
+                    )
+                elif matched == 0:
                     st.error("❌ 没有款能匹配到真实销量，请检查「款式编号」列是否一致。")
                 elif matched < 8:
-                    st.error(f"❌ 可匹配的款只有{matched}款，Loop2需要至少8款样本，请补充历史批次。")
+                    st.error(f"❌ 可匹配的款只有 {matched} 款，Loop2 需要至少 8 款样本，请补充历史批次。")
                 else:
-                    st.info("ℹ️ 3Loop 跳过：可能销量全为0或信号不足，请检查真实销量数据。")
+                    st.warning("⚠️ 3Loop 跳过：销量信号不足或模型未产生有效增益。请检查 Excel 中的销量值是否合理分布（不能全一样或全 0）。")
 
             if loop_result is not None:
                 # 3) 展示三色Spearman对比表

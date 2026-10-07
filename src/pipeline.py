@@ -827,7 +827,7 @@ class PredictionPipeline:
         产物写到 brand_cfg.calibrated_dir，下次 run_one 可加载 loop1/2/3 权重。
 
         Args:
-            predictions: 已跑完的预测结果；为 None 时用 run_smoke_test_data(10) 兜底
+            predictions: 已跑完的预测结果；None/[] 时尝试从累积 CSV 加载
             sales_lookup: 真实销量映射 {style_id: sales_qty}；mock 数据需注入真实销量
             grade_lookup: v1.4.98+ 内审分级映射 {style_id: "S"|"A+"|"A"|"P"}
                 → build_history_df 自动生成 grade_norm 列 → Loop3 第 4 引擎
@@ -836,85 +836,130 @@ class PredictionPipeline:
         Returns:
             RunAllLoopsResult 或 None（样本不足/失败时）
         """
-        if predictions is None:
-            # v1.4.81+: 优先从累积 CSV 加载，避免无意义的 smoke test
-            _acc_path = Path(self.brand_cfg.calibrated_dir) / "history_accumulated.csv"
-            if _acc_path.exists():
-                import pandas as _pd
-                log.info("📂 predictions=None → 从累积 CSV 加载历史数据")
-                _acc_df = _pd.read_csv(_acc_path)
-                # 用 sales_lookup 更新销量（按 style_id 匹配）
-                if sales_lookup:
-                    _n_match = int(_acc_df["style_id"].isin(sales_lookup.keys()).sum())
-                    if _n_match == 0:
-                        # v1.4.98 hotfix: 累积 CSV 的 style_id 和 sales_lookup 完全不匹配
-                        # （通常是 mock 脏数据 vs 真实品牌款号）
-                        # 不能继续 fillna(旧 sales) — 旧 sales 可能是 mock 数据全 0
-                        log.error(
-                            "❌ 累积 CSV(%d 行) 和 sales_lookup(%d 款) 零匹配 — "
-                            "累积 CSV 可能是 mock 脏数据。"
-                            "请先在 📤 上传批次页跑预测，或清空累积 CSV 后重试。",
-                            len(_acc_df), len(sales_lookup),
-                        )
-                        return None
-                    _acc_df["sales"] = _acc_df["style_id"].map(sales_lookup).fillna(
-                        _acc_df.get("sales", 0)
-                    )
-                # v1.4.98: 也用 grade_lookup 更新 grade_norm 列（如果有的话）
-                if grade_lookup and "grade_norm" in _acc_df.columns:
-                    from .types import parse_grade_to_norm
-                    _new_grade_norm = _acc_df["style_id"].map(
-                        lambda sid: parse_grade_to_norm(grade_lookup.get(str(sid)))
-                    )
-                    # 只覆盖 _new_grade_norm 非 NaN 的部分（保留旧的）
-                    _mask = _new_grade_norm.notna()
-                    _acc_df.loc[_mask, "grade_norm"] = _new_grade_norm[_mask].values
-                history_df = _acc_df
-            else:
-                log.warning("predictions=None 且无累积 CSV，fallback smoke test (n=10)")
-                predictions = self.run_smoke_test_data(n=10)
-                from .core.optimization_kernel import build_history_df
-                history_df = build_history_df(predictions, sales_lookup=sales_lookup,
-                    grade_lookup=grade_lookup,
-                    has_internal_review=getattr(self.brand_cfg, "has_internal_review", True))
-            # history_df 直接用
-        else:
-            from .core.optimization_kernel import build_history_df
-            _acc_path = Path(self.brand_cfg.calibrated_dir) / "history_accumulated.csv"
-            history_df = build_history_df(predictions, sales_lookup=sales_lookup,
-                                          grade_lookup=grade_lookup,
-                                          has_internal_review=getattr(self.brand_cfg, "has_internal_review", True))
+        import pandas as _pd
+        from .core.optimization_kernel import build_history_df
 
-        # —— 累积逻辑（v1.4.78+）——
-        if predictions is None and _acc_path.exists():
-            # 已从 CSV 加载并更新销量，直接持久化覆盖即可
-            log.info("📂 从 CSV 旁路加载：%d 款（已更新销量）", len(history_df))
-        elif predictions is not None:
-            # 有新 preds → merge 到已有 CSV
-            import pandas as _pd
-            _n_new = len(history_df)
+        _acc_path = Path(self.brand_cfg.calibrated_dir) / "history_accumulated.csv"
+        _sales_lookup = sales_lookup or {}
+        _grade_lookup = grade_lookup or {}
+
+        # —— Step 1: 决定 history_df 的来源 ——
+        history_df: _pd.DataFrame | None = None
+        _source: str = ""  # 用于日志追踪
+        _used_accumulated: bool = False
+
+        if not predictions:
+            # predictions 为 None 或 [] → 尝试从累积 CSV 加载
+            if _acc_path.exists():
+                _acc_df = _pd.read_csv(_acc_path)
+                # 检查累积 CSV 是否有有效数据（至少有 F01 特征列和 style_id）
+                if "style_id" not in _acc_df.columns:
+                    log.error("❌ 累积 CSV 缺少 style_id 列 — 文件损坏，自动删除")
+                    _acc_path.unlink()
+                else:
+                    # 如果有 sales_lookup，检查 style_id 能否匹配
+                    if _sales_lookup:
+                        _n_match = int(_acc_df["style_id"].isin(_sales_lookup.keys()).sum())
+                        if _n_match == 0:
+                            # 累积 CSV 和 sales_lookup 完全不匹配 → 脏 mock 数据
+                            log.error(
+                                "❌ 累积 CSV(%d 行) 和 sales_lookup(%d 款) 零匹配 — "
+                                "累积 CSV 是不兼容的 mock 数据，已自动清理。"
+                                "请先在 📤 上传批次页跑预测再上传 Excel。",
+                                len(_acc_df), len(_sales_lookup),
+                            )
+                            _acc_path.unlink(missing_ok=True)
+                            return None
+                        _acc_df["sales"] = _acc_df["style_id"].map(_sales_lookup).fillna(
+                            _acc_df.get("sales", 0)
+                        )
+                    # grade_lookup 注入
+                    if _grade_lookup and "grade_norm" in _acc_df.columns:
+                        from .types import parse_grade_to_norm
+                        _new_grade_norm = _acc_df["style_id"].map(
+                            lambda sid: parse_grade_to_norm(_grade_lookup.get(str(sid)))
+                        )
+                        _mask = _new_grade_norm.notna()
+                        _acc_df.loc[_mask, "grade_norm"] = _new_grade_norm[_mask].values
+                    history_df = _acc_df
+                    _source = "累积 CSV"
+                    _used_accumulated = True
+                    log.info("📂 从累积 CSV 加载：%d 款（已注入销量）", len(history_df))
+            # ↓ 这里如果 history_df 仍为 None（无 CSV 或 CSV 刚被删），继续检查
+
+            if history_df is None:
+                # 没有任何可用数据源
+                if _sales_lookup:
+                    # 用户提供了销量 Excel 但没跑预测 —— 这是最常见的新手场景
+                    log.error(
+                        "❌ 缺少历史预测数据：你上传了 %d 款真实销量 Excel，"
+                        "但系统需要 VLM 特征 + 人设投票等预测产物才能跑 3Loop。"
+                        "请先到 📤 上传批次 页上传同样这批款号跑预测，"
+                        "再回到这里点 3Loop。",
+                        len(_sales_lookup),
+                    )
+                else:
+                    log.error(
+                        "❌ 没有任何校准数据：既没有历史预测结果（preds=[]），"
+                        "也没有累积 CSV，也没有销量 Excel（sales_lookup 为空）。"
+                        "请先到 📤 上传批次 页跑预测，或上传带销量的 Excel。"
+                    )
+                return None
+        else:
+            # predictions 有值 → build_history_df + 可选 merge 累积 CSV
+            history_df = build_history_df(
+                predictions,
+                sales_lookup=_sales_lookup,
+                grade_lookup=_grade_lookup,
+                has_internal_review=getattr(self.brand_cfg, "has_internal_review", True),
+            )
+            _source = f"新批次预测 ({len(history_df)} 款)"
+            log.info("📥 从 predictions 构造 history_df：%d 款", len(history_df))
+
+            # —— Step 2: 累积合并（新 preds + 旧 CSV）——
             if _acc_path.exists():
                 _old = _pd.read_csv(_acc_path)
+                _n_new_before_merge = len(history_df)
+                # 清理旧 CSV 中 sales=0 且不在新 preds 里的 mock 行
+                if "sales" in _old.columns:
+                    _n_zero_old = int((_old["sales"] == 0).sum())
+                    if _n_zero_old > 0:
+                        # 过滤：旧 CSV 里只保留 (sales>0) 或 (style_id 不在新 preds 里) 的行
+                        _new_ids = set(history_df["style_id"])
+                        _old_filtered = _old[
+                            (_old["sales"] > 0) | ~_old["style_id"].isin(_new_ids)
+                        ]
+                        _dropped = len(_old) - len(_old_filtered)
+                        if _dropped > 0:
+                            log.info(
+                                "🧹 清理旧 CSV 中 %d 行 mock 脏数据 (sales=0)",
+                                _dropped,
+                            )
+                        _old = _old_filtered
+                # combine_first: 新数据优先，旧数据兜底
                 _old_idx = _old.set_index("style_id")
                 _new_idx = history_df.set_index("style_id")
                 history_df = _new_idx.combine_first(_old_idx).reset_index()
                 log.info(
-                    "📦 新 preds 累积：旧 %d + 新 %d → 共 %d 款",
-                    len(_old), _n_new, len(history_df),
+                    "📦 累积合并：旧 %d + 新 %d → 共 %d 款",
+                    len(_old), _n_new_before_merge, len(history_df),
                 )
-            else:
-                log.info("📦 首次建立校准累积：%d 款 → %s", _n_new, _acc_path)
 
-        # 持久化（即使后续因为样本不足跳过校准，数据也不丢）
-        _acc_path.parent.mkdir(parents=True, exist_ok=True)
-        history_df.to_csv(_acc_path, index=False)
+        # —— Step 3: 保存累积 ——
+        if len(history_df) > 0:
+            _acc_path.parent.mkdir(parents=True, exist_ok=True)
+            history_df.to_csv(_acc_path, index=False)
+            log.info("💾 累积持久化 → %s (%d 款)", _acc_path, len(history_df))
 
+        # —— Step 4: 销量信号检查 ——
         sales_col = "sales"
         if sales_col not in history_df.columns or history_df[sales_col].sum() == 0:
+            # 没有有效销量信号 → 清掉这个坏累积 CSV
             log.warning(
-                "⚠️ predictions 全无销量（info.sales_qty=0 且 sales_lookup 为空），"
-                "3Loop 无回归信号，跳过校准。请用 sales_lookup 注入真实销量。"
+                "⚠️ history_df 无有效销量（sales sum=0 或缺失），跳过 3Loop 校准。"
+                "累积 CSV 已自动清理。"
             )
+            _acc_path.unlink(missing_ok=True)
             return None
 
         if out_dir is None:
