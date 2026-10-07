@@ -510,7 +510,7 @@ def extract_style_features(
 
     # ========== VLM 级 Fallback 第 2 层 ==========
     # 主 client（智谱 VLM）全挂 → 自动切本地 Ollama VLM 兜底
-    # 典型场景：glm-4.6v-flash 连续 3 次 1305 模型拥塞
+    # 典型场景：glm-4.6v-flash 连续 5 次 1305 模型拥塞
     if not model_results and llm_backend in ("hybrid", "zhipu"):
         log.warning(
             "[%s] 云端 VLM 全部失败 (%s)，自动切 Ollama VLM fallback ...",

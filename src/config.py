@@ -31,7 +31,7 @@ class APIConfig:
 
     qpm_limit: int = 45
     max_concurrent_personas: int = 8
-    max_retries: int = 3
+    max_retries: int = 5
 
 
 # ========== 数据路径 ==========
@@ -346,7 +346,7 @@ def load_config(
         ],
         qpm_limit=int(os.getenv("QPM_LIMIT", "45")),
         max_concurrent_personas=int(os.getenv("MAX_CONCURRENT_PERSONAS", "8")),
-        max_retries=int(os.getenv("MAX_RETRIES", "3")),
+        max_retries=int(os.getenv("MAX_RETRIES", "5")),
     )
 
     paths = PathConfig(
