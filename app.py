@@ -2134,7 +2134,8 @@ def render_page_detail():
 
             # 卡片：按 yaml weight 降序（核心人群优先）
             # v1.4.96.4 重构时丢失这行赋值 → votes_sorted 未定义
-            votes_sorted = sorted(votes, key=_vote_sort_key_fn)
+            # vote_sort_key 签名: (vv, persona_lookup) → 必须传 _p_lookup
+            votes_sorted = sorted(votes, key=lambda v: _vote_sort_key_fn(v, _p_lookup))
 
             # 一行 2 张
             card_cols = st.columns(2)
