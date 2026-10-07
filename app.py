@@ -2172,9 +2172,12 @@ def render_page_detail():
                     _veto_dim = pp.get("child_veto_dimensions", []) if isinstance(pp, dict) else []
 
 
-                    _fab_html = chip_row("在意", _fab, "#e8f0ea", "#3d7d3c")
-                    _col_html = chip_row("偏好颜色", _cols_pref, "#eef3f9", "#5772a0")
-                    _veto_html = chip_row("否决雷区", _veto_dim, "#fdecea", "#b14a4a")
+                    # chip_row: 签名 (title, items, *, col_bg, col_txt, limit) —
+                    # col_bg / col_txt 是 keyword-only，不能位置传
+                    # v1.4.96.4 重构改成 keyword-only 后，3 处调用全没同步 → 连续 5 个 tag 崩
+                    _fab_html = chip_row("在意", _fab, col_bg="#e8f0ea", col_txt="#3d7d3c")
+                    _col_html = chip_row("偏好颜色", _cols_pref, col_bg="#eef3f9", col_txt="#5772a0")
+                    _veto_html = chip_row("否决雷区", _veto_dim, col_bg="#fdecea", col_txt="#b14a4a")
 
                     # 主体理由：优先最长的层理由，否则反对理由，否则兜底
                     _main_reason = ""
