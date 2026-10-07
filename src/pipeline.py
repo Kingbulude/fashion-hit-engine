@@ -845,6 +845,18 @@ class PredictionPipeline:
                 _acc_df = _pd.read_csv(_acc_path)
                 # 用 sales_lookup 更新销量（按 style_id 匹配）
                 if sales_lookup:
+                    _n_match = int(_acc_df["style_id"].isin(sales_lookup.keys()).sum())
+                    if _n_match == 0:
+                        # v1.4.98 hotfix: 累积 CSV 的 style_id 和 sales_lookup 完全不匹配
+                        # （通常是 mock 脏数据 vs 真实品牌款号）
+                        # 不能继续 fillna(旧 sales) — 旧 sales 可能是 mock 数据全 0
+                        log.error(
+                            "❌ 累积 CSV(%d 行) 和 sales_lookup(%d 款) 零匹配 — "
+                            "累积 CSV 可能是 mock 脏数据。"
+                            "请先在 📤 上传批次页跑预测，或清空累积 CSV 后重试。",
+                            len(_acc_df), len(sales_lookup),
+                        )
+                        return None
                     _acc_df["sales"] = _acc_df["style_id"].map(sales_lookup).fillna(
                         _acc_df.get("sales", 0)
                     )
