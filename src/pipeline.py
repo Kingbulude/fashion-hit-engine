@@ -570,6 +570,7 @@ class PredictionPipeline:
         from statistics import pstdev
         top_buy = [r for r, _ in sorted(buy_reasons_map.items(), key=lambda x: -x[1])[:3]]
         top_opp = [r for r, _ in sorted(oppose_reasons_map.items(), key=lambda x: -x[1])[:3]]
+        # v1.4.95+: mock 路径也填 metadata，真实路径走 run_persona_voting() 自己会填更丰富的
         return VotingResult(
             style_id=feats.style_id,
             votes=votes,
@@ -580,6 +581,12 @@ class PredictionPipeline:
             top_buy_reasons=top_buy,
             top_oppose_reasons=top_opp,
             score_std=round(pstdev(all_scores), 2) if len(all_scores) >= 2 else 0.0,
+            metadata={
+                "three_phase": False,
+                "is_mock": True,
+                "phase2_error": None,
+                "phase3_errors": [],
+            },
         )
 
     # ===== 单款运行（mock或真实，取决于 llm_backend）=====

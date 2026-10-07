@@ -41,6 +41,10 @@ class StyleFeatures:
     """一个款的10个特征完整结果"""
     style_id: str
     features: dict[str, FeatureScore] = field(default_factory=dict)
+    # v1.4.95+: 特征提取层运行元数据
+    # 典型键：vlm_errors (list[str]), fallback_used (str | None: "ollama_vlm" / "brand_default"),
+    #         vlm_models_tried (list[str]), fatal_quota_triggered (bool)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_row(self) -> dict[str, float]:
         """导出为平键值对，用于校准层回归"""
@@ -204,13 +208,21 @@ class PersonaIdentityAxes:
     price: str
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class DecisionLayer:
+    """决策层定义（冻结不可变 dataclass）。
+
+    frozen=True 让实例可 hash，天然解决 "TypeError: cannot use 'DecisionLayer' as
+    a dict key (unhashable type)" 这类 bug — 任何地方都能安全地把 DecisionLayer
+    当 set 元素 / dict key，而不必小心翼翼地写 for l in layers 然后 l.id。
+
+    slots=True 顺便把内存也降下来了。
+    """
     id: str
     name: str
-    persona_axis_key: str
-    role: Literal["decider", "veto"]
-    default_weight: float
+    persona_axis_key: str = ""
+    role: Literal["decider", "veto"] = "decider"
+    default_weight: float = 1.0
 
 
 @dataclass

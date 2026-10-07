@@ -335,6 +335,13 @@ class FeatureExtractionEngine:
                 anchor_level=entry["anchor_level"],
                 reason="",
             )
+        # v1.4.95+: mock 路径也填 metadata，让 UI 层能区分 mock 和真实 VLM
+        result.metadata = {
+            "is_mock": True,
+            "vlm_models_tried": [],
+            "vlm_models_succeeded": [],
+            "fallback_used": None,
+        }
         return result
 
     def extract(
@@ -347,7 +354,6 @@ class FeatureExtractionEngine:
         return extract_style_features(
             client, info, cfg=None, brand_cfg=self.brand_cfg, progress=progress,
         )
-
     def extract_batch(
         self,
         client: BailianClient,
@@ -495,6 +501,9 @@ def extract_style_features(
 
     model_results: list[dict[str, dict[str, Any]]] = []
     errors: list[str] = []
+    # v1.4.95+: fallback 路径追踪（显式 flag，不依赖 errors 清空后的 post-hoc 检测）
+    ollama_fallback_used = False
+    brand_default_fallback_used = False
     pbar = tqdm(models, desc=f"特征提取[{info.style_id}]", leave=False, disable=not progress)
     for m in pbar:
         pbar.set_postfix_str(m)
@@ -528,6 +537,7 @@ def extract_style_features(
                         model=om, brand_context=brand_context,
                     )
                     model_results.append(res)
+                    ollama_fallback_used = True
                     errors = []  # Ollama 成功了，清空之前的错误
                     log.info("[%s] Ollama VLM %s fallback 成功！", info.style_id, om)
                     break
@@ -564,10 +574,31 @@ def extract_style_features(
                 "confidence": 0.3,  # 低置信度，校准层会忽略
             }
         model_results.append(default_result)
+        brand_default_fallback_used = True
         errors = []
 
     feat_defs = features_cfg["features"]
     result = StyleFeatures(style_id=info.style_id)
+
+    # v1.4.95+: 三层错误处理 Level 3 — 把错误/fallback 信息塞进 metadata，
+    # 让 pipeline 层 / UI 层都能看到 VLM 到底经历了什么
+    if brand_default_fallback_used:
+        fallback_used = "brand_default"
+    elif ollama_fallback_used:
+        fallback_used = "ollama_vlm"
+    else:
+        fallback_used = None
+
+    result.metadata = {
+        "vlm_errors": list(errors),
+        "vlm_models_tried": list(models),
+        "vlm_models_succeeded": [
+            models[m_idx] if m_idx < len(models) else f"model{m_idx}"
+            for m_idx in range(len(model_results))
+        ],
+        "fallback_used": fallback_used,
+        "fatal_quota_triggered": False,  # 致命错误已提前 raise，运行到这里肯定不是
+    }
 
     all_keys = list(feat_defs.keys())
     for key in all_keys:

@@ -1389,6 +1389,7 @@ def run_persona_voting(
 
     # Phase2: 外部质疑
     expert_challenge: dict[str, Any] | None = None
+    phase2_error: str | None = None
     if three_phase and len(persona_list) >= 3:
         try:
             voting_initial = aggregate_votes(
@@ -1406,10 +1407,12 @@ def run_persona_voting(
             else:
                 log.info("[%s] Phase2 专家挑战跳过（返回空）", info.style_id)
         except Exception as e:
+            phase2_error = f"{type(e).__name__}: {e}"
             log.warning("[%s] Phase2 专家挑战异常，降级为两阶段: %s", info.style_id, e)
             expert_challenge = None
 
     # Phase3: 复评
+    phase3_errors: list[str] = []
     if expert_challenge is not None:
         log.info("[%s] Phase3 人设复评", info.style_id)
         for v in votes:
@@ -1421,18 +1424,27 @@ def run_persona_voting(
             if persona_dict is None:
                 continue
 
-            review = _run_persona_review(
-                client, persona=persona_dict, info=info, feats=feats,
-                layers=layers, layer_weights=layer_weights,
-                initial_layer_scores=v.initial_layer_scores,
-                initial_layer_reasons=v.layer_reasons,
-                expert_challenge=expert_challenge,
-                brand_cfg=brand_cfg, model=expert_model,
-            )
+            try:
+                review = _run_persona_review(
+                    client, persona=persona_dict, info=info, feats=feats,
+                    layers=layers, layer_weights=layer_weights,
+                    initial_layer_scores=v.initial_layer_scores,
+                    initial_layer_reasons=v.layer_reasons,
+                    expert_challenge=expert_challenge,
+                    brand_cfg=brand_cfg, model=expert_model,
+                )
+            except Exception as e:
+                err = f"{v.persona_id}: {type(e).__name__}: {e}"
+                phase3_errors.append(err)
+                log.warning("[%s] Phase3 [%s] 复评失败，保留 Phase1 分数: %s",
+                            info.style_id, v.persona_id, e)
+                # 保留 initial 分数，review_delta=0
+                v.review_delta = {l.id: 0.0 for l in layers}
+                continue
 
             v.review_delta = {
-                lid: review["layer_scores"].get(lid, 5.0) - v.initial_layer_scores.get(lid, 5.0)
-                for lid in layers
+                l.id: review["layer_scores"].get(l.id, 5.0) - v.initial_layer_scores.get(l.id, 5.0)
+                for l in layers
             }
             v.layer_scores = review["layer_scores"]
             v.review_adopted_feedback = review["adopted_feedback"]
@@ -1446,7 +1458,7 @@ def run_persona_voting(
             )
     else:
         for v in votes:
-            v.review_delta = {lid: 0.0 for lid in layers}
+            v.review_delta = {l.id: 0.0 for l in layers}
 
     # 聚合
     if brand_cfg is not None:
@@ -1460,6 +1472,8 @@ def run_persona_voting(
     result.metadata = {
         "three_phase": expert_challenge is not None,
         "expert_bias": expert_challenge.get("systematic_bias", "") if expert_challenge else "",
+        "phase2_error": phase2_error,
+        "phase3_errors": phase3_errors,
     }
     return result
 class PersonaVotingEngine:

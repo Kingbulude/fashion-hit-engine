@@ -43,6 +43,16 @@ from src.grading import assign_relative_grades
 from src.llm_client import is_fatal_quota_error
 from src.pipeline import PredictionPipeline
 from src.report import render_single_report_markdown
+from src.ui.components import (
+    render_breadcrumb,
+    thumb_b64,
+    anchor_color,
+    score_color_v1490,
+    vote_sort_key as _vote_sort_key_fn,
+    decision_label,
+    chip_row,
+    render_diagnostic_banner,
+)
 from src.types import (
     StyleInfo, FullPrediction, GradeResult, BrandConfig,
     SALES_QTY_COL_ALIASES, SALES_LABEL_COL_ALIASES,
@@ -1022,19 +1032,7 @@ if "style_to_images" not in st.session_state:  # 款号 -> list[图片路径]
     st.session_state.style_to_images = {}
 
 
-# ========== 面包屑组件（公共） ==========
-def render_breadcrumb(*, suffix: str | None = None) -> None:
-    parts = []
-    if st.session_state.batch_name:
-        parts.append(f"{st.session_state.batch_name}")
-    if suffix:
-        parts.append(suffix)
-    st.markdown(
-        "<div class='breadcrumb'>"
-        + " <span class='sep'>·</span> ".join(parts)
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+# render_breadcrumb 已抽到 src/ui/components.py
 
 
 # ========== 公共函数 ==========
@@ -1597,6 +1595,19 @@ def render_page_summary():
         st.error("❌ 没有任何款式成功处理，请检查输入数据或 LLM 配置")
         return
 
+    # v1.4.95+: 三层错误处理 UI — 批次聚合诊断（VLM fallback / Phase2-3 失败 / calibration 加载错误）
+    try:
+        from src.calibration_loader import load_calibration as _load_cal
+        _cal = _load_cal(brand_cfg.calibrated_dir)
+        render_diagnostic_banner(
+            predictions=preds,
+            calibration_load_errors=_cal.load_errors or None,
+            calibration_loop_applied=_cal.loop_applied or None,
+            calibration_spearman_gains=_cal.spearman_gains or None,
+        )
+    except Exception:
+        render_diagnostic_banner(predictions=preds)
+
     # 批次收尾（只执行一次，防止页面 rerun 重复写历史库）：
     # ① 批次内相对分级 ② 持久化到历史库
     if not st.session_state.get("batch_finalized"):
@@ -1749,6 +1760,9 @@ def render_page_detail():
                             index=style_ids.index(selected) if selected in style_ids else 0)
     p = next(x for x in preds if x.info.style_id == selected)
 
+    # v1.4.95+: 三层错误处理 UI — 如果这款有 VLM fallback / Phase2-3 失败，在这里提醒
+    render_diagnostic_banner(prediction=p)
+
     g: GradeResult = p.grade
     color_map = {"S": "#b98888", "A+": "#c8a272", "A": "#9fb893", "P": "#9a9489"}
     c = color_map.get(g.grade, "#9a9489")
@@ -1778,25 +1792,6 @@ def render_page_detail():
     """, unsafe_allow_html=True)
 
     # ===== 左右分栏：款式图片+优劣势 (1.3) + 基本信息+BARS (1.4) =====
-    def _thumb_b64(ipath: str, size=(400, 520)) -> str:
-        """PIL 中心裁剪 + 缩放到统一规格 → base64 data URI"""
-        try:
-            img = Image.open(ipath).convert("RGB")
-            w, h = img.size
-            tw, th = size
-            ratio = tw / th
-            if w / h > ratio:
-                nw = int(h * ratio); left = (w - nw) // 2
-                img = img.crop((left, 0, left + nw, h))
-            else:
-                nh = int(w / ratio); top = (h - nh) // 2
-                img = img.crop((0, top, w, top + nh))
-            img = img.resize(size, Image.LANCZOS)
-            buf = io.BytesIO(); img.save(buf, format="JPEG", quality=82)
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            return f'<img src="data:image/jpeg;base64,{b64}" />'
-        except Exception:
-            return ""
 
     left, right = st.columns([1.6, 1.4])
     with left:
@@ -1816,7 +1811,7 @@ def render_page_detail():
             _thumbs = st.columns(min(len(image_paths), 3))
             for i, ipath in enumerate(image_paths[:3]):
                 with _thumbs[i % 3]:
-                    _img = _thumb_b64(str(ipath))
+                    _img = thumb_b64(str(ipath))
                     if _img:
                         st.markdown(
                             f'<div class="thumb-wrap">'
@@ -1953,25 +1948,7 @@ def render_page_detail():
     st.divider()
 
     # ===== 下方：三列指标（全宽）=====
-    def _anchor_color(anchor_level: int | None) -> str:
-        """v1.4.90+: 按视觉锚定档着色，无好坏语义"""
-        _map = {1: "#c85a5a", 2: "#d68c45", 3: "#a8b5c4",
-                4: "#5a8a9a", 5: "#3d7d8a"}
-        return _map.get(anchor_level or 3, "#a8b5c4")
 
-    def _score_color_v1490(score: float) -> str:
-        """v1.4.90+: 三列指标的颜色：score 是 anchor 区间中点（1.5/3.5/5.5/7.5/9.5），
-        无绝对好坏语义，但 anchor 跨度越大通常表示视觉特征越极端——用于辨识度提醒。"""
-        if score >= 8.5:   return "#3d7d8a"  # 档5 视觉上较突出
-        if score >= 6.5:   return "#5a8a9a"  # 档4
-        if score >= 4.5:   return "#a8b5c4"  # 档3 中性
-        if score >= 2.5:   return "#d68c45"  # 档2
-        return "#c85a5a"                       # 档1
-
-
-    # engine 权重（取已校准 weights，兜底 yaml 默认 0.35/0.30/0.35）
-    _ew = getattr(brand_cfg, "engine_weights", None) or {}
-    defw = brand_cfg.default_engine_weights if brand_cfg else {}
     _w_persona = float(_ew.get("persona_voting", defw.get("persona_voting", 0.35)))
     _w_channel = float(_ew.get("channel_scoring", defw.get("channel_scoring", 0.30)))
     _w_price = float(_ew.get("price_value", defw.get("price_value", 0.35)))
@@ -2150,19 +2127,6 @@ def render_page_detail():
             st.divider()
 
             # 卡片：按 yaml weight 降序（核心人群优先）
-            def _vote_sort_key(vv):
-                pp = _p_lookup.get(vv.persona_id, {})
-                return -float(pp.get("weight", 0.0))
-
-            votes_sorted = sorted(votes, key=_vote_sort_key)
-
-            def _decision_label(sc: float) -> tuple[str, str, str]:
-                """(emoji, 中文, 主色)"""
-                if sc >= 7:
-                    return "✅", "会买", "#6ca060"
-                if sc >= 4:
-                    return "⏳", "观望", "#a8b5c4"
-                return "❌", "不买", "#d64545"
 
             # 一行 2 张
             card_cols = st.columns(2)
@@ -2186,7 +2150,7 @@ def render_page_detail():
                             )
 
                     # 决策徽章
-                    _em, _lbl, _col = _decision_label(v.final_score)
+                    _em, _lbl, _col = decision_label(v.final_score)
                     _weight = float(pp.get("weight", 0.0)) * 100 if pp else 0
                     _weight_html = (
                         f'<span style="font-size:0.7em;color:#8a857d;'
@@ -2198,23 +2162,10 @@ def render_page_detail():
                     _cols_pref = pp.get("color_preference", []) if isinstance(pp, dict) else []
                     _veto_dim = pp.get("child_veto_dimensions", []) if isinstance(pp, dict) else []
 
-                    def _chip_row(title, items, col_bg="#fff7f0", col_txt="#a06830"):
-                        if not items:
-                            return ""
-                        chips_html = "".join(
-                            f'<span style="background:{col_bg};color:{col_txt};'
-                            f'padding:0 6px;border-radius:4px;font-size:0.72em;'
-                            f'margin:1px 2px;display:inline-block">{it}</span>'
-                            for it in items[:4]
-                        )
-                        return (
-                            f'<div style="margin:3px 0;font-size:0.75em;color:#6b655d">'
-                            f'· {title}：{chips_html}</div>'
-                        )
 
-                    _fab_html = _chip_row("在意", _fab, "#e8f0ea", "#3d7d3c")
-                    _col_html = _chip_row("偏好颜色", _cols_pref, "#eef3f9", "#5772a0")
-                    _veto_html = _chip_row("否决雷区", _veto_dim, "#fdecea", "#b14a4a")
+                    _fab_html = chip_row("在意", _fab, "#e8f0ea", "#3d7d3c")
+                    _col_html = chip_row("偏好颜色", _cols_pref, "#eef3f9", "#5772a0")
+                    _veto_html = chip_row("否决雷区", _veto_dim, "#fdecea", "#b14a4a")
 
                     # 主体理由：优先最长的层理由，否则反对理由，否则兜底
                     _main_reason = ""
@@ -2225,7 +2176,7 @@ def render_page_detail():
                         _main_reason = v.opposing_reason
                     if not _main_reason:
                         # 兜底：从决策反推一句话
-                        _lbl_for = _decision_label(v.final_score)[1]
+                        _lbl_for = decision_label(v.final_score)[1]
                         _main_reason = f"该人群综合判断为「{_lbl_for}」，LLM 未返回详细理由。"
 
                     _card_html = f"""

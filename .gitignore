@@ -38,3 +38,4 @@ data/*.csv
 data/images/
 .uploads/
 .trae/token
+brand_profiles/*/calibrated/

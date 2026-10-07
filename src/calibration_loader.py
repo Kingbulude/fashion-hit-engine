@@ -56,6 +56,13 @@ class CalibrationResult:
         # v1.4.44+: 分类增益 + PatternMiner 路径
         self.classification_gains: dict[str, dict[str, float]] = {}
         self.pattern_yaml_path: str | None = None   # calibrated_dir/memory/*_patterns.yaml
+        # v1.4.95+: 三层错误处理 — 追踪 YAML 加载失败
+        # key = 文件名, value = "ExceptionType: message"
+        self.load_errors: dict[str, str] = {}
+        # v1.4.96+: 各 Loop 是否真的生效（训练返回 applied=true）
+        # key = "loop1_vlm" / "loop2_persona" / "loop3_engine" / "loop3_channel"
+        # value = True（训练有提升，已生效）| False（回滚到默认）| None（该 Loop 无 YAML）
+        self.loop_applied: dict[str, bool | None] = {}
 
     def __repr__(self) -> str:
         parts = []
@@ -64,13 +71,22 @@ class CalibrationResult:
         if self.channel_split:
             parts.append(f"channel={self.channel_split}")
         if self.persona_weights:
-            nz = sum(1 for v in self.persona_weights.values() if v > 0.001)
-            parts.append(f"persona({nz}/30非均匀)")
+            # v1.4.96+: 修 bug — 用"偏离均匀 1/30"判断非均匀，
+            # 之前用 v > 0.001 会把均匀分布的 1/30≈0.033 全算成"非均匀"
+            n_non_even = sum(1 for v in self.persona_weights.values()
+                             if abs(v - 1/30) > 0.01)
+            parts.append(f"persona({n_non_even}/30非均匀)")
         if self.feature_biases:
             non_one = sum(1 for v in self.feature_biases.values() if abs(v - 1.0) > 0.01)
             parts.append(f"biases({non_one}/10有调整)")
         if self.pattern_yaml_path:
             parts.append(f"pattern={Path(self.pattern_yaml_path).name}")
+        if self.load_errors:
+            parts.append(f"load_errors({len(self.load_errors)})")
+        if self.loop_applied:
+            applied = sum(1 for v in self.loop_applied.values() if v is True)
+            total = sum(1 for v in self.loop_applied.values() if v is not None)
+            parts.append(f"loops_applied({applied}/{total})")
         if not parts:
             return "CalibrationResult(empty)"
         return "CalibrationResult(" + ", ".join(parts) + ")"
@@ -152,8 +168,15 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
                 old_sp = (data.get("engine") or {}).get("old_spearman", 0)
                 new_sp = (data.get("engine") or {}).get("new_spearman", 0)
                 result.spearman_gains["loop3_engine"] = new_sp - old_sp
+            # v1.4.96+: 记录 Loop3 engine/channel 各自的 applied 状态
+            if "engine" in data:
+                result.loop_applied["loop3_engine"] = bool((data.get("engine") or {}).get("applied", False))
+            if "channel" in data:
+                result.loop_applied["loop3_channel"] = bool((data.get("channel") or {}).get("applied", False))
 
         except Exception as e:
+            err_str = f"{type(e).__name__}: {e}"
+            result.load_errors["loop3_ensemble_weights.yaml"] = err_str
             log.warning("加载 loop3_ensemble_weights.yaml 失败: %s", e)
 
     # ===== Loop2: persona 分布权重 =====
@@ -175,8 +198,12 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
             old_sp = data.get("old_spearman", 0)
             new_sp = data.get("new_spearman", 0)
             result.spearman_gains["loop2_persona"] = new_sp - old_sp
+            # v1.4.96+: Loop2 applied 状态
+            result.loop_applied["loop2_persona"] = bool(data.get("applied", False))
 
         except Exception as e:
+            err_str = f"{type(e).__name__}: {e}"
+            result.load_errors["loop2_persona_distribution_weights.yaml"] = err_str
             log.warning("加载 loop2_persona_distribution_weights.yaml 失败: %s", e)
 
     # ===== Loop1: feature biases =====
@@ -198,8 +225,12 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
             old_sp = data.get("old_spearman_avg", 0)
             new_sp = data.get("new_spearman_avg", 0)
             result.spearman_gains["loop1_vlm"] = new_sp - old_sp
+            # v1.4.96+: Loop1 applied 状态
+            result.loop_applied["loop1_vlm"] = bool(data.get("applied", False))
 
         except Exception as e:
+            err_str = f"{type(e).__name__}: {e}"
+            result.load_errors["loop1_vlm_feature_biases.yaml"] = err_str
             log.warning("加载 loop1_vlm_feature_biases.yaml 失败: %s", e)
 
     # ===== v1.4.44+: 分类增益（从各 loop YAML 的 classification 字段提取）=====
@@ -218,6 +249,8 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
                         "p_at_k_delta": float(cls.get("delta_p_at_k", 0.0)),
                     }
             except Exception as e:
+                err_str = f"{type(e).__name__}: {e}"
+                result.load_errors[f"classification::{yaml_name}"] = err_str
                 log.debug("读取 %s 分类增益失败: %s", yaml_name, e)
 
     # Loop3 分类增益（复用上面已解析的 l3_path）
@@ -233,6 +266,8 @@ def load_calibration(calibrated_dir) -> CalibrationResult:
                         "p_at_k_delta": float(cls.get("delta_p_at_k", 0.0)),
                     }
         except Exception as e:
+            err_str = f"{type(e).__name__}: {e}"
+            result.load_errors["classification::loop3_ensemble_weights.yaml"] = err_str
             log.debug("读取 loop3 分类增益失败: %s", e)
 
     # ===== v1.4.44+: PatternMiner YAML（calibrated_dir/memory/ 下最新的）=====
