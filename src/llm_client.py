@@ -416,6 +416,8 @@ def retry_with_backoff(
     # 连续多少次 1305 就提前 abort（模型真的挂了，再等也没用）
     # 默认 9999 = 不提前 abort，让上层决定（ZhipuClient 会显式传自己的次数）
     abort_on_consecutive_1305: int = 9999,
+    # v1.4.107 NEW: 单次等待 cap（用户反馈第二次等 50s 太夸张）
+    max_wait_per_retry: float = 9999.0,
     **kwargs,
 ) -> LLMResponse:
     last_err: LLMResponse | None = None
@@ -457,9 +459,9 @@ def retry_with_backoff(
             )
 
             if is_retryable:
-                # 1305 模型拥塞 → 退避更激进（模型恢复比限流慢）
+                # 1305 模型拥塞 → 退避更激进（但 cap max_wait_per_retry）
                 if "1305" in err_text:
-                    base = wait_429_base * 2 if wait_429_base > 0 else 20
+                    base = wait_429_base * 1.5 if wait_429_base > 0 else 5
                     label = "模型拥塞(1305)"
                 elif wait_429_base > 0:
                     base = wait_429_base
@@ -468,6 +470,8 @@ def retry_with_backoff(
                     base = 2
                     label = "限流"
                 wait = base * (2 ** (attempt - 1))
+                # v1.4.107 NEW: 单次 cap，防止指数爆炸
+                wait = min(wait, max_wait_per_retry)
                 # +-30% jitter，避免多个并发请求同时重试形成风暴
                 wait *= (0.7 + _random.random() * 0.6)
                 wait = round(wait, 1)
@@ -489,6 +493,7 @@ def retry_with_backoff(
                 return LLMResponse(content="", model=kwargs.get("model", "?"), error=err_msg)
             last_err = LLMResponse(content="", model=kwargs.get("model", "?"), error=err_msg)
             wait = (2 ** attempt) + _random.random() * 2
+            wait = min(wait, max_wait_per_retry)  # v1.4.107: 异常重试也 cap
             log.warning("[%s] 异常重试 %d/%d: %s", kwargs.get("model", "?"), attempt, max_retries, err_msg[:120])
             time.sleep(wait)
     log.error("[%s] 重试耗尽（%d 次），最后错误: %s", kwargs.get("model", "?"), max_retries,
@@ -649,15 +654,16 @@ class ZhipuClient:
         return parsed
 
     # ---- 指数退避重试（智谱 1305/429 都要扛过去）----
+    # v1.4.107: 严格 5 次，间隔缩短（用户反馈第二次等 50s 太夸张）
+    # 退避序列: 4s → 8s → 16s → 32s → return（不再等更久）
     def _retry_loop(self, fn, **kwargs) -> LLMResponse:
-        # max(self.cfg.max_retries, 6)：智谱免费层 1305 模型拥塞 + 429 限流都可能来
-        zhipu_retries = max(self.cfg.max_retries, 6)
-        # abort_on_consecutive_1305 必须显式等于 zhipu_retries ——
-        # 不能用默认 3，否则连续 3 次 1305 就提前 abort，
-        # 剩下 3 次 retry 被跳过，Ollama fallback 永远没机会触发。
         return retry_with_backoff(
-            fn, max_retries=zhipu_retries, wait_429_base=15.0,
-            abort_on_consecutive_1305=zhipu_retries, **kwargs,
+            fn,
+            max_retries=self.cfg.max_retries,  # config 默认 5，不再强制拉到 6
+            wait_429_base=3.0,                 # 429 限流 base 3s → 1305 会 ×2=6s
+            abort_on_consecutive_1305=self.cfg.max_retries,
+            max_wait_per_retry=30.0,           # v1.4.107 NEW: 单次等待 cap 30s（防指数爆炸）
+            **kwargs,
         )
 
 

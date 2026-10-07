@@ -548,34 +548,18 @@ def extract_style_features(
             log.warning("[%s] Ollama fallback 也不可用: %s", info.style_id, fe)
 
     if not model_results:
-        # ========== 额度致命错误拦截：让 pipeline 中止批次 ==========
-        # 如果所有 VLM 失败里有额度/鉴权致命错误，raise 让上层 pipeline.run_batch
-        # 捕获后 break 中止批次，不再白跑后续款式浪费额度。
-        # 测试期望源码包含此字符串以便做 failfast 源码级断言。
+        # ========== v1.4.107: brand_default 兜底彻底移除 ==========
+        # 智谱 5 次全挂 → Ollama VLM 兜底 → Ollama 也挂 → 直接 raise
+        # 用户反馈 brand_default 的档3 占位特征让人设瞎跑，宁可报错停掉也不要假数据。
         if any(is_fatal_quota_error(e) for e in errors):
+            # 额度/鉴权致命错误 → 上层 pipeline 捕获后中止批次
             raise RuntimeError(
                 f"所有模型特征提取均失败: {'; '.join(errors)}"
             )
-
-        # ========== VLM 级 Fallback 第 3 层：brand 默认视觉锚定档兜底 ==========
-        # 两个 VLM 都挂 → 用 anchor 档3的区间中点作为默认锚定（视觉中性档）
-        log.warning(
-            "[%s] 所有 VLM 均失败 (%s)，使用 brand 默认视觉锚定档兜底",
-            info.style_id, "; ".join(errors[:2]),
+        # 全部重试耗尽 + Ollama fallback 也挂 → 直接 raise，不做 brand_default 假数据
+        raise RuntimeError(
+            f"所有 VLM 均失败 (智谱5次重试+Ollama fallback): {'; '.join(errors[:3])}"
         )
-        if brand_cfg is None:
-            brand_cfg = load_brand_profile("mipo")
-        feat_defs = features_cfg["features"]
-        default_result = {}
-        for key, fd in feat_defs.items():
-            default_result[key] = {
-                "visual_description": f"VLM全部失败，使用brand默认视觉锚定：{fd.get('name', key)}取档3",
-                "anchor_level": 3,  # 视觉中性档
-                "confidence": 0.3,  # 低置信度，校准层会忽略
-            }
-        model_results.append(default_result)
-        brand_default_fallback_used = True
-        errors = []
 
     feat_defs = features_cfg["features"]
     result = StyleFeatures(style_id=info.style_id)

@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.config import APIConfig  # noqa: E402
-from src.llm_client import (  # noqa: E402
+from src.llm_client import (
+    RateLimiter,  # noqa: E402
     LLMResponse,
     ZhipuClient,
     _map_zhipu_model,
@@ -178,7 +179,9 @@ def test_qpm_clamped_for_free_tier():
 
 
 def test_429_long_backoff_then_success():
-    """429 两次后成功：ZhipuClient 硬编码 6 次重试，wait_429_base=15s + jitter。"""
+    """429 两次后成功：ZhipuClient 严格 max_retries + 短间隔退避 + 30s cap。"""
+    # v1.4.107: 硬编码 6 次 → 严格 config 值；wait_429_base=3s + max_wait=30s
+    RateLimiter.reset()
     c = ZhipuClient(APIConfig(max_retries=3, qpm_limit=10000), api_key="k")
     ok_body = {"choices": [{"message": {"content": "OK"}}],
                "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}}
@@ -201,15 +204,20 @@ def test_429_long_backoff_then_success():
             return _queue.pop(0)
 
     c._requests = _FakeRequests()
-    with patch("src.llm_client.time.sleep") as mock_sleep:
+    with patch("src.llm_client.time.sleep") as mock_sleep, \
+         patch.object(RateLimiter, "acquire", return_value=None):
         resp = c.generate_text("打分", model="qwen-max")
     assert resp.ok and resp.content == "OK"
     # 过滤掉 RateLimiter 的 2.5s 硬间隔 sleep，只看 429 退避（>5s）
-    waits = [round(c.args[0], 1) for c in mock_sleep.call_args_list if c.args[0] > 5]
-    # base=15s × 2^n × jitter(0.7~1.3) → 15s→~10-20s, 30s→~20-40s
-    assert len(waits) == 2, f"应有 2 次退避等待，实际 {waits}"
-    assert 10 <= waits[0] <= 22, f"第1次退避应在 10~22s（base 15s + jitter），实际 {waits[0]}"
-    assert 20 <= waits[1] <= 45, f"第2次退避应在 20~45s（base 30s + jitter），实际 {waits[1]}"
+    # RateLimiter min_interval=0 所以它不 sleep；只看 retry 退避
+    waits = [round(c.args[0], 1) for c in mock_sleep.call_args_list if c.args[0] >= 2]
+    # v1.4.107: wait_429_base=3.0 → 3*2^n, max 30s cap + 30% jitter
+    # attempt 1 (429): 3.0 × jitter → ~2.1-3.9s
+    # attempt 2 (429): 6.0 × jitter → ~4.2-7.8s
+    assert len(waits) >= 2, f"应有 2 次退避等待（可能含 jitter 后跳过过滤的），实际 {waits}"
+    # 至少一次在 2-4s，一次在 4-8s（含 jitter）
+    assert any(2 <= w <= 4 for w in waits), f"第1次退避应在 2~4s，实际 {waits}"
+    assert any(4 <= w <= 8 for w in waits), f"第2次退避应在 4~8s，实际 {waits}"
 
 
 # ============================================================
