@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     -- JSON 字段
     feature_scores TEXT,          -- {F01: 7.2, ...}
     feature_confidences TEXT,     -- {F01: 0.85, ...}
+    persona_votes_json TEXT,      -- [{persona_id, final_score, layer_scores}, ...]
     top_buy_reasons TEXT,         -- [str]
     top_oppose_reasons TEXT,      -- [str]
     strengths TEXT,               -- [str]
@@ -123,6 +124,11 @@ class HistoryStore:
                 conn.execute(
                     "ALTER TABLE predictions ADD COLUMN is_blind INTEGER DEFAULT 0"
                 )
+            # 迁移：旧库补 persona_votes_json 列（人设投票详情）
+            if "persona_votes_json" not in cols:
+                conn.execute(
+                    "ALTER TABLE predictions ADD COLUMN persona_votes_json TEXT DEFAULT NULL"
+                )
 
     # ---------- 写入 ----------
     def append(
@@ -168,6 +174,13 @@ class HistoryStore:
                 float(p.channels.value_match),
                 _to_json({k: round(v.score, 3) for k, v in p.features.features.items()}),
                 _to_json({k: round(v.confidence, 3) for k, v in p.features.features.items()}),
+                _to_json([{
+                    "persona_id": v.persona_id,
+                    "persona_name": v.persona_name,
+                    "final_score": round(v.final_score, 3),
+                    "layer_scores": {k: round(x, 3) for k, x in v.layer_scores.items()},
+                    "vetoed": v.vetoed,
+                } for v in p.voting.votes]),
                 _to_json(p.voting.top_buy_reasons),
                 _to_json(p.voting.top_oppose_reasons),
                 _to_json(p.grade.strengths),
@@ -186,7 +199,8 @@ class HistoryStore:
             "final_score", "final_grade", "confidence", "recommended_channel",
             "voting_weighted_score", "voting_support_rate", "voting_opposition_rate",
             "voting_score_std", "natural_score", "live_score", "perceived_value",
-            "value_match", "feature_scores", "feature_confidences", "top_buy_reasons",
+            "value_match", "feature_scores", "feature_confidences", "persona_votes_json",
+            "top_buy_reasons",
             "top_oppose_reasons", "strengths", "weaknesses", "improvements",
             "consumer_insights", "llm_backend", "is_mock", "notes",
         ]
@@ -366,8 +380,23 @@ class HistoryStore:
                 feat_row[f] = float(val) if val is not None else 5.0
 
             weighted = float(r.get("voting_weighted_score", 5.0) or 5.0)
-            # P01-P30：退化方案 — DB 没存独立人设分，全部用 weighted_score
-            persona_row = {p: weighted for p in _p01_p30}
+            # P01-P30：优先从 persona_votes_json 重建（新版 DB），
+            # 退化方案（旧版 DB 没存独立人设分）：全部用 weighted_score
+            persona_row: dict[str, float] = {}
+            votes_json = _from_json(r.get("persona_votes_json"), None)
+            if votes_json and isinstance(votes_json, list) and len(votes_json) > 0:
+                # 从 JSON 里的 final_score 重建 P01-P30
+                # 按 persona_id 排序后映射到 P01-P30 列
+                sorted_votes = sorted(votes_json, key=lambda v: str(v.get("persona_id", "")))
+                for i, vote in enumerate(sorted_votes[:30]):
+                    score = float(vote.get("final_score", weighted) or weighted)
+                    if i < len(_p01_p30):
+                        persona_row[_p01_p30[i]] = score
+                # 如果人设数 < 30，剩下的用 weighted 填
+                for p in _p01_p30:
+                    persona_row.setdefault(p, weighted)
+            else:
+                persona_row = {p: weighted for p in _p01_p30}
 
             support_rate = float(r.get("voting_support_rate", 0.5) or 0.5)
             oppose_rate = float(r.get("voting_opposition_rate", 0.1) or 0.1)
