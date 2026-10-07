@@ -2297,18 +2297,47 @@ def render_page_calibration():
     if _up is not None:
         try:
             _up_df = pd.read_csv(_up)
-            # 合并
-            if _acc_df is not None:
-                _merged = pd.concat([_acc_df, _up_df]).drop_duplicates(
-                    subset=["style_id"], keep="last"
+            # —— Schema 预验证 ——
+            _f01_f10 = [f"F{i:02d}" for i in range(1, 11)]
+            _p01_p30 = [f"P{i:02d}" for i in range(1, 31)]
+            _engine_cols = ["persona_score", "channel_score", "price_value_score"]
+            _min_required = ["style_id", "sales"] + _f01_f10 + _p01_p30 + _engine_cols
+            _missing_import = [c for c in _min_required if c not in _up_df.columns]
+            if _missing_import:
+                st.error(
+                    f"❌ 导入的 CSV 缺少必需列：{_missing_import[:10]}{'...' if len(_missing_import) > 10 else ''}\n\n"
+                    f"**3Loop 校准不是只需要 style_id + sales！**\n\n"
+                    f"完整的 history_accumulated.csv 需要 **56 列**：\n"
+                    f"• `style_id` — 款号\n"
+                    f"• `F01~F10` — VLM 视觉特征分（10 列）\n"
+                    f"• `P01~P30` — 人设投票分（30 列）\n"
+                    f"• `persona_score`, `channel_score`, `price_value_score` — 三大引擎\n"
+                    f"• `natural_score`, `live_score` — 双渠道\n"
+                    f"• `sales` — 真实销量\n"
+                    f"• `grade_norm` — 内审分级归一化\n\n"
+                    f"**你导入的 CSV 只有 {len(_up_df.columns)} 列，不是预测产物表。**\n\n"
+                    f"👉 正确做法：先到 **📤 上传批次** 页跑预测，系统会自动生成完整累积 CSV。"
                 )
             else:
-                _merged = _up_df
-            _acc_path.parent.mkdir(parents=True, exist_ok=True)
-            _merged.to_csv(_acc_path, index=False)
-            st.success(f"✅ 合并完成：{len(_acc_df) if _acc_df is not None else 0} + "
-                      f"{len(_up_df)} → {len(_merged)} 款")
-            _acc_df, _acc_n = _merged, len(_merged)
+                # 列齐了，但特征值有没有全 NaN？
+                _feat_ok = _up_df[_f01_f10].notna().all(axis=1).sum()
+                if _feat_ok < max(8, len(_up_df) // 2):
+                    st.warning(
+                        f"⚠️ 导入的 CSV 有 {len(_up_df)} 行，但只有 {_feat_ok} 行的 VLM 特征列有值 — "
+                        f"可能影响 Loop1 校准效果。"
+                    )
+                # 合并
+                if _acc_df is not None:
+                    _merged = pd.concat([_acc_df, _up_df]).drop_duplicates(
+                        subset=["style_id"], keep="last"
+                    )
+                else:
+                    _merged = _up_df
+                _acc_path.parent.mkdir(parents=True, exist_ok=True)
+                _merged.to_csv(_acc_path, index=False)
+                st.success(f"✅ 合并完成：{len(_acc_df) if _acc_df is not None else 0} + "
+                          f"{len(_up_df)} → {len(_merged)} 款")
+                _acc_df, _acc_n = _merged, len(_merged)
         except Exception as e:
             st.error(f"导入失败：{e}")
 

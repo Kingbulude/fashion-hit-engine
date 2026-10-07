@@ -1701,16 +1701,27 @@ def run_all_loops(
 
         # ---------- 残差分解 ----------
         log.info("=== ResidualDecomposer ===")
-        y_pred_series = _engine_score_ensemble(
-            history_df, r3.engine_weights, r3.channel_weights,
-        )
-        y_true_series = history_df[sales_col].astype(float)
-        # spec §9.1：残差 ε = y - ŷ 要求两边同尺度。原始销量（千级）与
-        # 引擎集成分（0-10）量级差 1000×，必须先归一化到 [0,1] 秩百分位，
-        # 否则 μ/σ 失真、±2σ 区间覆盖全数据 → 残差分离器实际失效。
-        y_pred_norm = _rank_percentile(y_pred_series)
-        y_true_norm = _rank_percentile(y_true_series)
-        r4 = ResidualDecomposer.decompose(y_true_norm, y_pred_norm, history_df)
+        try:
+            y_pred_series = _engine_score_ensemble(
+                history_df, r3.engine_weights, r3.channel_weights,
+            )
+            y_true_series = history_df[sales_col].astype(float)
+            # spec §9.1：残差 ε = y - ŷ 要求两边同尺度。原始销量（千级）与
+            # 引擎集成分（0-10）量级差 1000×，必须先归一化到 [0,1] 秩百分位，
+            # 否则 μ/σ 失真、±2σ 区间覆盖全数据 → 残差分离器实际失效。
+            y_pred_norm = _rank_percentile(y_pred_series)
+            y_true_norm = _rank_percentile(y_true_series)
+            r4 = ResidualDecomposer.decompose(y_true_norm, y_pred_norm, history_df)
+        except Exception as _ex:
+            log.warning("残差分解跳过：%s（不影响 Loop1/2/3 校准结果）", _ex)
+            # 降级：造一个空的 ResidualDecomposeResult，不让整个 run_all_loops 崩
+            from types import SimpleNamespace
+            r4 = SimpleNamespace(
+                residual_mean=0.0, residual_std=0.0,
+                overperformers=[], underperformers=[],
+                system_bias_flag="SKIPPED", marketing_available=False,
+                attribution_summary={},
+            )
         residual_path = effective_dir / "residual_decompose.yaml"
         _write_yaml(residual_path, {
             "residual_mean": r4.residual_mean,

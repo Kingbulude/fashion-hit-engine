@@ -962,6 +962,42 @@ class PredictionPipeline:
             _acc_path.unlink(missing_ok=True)
             return None
 
+        # —— Step 5: Schema 硬校验 ——
+        # 必须有足够的预测产物列，否则 Loop1/2/3 全降级、残差分解会炸
+        from .core.optimization_kernel import (
+            VLMFeatureCalibrator, PersonaDistributionFitter, EnsembleWeightTuner,
+        )
+        _required_cols = (
+            VLMFeatureCalibrator.FEATURE_COLS          # F01-F10
+            + PersonaDistributionFitter.PERSONA_COLS   # P01-P30
+            + EnsembleWeightTuner.BASE_ENGINE_COLS     # persona_score, channel_score, price_value_score
+            + EnsembleWeightTuner.CHANNEL_COLS         # natural_score, live_score
+        )
+        _missing_cols = [c for c in _required_cols if c not in history_df.columns]
+        if _missing_cols:
+            log.error(
+                "❌ history_df 缺少必需列 %d 个：%s... "
+                "3Loop 需要完整的预测产物（VLM 特征 + 人设投票 + 引擎得分），"
+                "不能只用 sales + grade_norm。请先在「📤 上传批次」跑预测，"
+                "或导入正确的 history_accumulated.csv（含完整 56 列）。",
+                len(_missing_cols), _missing_cols[:8],
+            )
+            # 不合格的累积 CSV 也要清理
+            _acc_path.unlink(missing_ok=True)
+            return None
+        # 列都在，但特征值全是 NaN？（比如 concat 引入的行）
+        _feature_non_nan = history_df[VLMFeatureCalibrator.FEATURE_COLS].notna().all(axis=1).sum()
+        _engine_non_nan = history_df[EnsembleWeightTuner.BASE_ENGINE_COLS].notna().all(axis=1).sum()
+        if _feature_non_nan < 8 or _engine_non_nan < 8:
+            log.error(
+                "❌ history_df 有 %d 行但有效特征行只有 %d 行、有效引擎行只有 %d 行 — "
+                "3Loop 至少需要 8 行同时具备 VLM 特征和引擎得分。"
+                "请先在「📤 上传批次」跑预测，不要只导入 sales+grade 列的薄 CSV。",
+                len(history_df), _feature_non_nan, _engine_non_nan,
+            )
+            _acc_path.unlink(missing_ok=True)
+            return None
+
         if out_dir is None:
             # 默认输出到 brand calibrated_dir 的同级 output
             out_dir = Path(self.brand_cfg.calibrated_dir).parent / "output"
