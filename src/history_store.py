@@ -327,10 +327,21 @@ class HistoryStore:
         if df.empty:
             return None
 
-        # 按 style_id 去重（最新一条为准）
-        df = df.sort_values("created_at", ascending=False).drop_duplicates(
-            subset=["style_id"], keep="first"
-        ).reset_index(drop=True)
+        # 按 style_id 去重
+        # 关键: 用户经常先跑预测(sales=0)，后来才导入销量(sales>0)。
+        # 新批次会把 sales=0 覆盖旧的有销量记录。
+        # 所以优先保留 sales_qty > 0 的记录，其次保留最新的。
+        if "sales_qty" in df.columns:
+            df["_has_sales"] = (df["sales_qty"].fillna(0) > 0).astype(int)
+            df = df.sort_values(
+                ["_has_sales", "created_at"], ascending=[False, False],
+            ).drop_duplicates(subset=["style_id"], keep="first")
+            df = df.drop(columns=["_has_sales"])
+        else:
+            df = df.sort_values("created_at", ascending=False).drop_duplicates(
+                subset=["style_id"], keep="first",
+            )
+        df = df.reset_index(drop=True)
 
         rows: list[dict[str, Any]] = []
         sales_map = sales_lookup or {}
@@ -340,8 +351,19 @@ class HistoryStore:
 
         for _, r in df.iterrows():
             feat = _from_json(r.get("feature_scores"), {}) or {}
-            # F01-F10：从 JSON 取，缺的用 5.0
-            feat_row = {f: float(feat.get(f, 5.0)) for f in _f01_f10}
+            # F01-F10：从 JSON 取，支持两种 key 格式：
+            #   老格式: {"F01": 7.5, "F02": 6.0, ...}
+            #   新格式: {"F01_silhouette": 7.5, "F02_clean_look": 6.0, ...}
+            feat_row: dict[str, float] = {}
+            for f in _f01_f10:
+                val = feat.get(f)
+                if val is None:
+                    # 前缀匹配: F01 → F01_silhouette, F01_xxx 等
+                    for k, v in feat.items():
+                        if k.startswith(f + "_"):
+                            val = v
+                            break
+                feat_row[f] = float(val) if val is not None else 5.0
 
             weighted = float(r.get("voting_weighted_score", 5.0) or 5.0)
             # P01-P30：退化方案 — DB 没存独立人设分，全部用 weighted_score
