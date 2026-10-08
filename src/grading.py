@@ -220,7 +220,20 @@ def _grade_from_dual_dimension(
         return "A", "需求潜力高但品牌价值低 — 跑量款"
     if demand_potential < demand_thr and brand_value >= brand_thr:
         return "P", "需求潜力低但品牌价值高 — 品牌表达款"
-    return "风险", "双维度均偏低 — 谨慎推进"
+
+    # 矩阵底线：demand<75 AND brand<70
+    # v1.4.108: 不再一律给"风险" —— 如果没有危险信号（双渠道好 + 反对率低），
+    # 降级判为 "A 跑量款"，只有真的有危险信号才给"风险"
+    # 原因：品牌价值在 60-70 区间是常态（只有品牌标杆款才上 70+），
+    # demand 在 65-75 区间也是正常跑量款水平，这两个同时"差一点"不叫风险。
+    _has_danger_signal = (
+        channels.natural_score < 6.0
+        or channels.live_score < 6.0
+        or voting.opposition_rate > 0.15
+    )
+    if _has_danger_signal:
+        return "风险", "双维度均偏低且有危险信号 — 谨慎推进"
+    return "A", "双维度略低于阈值但无明显危险信号 — 常规跑量款"
 
 
 def _default_aggregate(
