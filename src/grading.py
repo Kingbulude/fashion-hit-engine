@@ -200,8 +200,14 @@ def _grade_from_dual_dimension(
     注：需求和品牌价值是两个独立维度，故意不互斥。
     P 款 = 需求潜力低但品牌价值高（设计好看但颜色太花、受众窄），
     和"难卖/风险款"不再混为一档。
+
+    v1.4.109: Path B 危险信号从 OR 单一触发 → 多因子投票制（≥2 个同时命中）。
+    原因：calibration 的 Loop1/2 会改 channels 和 voting 的输入值，
+    单一信号 (e.g. nat<6.0) 可能是 calibration 微调导致的噪声，
+    而不是真的危险。至少 2 个危险信号 + 人设加权分交叉验证，
+    才能防止把爆款误判成风险。
     """
-    # 风险款绝对判定优先（双渠道极弱或反对率极高）
+    # ===== Path A: 风险款绝对判定（保持不变 — 双渠道都极差或反对率极高是硬信号）=====
     risk_nat = channels.natural_score <= 5.0 and channels.live_score <= 5.0
     risk_oppose = voting.opposition_rate > 0.30
     if risk_nat or risk_oppose:
@@ -221,18 +227,28 @@ def _grade_from_dual_dimension(
     if demand_potential < demand_thr and brand_value >= brand_thr:
         return "P", "需求潜力低但品牌价值高 — 品牌表达款"
 
-    # 矩阵底线：demand<75 AND brand<70
-    # v1.4.108: 不再一律给"风险" —— 如果没有危险信号（双渠道好 + 反对率低），
-    # 降级判为 "A 跑量款"，只有真的有危险信号才给"风险"
-    # 原因：品牌价值在 60-70 区间是常态（只有品牌标杆款才上 70+），
-    # demand 在 65-75 区间也是正常跑量款水平，这两个同时"差一点"不叫风险。
-    _has_danger_signal = (
-        channels.natural_score < 6.0
-        or channels.live_score < 6.0
-        or voting.opposition_rate > 0.15
-    )
-    if _has_danger_signal:
-        return "风险", "双维度均偏低且有危险信号 — 谨慎推进"
+    # ===== Path B: 双低象限 → 多因子投票制 =====
+    # 4 个独立危险信号，至少 2 个同时命中才判风险
+    # （calibration 微调一个渠道分 <6.0 不该直接判死刑）
+    danger_nat = channels.natural_score < 6.0
+    danger_live = channels.live_score < 6.0
+    danger_oppose = voting.opposition_rate > 0.15
+    # 人设加权分阈值宽松：只有真的极低 (<4.0/10) 才算危险
+    # 正常跑量款 weighted_score 应该在 5.0-7.0 区间
+    danger_persona = voting.weighted_score < 4.0
+    danger_count = sum([danger_nat, danger_live, danger_oppose, danger_persona])
+
+    if danger_count >= 2:
+        signals = []
+        if danger_nat: signals.append("自然分<6")
+        if danger_live: signals.append("直播分<6")
+        if danger_oppose: signals.append("反对率>15%")
+        if danger_persona: signals.append("人设加权<6")
+        return "风险", f"双维度均偏低且有 {danger_count}/4 个危险信号({'+'.join(signals)})"
+    if danger_count == 1:
+        # 只有 1 个信号 — 大概率是 calibration 或 VLM 噪声，降级为 A
+        return "A", f"双维度略低但仅 1 个危险信号，降级为常规跑量款"
+    # danger_count == 0 — 完全健康
     return "A", "双维度略低于阈值但无明显危险信号 — 常规跑量款"
 
 
