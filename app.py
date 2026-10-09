@@ -1527,6 +1527,74 @@ def render_page_summary():
             st.rerun()
         return
 
+    # === V2 优先：如果有 preds_v2，直接走 v2 链路 ===
+    _preds_v2 = st.session_state.get("preds_v2")
+    _v2_main_takeover = bool(_preds_v2)
+
+    if _v2_main_takeover:
+        # --- V2 主表 ---
+        st.markdown("---")
+        st.markdown("### 🎯 V2 校准后预测（LightGBM + 品牌记忆 + 爆款基因规则）")
+        
+        # calibration 指标
+        from pathlib import Path as _Path
+        _calib_dir = _Path("brand_profiles") / brand_cfg.brand_id / "calibrated"
+        _has_calib = (_calib_dir / "CALIBRATION_VERSION").exists()
+        if _has_calib:
+            import json as _json
+            _report = _json.loads((_calib_dir / "calibration_report.json").read_text())
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("CV AUC", f"{_report['calibrated_cv_auc_mean']:.3f}", f"+{(_report['calibrated_cv_auc_mean']-_report['baseline_auc'])*100:.1f}%")
+            c2.metric("S 阈值", f"{_report['s_threshold']:.2f}")
+            c3.metric("A+ 阈值", f"{_report['aplus_threshold']:.2f}")
+            c4.metric("Top-10 Recall", f"{_report['full_train_recall_at_10']*100:.0f}%")
+        
+        _v2_df = pd.DataFrame(_preds_v2).sort_values("bomb_probability", ascending=False).reset_index(drop=True)
+        
+        # 分级分布
+        _grade_colors = {"S": "#FF4B4B", "A+": "#FF9F1C", "A": "#4ECDC4", "P": "#A0A0A0"}
+        _grade_counts = _v2_df["grade_code"].value_counts()
+        fig, ax = plt.subplots(figsize=(8, 1.8))
+        _bars = ax.bar(_grade_counts.index, _grade_counts.values, color=[_grade_colors.get(g, "#888") for g in _grade_counts.index])
+        ax.set_ylabel("款式数")
+        ax.set_title("分级分布（绝对阈值 · 无批次硬编码）")
+        for _bar, _cnt in zip(_bars, _grade_counts.values):
+            ax.text(_bar.get_x() + _bar.get_width()/2, _bar.get_height() + 0.05, str(_cnt), ha="center")
+        st.pyplot(fig, use_container_width=True)
+        
+        # 主排行榜
+        st.markdown("**🏆 预测排行榜（按爆款概率降序）**")
+        _display = _v2_df[["style_id", "category", "price", "bomb_probability", "grade_code", "is_p_style", "action_supply", "action_ops"]].copy()
+        st.dataframe(
+            _display.rename(columns={
+                "style_id": "款号", "category": "品类", "price": "价格",
+                "bomb_probability": "爆款概率", "grade_code": "分级",
+                "is_p_style": "P款", "action_supply": "供应链建议", "action_ops": "运营建议"
+            }),
+            column_config={
+                "爆款概率": st.column_config.ProgressColumn("爆款概率", format="%.3f", min_value=0.0, max_value=1.0),
+                "分级": st.column_config.TextColumn("分级", width="small"),
+                "P款": st.column_config.CheckboxColumn("P款", width="small"),
+            },
+            hide_index=True, use_container_width=True,
+        )
+        
+        # 记忆库信号
+        with st.expander("🧠 品牌记忆库信号（邻居爆款率）", expanded=False):
+            _mem_rows = []
+            for _, _r in _v2_df.iterrows():
+                _mem = _r.get("memory") or {}
+                _mem_rows.append({
+                    "款号": _r["style_id"],
+                    "邻居爆款率": _mem.get("neighbor_bomb_rate", 0),
+                    "邻居平均销量": _mem.get("neighbor_avg_sales", 0),
+                    "邻居品类一致性": _mem.get("neighbor_category_consistency", 0),
+                })
+            st.dataframe(pd.DataFrame(_mem_rows).sort_values("邻居爆款率", ascending=False), hide_index=True, use_container_width=True)
+        
+        st.markdown("---")
+        st.caption("💡 下方旧版 FullPrediction 结果保留作为参考对照。")
+
     preds: list[FullPrediction] = st.session_state.preds
     failed = prog.get("failed", {})
     n_success = len(preds)
@@ -1542,6 +1610,37 @@ def render_page_summary():
                 st.markdown(f"- **{sid}**：`{err}`")
     else:
         st.success(f"✅ 全部完成，共 {total} 款（成功 {n_success}，失败 0）")
+
+        # === V2: 批次完成后自动跑 calibration predict_batch_v2 ===
+        try:
+            _pp_v2 = PredictionPipeline(
+                brand_id=brand_cfg.brand_id,
+                llm_backend="mock",  # predict_v2 不依赖 VLM，用什么 backend 都一样
+            )
+            # 把 style_infos 转成 dict 列表（predict_v2 接受 dict 或 StyleInfo）
+            _v2_inputs = []
+            for _si in style_infos:
+                if isinstance(_si, dict):
+                    _v2_inputs.append(_si)
+                else:
+                    _v2_inputs.append({
+                        "style_id": _si.style_id,
+                        "category": getattr(_si, "category", ""),
+                        "season": getattr(_si, "season", ""),
+                        "price": getattr(_si, "price", 0),
+                        "design_text": getattr(_si, "design_text", "") or "",
+                        "images": [],
+                    })
+            with st.spinner("🎯 V2 校准后预测 (Calibration + Memory + Rules)..."):
+                st.session_state.preds_v2 = _pp_v2.predict_batch_v2(_v2_inputs)
+            _v2_count = len(st.session_state.preds_v2)
+            _v2_s = sum(1 for _r in st.session_state.preds_v2 if _r.get("grade_code") == "S")
+            _v2_ap = sum(1 for _r in st.session_state.preds_v2 if _r.get("grade_code") == "A+")
+            _v2_a = sum(1 for _r in st.session_state.preds_v2 if _r.get("grade_code") == "A")
+            _v2_p = sum(1 for _r in st.session_state.preds_v2 if _r.get("grade_code") == "P")
+            st.success(f"🎯 V2 校准后预测完成: {_v2_count} 款 → S={_v2_s} | A+={_v2_ap} | A={_v2_a} | P={_v2_p}")
+        except Exception as _e:
+            st.warning(f"⚠️ V2 预测跳过（不影响旧管线）: {_e}")
 
     # 批次真实性标记：让用户一眼知道当前结果是真 VLM 还是 mock 跑的
     if preds:
@@ -1849,15 +1948,92 @@ def render_page_detail():
   </div>
 </div>
 """, unsafe_allow_html=True)
+    # === V2 优先：如果有 preds_v2，先尝试从 v2 链路找 ===
+    _preds_v2 = st.session_state.get("preds_v2", [])
     preds: list[FullPrediction] = st.session_state.get("preds", [])
-    selected = st.session_state.get("selected_style_id", "")
-    if not preds:
+    
+    # 合并可选款号（v2 优先展示）
+    _v2_style_ids = [r.get("style_id") for r in _preds_v2 if r.get("style_id")]
+    _v1_style_ids = [p.info.style_id for p in preds]
+    _all_style_ids = list(dict.fromkeys(_v2_style_ids + _v1_style_ids))  # 去重保序
+    
+    if not _all_style_ids:
         st.info("还没有评估结果。请先到「📤 上传批次」运行评估。")
         return
 
-    style_ids = [p.info.style_id for p in preds]
-    selected = st.selectbox("款号", options=style_ids,
-                            index=style_ids.index(selected) if selected in style_ids else 0)
+    selected = st.session_state.get("selected_style_id", "")
+    selected = st.selectbox("款号", options=_all_style_ids,
+                            index=_all_style_ids.index(selected) if selected in _all_style_ids else 0)
+
+    # --- V2 优先找 target_style ---
+    _v2_target = next((r for r in _preds_v2 if r.get("style_id") == selected), None)
+    
+    if _v2_target is not None:
+        # V2 三联卡直接渲染（不再走旧 FullPrediction 渲染逻辑）
+        grade_colors_map = {"S": "#FF4B4B", "A+": "#FF9F1C", "A": "#4ECDC4", "P": "#A0A0A0"}
+        gc = _v2_target.get("grade_code", "A")
+        c1, c2, c3 = st.columns([1, 1.5, 1.5])
+        
+        with c1:
+            st.metric("爆款概率", f"{_v2_target['bomb_probability']:.3f}")
+            st.progress(float(_v2_target["bomb_probability"]), text=f"概率值: {_v2_target['bomb_probability']*100:.1f}%")
+        
+        with c2:
+            grade_box = st.container(border=True)
+            grade_box.markdown(f"### <span style='color:{grade_colors_map.get(gc,'#888')}'>{gc}</span> · {_v2_target.get('grade_label', '')}", unsafe_allow_html=True)
+            if _v2_target.get("is_p_style"):
+                grade_box.caption("🎨 命中 P 款规则（设计调性款）")
+        
+        with c3:
+            act_box = st.container(border=True)
+            act_box.markdown("**📋 建议**")
+            act_box.caption(f"供应链: {_v2_target.get('action_supply', '')}")
+            act_box.caption(f"运营: {_v2_target.get('action_ops', '')}")
+        
+        # 记忆库 + 规则 + F11-F20
+        col_mem, col_rule = st.columns(2)
+        with col_mem:
+            st.markdown("### 🧠 品牌记忆库（相似款邻居）")
+            _mem = _v2_target.get("memory") or {}
+            _nbs = _mem.get("neighbors", [])
+            nc1, nc2, nc3 = st.columns(3)
+            nc1.metric("邻居爆款率", f"{_mem.get('neighbor_bomb_rate', 0)*100:.0f}%")
+            nc2.metric("邻居平均销量", f"{_mem.get('neighbor_avg_sales', 0):.0f}")
+            nc3.metric("品类一致性", f"{_mem.get('neighbor_category_consistency', 0)*100:.0f}%")
+            if _nbs:
+                for i, nb in enumerate(_nbs[:5], 1):
+                    _bomb_icon = "💣" if nb.get("is_bomb") else "  "
+                    st.markdown(f"{i}. **{nb.get('style_id','?')}** {_bomb_icon} · 相似度 {nb.get('similarity',0):.2f}")
+        
+        with col_rule:
+            st.markdown("### 🧬 爆款基因规则命中")
+            _rh = _v2_target.get("rule_hits", [])
+            _conf = _v2_target.get("confidence", {})
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("命中规则", _conf.get("total", len(_rh)))
+            rc2.metric("最高置信度", f"{_conf.get('max', 0)*100:.0f}%")
+            rc3.metric("规则评分", f"{_v2_target.get('rule_match_score', 0):.2f}")
+            if _rh:
+                for hit in _rh:
+                    with st.expander(f"{hit['rule_id']} · 置信度 {hit['confidence']:.1%}"):
+                        for _c in hit.get("matched_conditions", []):
+                            st.caption(f"  ✓ {_c['feature']} ≥ {_c['threshold']}")
+        
+        # F11-F20
+        _f_feats = _v2_target.get("f_features") or {}
+        if _f_feats:
+            with st.expander("📝 F11-F20 设计文本特征", expanded=False):
+                _feat_df = pd.DataFrame([{"特征": k, "值": v} for k, v in _f_feats.items() if k.startswith("F")])
+                st.dataframe(_feat_df, hide_index=True, use_container_width=True)
+        
+        st.info("💡 此页面上方旧版 FullPrediction 渲染区域保留作为参考对照。")
+        return  # ← 关键：v2 找到后直接 return，跳过旧渲染
+
+    # === 旧 V1 路径 ===
+    if not preds:
+        st.info("还没有 V1 评估结果（但 V2 链路也没命中此款式）。")
+        return
+
     p = next(x for x in preds if x.info.style_id == selected)
 
     # v1.4.95+: 三层错误处理 UI — 如果这款有 VLM fallback / Phase2-3 失败，在这里提醒

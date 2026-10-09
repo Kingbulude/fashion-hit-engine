@@ -1338,7 +1338,8 @@ class PredictionPipeline:
             if clf is not None and feature_names:
                 try:
                     import numpy as np
-                    # 按 feature_names 顺序组装特征数组
+                    import pandas as _pd
+                    # 按 feature_names 顺序组装特征数组 → DataFrame 带列名，消 sklearn Warning
                     row = []
                     for fn in feature_names:
                         val = model_features.get(fn, 0.0)
@@ -1346,7 +1347,7 @@ class PredictionPipeline:
                             row.append(float(val))
                         except (TypeError, ValueError):
                             row.append(0.0)
-                    X = np.array(row).reshape(1, -1)
+                    X = _pd.DataFrame([row], columns=feature_names)
                     proba = clf.predict_proba(X)[0]
                     # 取正类（bomb=1）的概率
                     bomb_probability = round(float(proba[1]), 4)
