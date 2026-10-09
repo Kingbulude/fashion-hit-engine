@@ -273,6 +273,10 @@ def _build_feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, li
         return None, None, None
     
     X = pd.concat(X_parts, axis=1).fillna(0)
+    # 关键：pandas 3.0 + numpy 2.x 对 bool dtype 调 quantile 会抛 TypeError
+    # 强制所有列 cast 成 float64，同时保证 LightGBM 训练安全
+    for col in X.columns:
+        X[col] = X[col].astype('float64')
     
     # 目标
     if 'is_bomb' not in df.columns:
