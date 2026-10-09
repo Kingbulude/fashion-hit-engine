@@ -1062,6 +1062,435 @@ class PredictionPipeline:
             log.exception("3Loop 校准失败：%s", e)
             return None
 
+    # === V2 New Methods ===
+
+    def _load_calibration_v2(self) -> bool:
+        """检测并加载 calibration v2 产物，设置 self._calib 状态。
+
+        检测 brand_profiles/{brand_name}/calibrated/ 目录下是否有
+        CALIBRATION_VERSION 文件，有则加载完整 calibration 产物：
+        LightGBM 分类器 + MemoryStore + RuleMatcher + P 款规则。
+
+        Returns:
+            bool: True 表示成功加载了 calibration v2 产物，
+                  False 表示未检测到（需要降级）。
+        """
+        from pathlib import Path as _Path
+
+        calibrated_dir = _Path(self.brand_cfg.calibrated_dir)
+        version_file = calibrated_dir / "CALIBRATION_VERSION"
+
+        if not calibrated_dir.exists() or not version_file.exists():
+            log.info(
+                "[V2] calibration v2 产物不存在 (%s) → 降级为 baseline prediction",
+                calibrated_dir,
+            )
+            self._calib = None
+            return False
+
+        # 用 calibration_v2.load_calibration_v2 加载所有产物
+        try:
+            from .calibration_v2 import load_calibration_v2
+            calib_data = load_calibration_v2(calibrated_dir)
+        except Exception as exc:
+            log.warning("[V2] load_calibration_v2 异常 → 降级：%s", exc)
+            self._calib = None
+            return False
+
+        if not calib_data:
+            log.info("[V2] load_calibration_v2 返回 None → 降级")
+            self._calib = None
+            return False
+
+        # 初始化组件
+        self._calib = calib_data
+
+        # MemoryStore
+        try:
+            from .memory_store import MemoryStore
+            self._memory = MemoryStore(calibrated_dir)
+            log.info("[V2] MemoryStore 初始化成功: %s", self._memory)
+        except Exception as exc:
+            log.warning("[V2] MemoryStore 初始化失败 → memory 信号不可用：%s", exc)
+            self._memory = None
+
+        # RuleMatcher
+        try:
+            from .pattern_miner import RuleMatcher
+            rules_path = calibrated_dir / "pattern_rules.json"
+            self._rule_matcher = RuleMatcher(rules_path)
+            log.info(
+                "[V2] RuleMatcher 初始化成功: %d 条规则",
+                len(self._rule_matcher.rules),
+            )
+        except Exception as exc:
+            log.warning("[V2] RuleMatcher 初始化失败 → rule_hits 不可用：%s", exc)
+            self._rule_matcher = None
+
+        log.info(
+            "[V2] calibration v2 加载成功: model=%s, s_thr=%.3f, ap_thr=%.3f",
+            calib_data.get("report", {}).get("calibrated_model", "?"),
+            calib_data.get("report", {}).get("s_threshold", 0.0),
+            calib_data.get("report", {}).get("aplus_threshold", 0.0),
+        )
+        return True
+
+    @staticmethod
+    def _match_p_rules(features: dict) -> bool:
+        """P 款规则匹配逻辑（AND：所有规则命中才算 P 款）。
+
+        从 self._calib['p_rule']['rules'] 中逐条验证。
+        """
+        calib = getattr(PredictionPipeline, "_calib", None) or {}
+        p_rule = calib.get("p_rule") or {}
+        rules = p_rule.get("rules", [])
+        if not rules:
+            return False
+        for rule in rules:
+            feat = rule.get("feature")
+            op = rule.get("op")
+            thr = rule.get("threshold")
+            if feat is None or op is None or thr is None:
+                return False
+            val = features.get(feat)
+            if val is None:
+                return False
+            try:
+                val_f = float(val)
+                thr_f = float(thr)
+            except (TypeError, ValueError):
+                return False
+            if op == ">=" and not (val_f >= thr_f):
+                return False
+            if op == "<=" and not (val_f <= thr_f):
+                return False
+            if op == ">" and not (val_f > thr_f):
+                return False
+            if op == "<" and not (val_f < thr_f):
+                return False
+            if op == "==" and not (val_f == thr_f):
+                return False
+        return True
+
+    def predict_v2(self, style_info) -> dict:
+        """V2 完整 prediction 流程（单款）。
+
+        流程：
+        1. 文本规则引擎提取 F11-F20（如果 style_info 有 design_text）
+        2. 检测 calibration 产物 → 用校准后分类器或降级
+        3. MemoryStore 搜索 top-5 邻居
+        4. RuleMatcher 匹配规则 → rule_hits
+        5. P 款规则匹配 → is_p_style
+        6. 用 calibration 分类器预测 → bomb_probability
+        7. 用 calibration 阈值 → grade_label / grade_code
+        8. 输出完整结果 dict
+
+        Args:
+            style_info: StyleInfo 对象或 dict，需包含 style_id、design_text、
+                        category、season、price 等字段。
+
+        Returns:
+            dict: 包含 style_id、category、price、bomb_probability、grade_label、
+                  grade_code、is_p_style、memory、rule_hits、confidence、
+                  calibration_loaded、fallback_reason、f_features、
+                  action_supply、action_ops 的完整预测结果。
+        """
+        from .types import StyleInfo as _StyleInfo
+        from .text_feature_extractor import extract_text_features
+
+        # ---- Step 0: 统一输入格式 ----
+        if isinstance(style_info, _StyleInfo):
+            info_dict: dict = {
+                "style_id": style_info.style_id,
+                "design_text": getattr(style_info, "fab_description", None) or "",
+                "category": style_info.category,
+                "season": style_info.season,
+                "price": style_info.price,
+                "images": style_info.images,
+            }
+        elif isinstance(style_info, dict):
+            info_dict = dict(style_info)
+        else:
+            # 防御：尝试用 attribute 访问
+            info_dict = {
+                "style_id": getattr(style_info, "style_id", "?"),
+                "design_text": getattr(style_info, "design_text", None)
+                               or getattr(style_info, "fab_description", "") or "",
+                "category": getattr(style_info, "category", None),
+                "season": getattr(style_info, "season", None),
+                "price": getattr(style_info, "price", 0),
+            }
+
+        style_id = info_dict.get("style_id", "?")
+        design_text = info_dict.get("design_text") or ""
+        category = info_dict.get("category") or ""
+        season = info_dict.get("season") or ""
+        price = info_dict.get("price", 0)
+
+        # ---- Step 1: 文本规则引擎提取 F11-F20 ----
+        f_features: dict = {}
+        if design_text:
+            try:
+                f_raw = extract_text_features(design_text)
+                f_features = {
+                    k: v for k, v in f_raw.items()
+                    if k.startswith("F") and k[1:].isdigit()
+                }
+            except Exception as exc:
+                log.warning("[V2] 文本特征提取失败: %s", exc)
+                f_features = {}
+
+        # ---- Step 2: 检测 calibration 产物 ----
+        calibration_loaded = False
+        fallback_reason: str | None = None
+
+        # 第一次调用时自动加载（懒加载 + 可复用）
+        if not hasattr(self, "_calib") or self._calib is None:
+            calibration_loaded = self._load_calibration_v2()
+        else:
+            calibration_loaded = True
+
+        if not calibration_loaded:
+            fallback_reason = "calibration v2 产物不存在"
+
+        # ---- Step 3: MemoryStore top-5 邻居 + 三个记忆信号 ----
+        memory_result: dict = {}
+        query_features = {
+            "style_id": style_id,
+            "category": category,
+            "season": season,
+            "price": price,
+        }
+        # 把 F11-F20 也加进 query，让 MemoryStore 能按版型相似度搜索
+        query_features.update(f_features)
+
+        if calibration_loaded and getattr(self, "_memory", None) is not None:
+            try:
+                memory_result = self._memory.search_neighbors(query_features, top_k=5)
+            except Exception as exc:
+                log.warning("[V2] MemoryStore.search_neighbors 失败: %s", exc)
+                memory_result = {}
+        else:
+            memory_result = {
+                "neighbors": [],
+                "neighbor_bomb_rate": 0.0,
+                "neighbor_avg_sales": 0.0,
+                "neighbor_category_consistency": 0.0,
+            }
+
+        # ---- Step 4: RuleMatcher 匹配规则 → rule_hits ----
+        rule_hits_result: dict = {}
+        if calibration_loaded and getattr(self, "_rule_matcher", None) is not None:
+            try:
+                rule_hits_result = self._rule_matcher.match(f_features)
+            except Exception as exc:
+                log.warning("[V2] RuleMatcher.match 失败: %s", exc)
+                rule_hits_result = {}
+        else:
+            rule_hits_result = {
+                "rule_hits": [],
+                "total_hits": 0,
+                "max_confidence": 0.0,
+                "avg_confidence": 0.0,
+                "rule_match_score": 0.0,
+            }
+
+        # ---- Step 5: 构造模型特征向量 ----
+        model_features: dict = {}
+        calib = self._calib if calibration_loaded else None
+        model_bundle = calib.get("model_bundle") if calib else None
+        feature_names = model_bundle.get("feature_names", []) if model_bundle else []
+
+        # 构造 price_pct：如果 memory store 有 price 列，用它算百分位
+        price_pct = 0.5  # 默认中位
+        if calibration_loaded and getattr(self, "_memory", None) is not None:
+            try:
+                mem_prices = self._memory.df["price"].dropna().tolist()
+                if mem_prices:
+                    n_below = sum(1 for p in mem_prices if p <= price)
+                    price_pct = round(n_below / len(mem_prices), 4)
+            except Exception:
+                pass
+
+        # year 特征（默认 2026）
+        import datetime as _dt
+        current_year = _dt.datetime.now().year
+
+        # 构建完整特征向量 dict
+        model_features = {
+            # F11-F20
+            **{k: v for k, v in f_features.items()},
+            # price_pct
+            "price_pct": price_pct,
+            # one-hot category
+            f"cat_{category}": 1.0,
+            # one-hot season
+            f"season_{season}": 1.0,
+            # one-hot year
+            f"year_{current_year}": 1.0,
+        }
+
+        # ---- Step 6: 分类器预测 bomb_probability ----
+        bomb_probability = 0.3  # baseline 默认值
+
+        if calibration_loaded and calib and model_bundle:
+            clf = model_bundle.get("model")
+            if clf is not None and feature_names:
+                try:
+                    import numpy as np
+                    # 按 feature_names 顺序组装特征数组
+                    row = []
+                    for fn in feature_names:
+                        val = model_features.get(fn, 0.0)
+                        try:
+                            row.append(float(val))
+                        except (TypeError, ValueError):
+                            row.append(0.0)
+                    X = np.array(row).reshape(1, -1)
+                    proba = clf.predict_proba(X)[0]
+                    # 取正类（bomb=1）的概率
+                    bomb_probability = round(float(proba[1]), 4)
+                except Exception as exc:
+                    log.warning("[V2] 分类器 predict_proba 失败 → 用 baseline：%s", exc)
+                    if fallback_reason is None:
+                        fallback_reason = f"分类器预测失败: {exc}"
+        else:
+            # 完全降级：用 rule_hits + memory_bomb_rate 估一个 baseline
+            mem_rate = memory_result.get("neighbor_bomb_rate", 0.0)
+            hits = rule_hits_result.get("total_hits", 0)
+            if hits > 0 and mem_rate > 0.2:
+                bomb_probability = round(min(0.6, 0.2 + mem_rate * 0.6 + hits * 0.05), 4)
+            else:
+                bomb_probability = 0.3
+
+        # ---- Step 7: P 款规则匹配 ----
+        # _match_p_rules 用 self._calib（类属性），需要临时设置一下
+        _old_calib = getattr(PredictionPipeline, "_calib", None)
+        PredictionPipeline._calib = self._calib if calibration_loaded else None
+        try:
+            # P 款规则只对 calibration_loaded 有意义，否则默认 False
+            is_p_style = (
+                self._match_p_rules(f_features)
+                if calibration_loaded and calib
+                else False
+            )
+        finally:
+            if _old_calib is None:
+                try:
+                    del PredictionPipeline._calib
+                except AttributeError:
+                    pass
+            else:
+                PredictionPipeline._calib = _old_calib
+
+        # ---- Step 8: 分级 ----
+        report = calib.get("report", {}) if calib else {}
+        s_thr = float(report.get("s_threshold", 0.95))
+        ap_thr = float(report.get("aplus_threshold", 0.40))
+
+        if is_p_style:
+            grade_label = "设计展示款"
+            grade_code = "P"
+        elif bomb_probability >= s_thr:
+            grade_label = "多备货 + 重点投流"
+            grade_code = "S"
+        elif bomb_probability >= ap_thr:
+            grade_label = "正常备货 + 常规运营"
+            grade_code = "A+"
+        else:
+            grade_label = "保守备货 + 观察"
+            grade_code = "A"
+
+        # ---- Step 9: action 建议 ----
+        action_map = {
+            "S": {"supply": "加大备货 (约 3x 常规)", "ops": "重点投流 + 首推资源"},
+            "A+": {"supply": "常规备货", "ops": "常规运营"},
+            "A": {"supply": "保守备货", "ops": "观察"},
+            "P": {"supply": "小批量备货", "ops": "品牌展示为主，不冲销量"},
+        }
+        actions = action_map.get(grade_code, action_map["A"])
+
+        # ---- Step 10: confidence 综合信号 ----
+        conf_values = [
+            memory_result.get("neighbor_bomb_rate", 0.0),
+            rule_hits_result.get("max_confidence", 0.0),
+        ]
+        conf_total = sum(
+            1 for v in conf_values if v and v > 0
+        ) + rule_hits_result.get("total_hits", 0)
+        confidence = {
+            "max": round(max(conf_values) if conf_values else 0.0, 4),
+            "avg": round(
+                sum(v for v in conf_values if v) / max(sum(1 for v in conf_values if v), 1),
+                4,
+            ),
+            "total": conf_total,
+        }
+
+        # ---- 组装最终结果 ----
+        return {
+            "style_id": style_id,
+            "category": category,
+            "price": price,
+            "bomb_probability": bomb_probability,
+            "grade_label": grade_label,
+            "grade_code": grade_code,
+            "is_p_style": is_p_style,
+            "memory": memory_result,
+            "rule_hits": rule_hits_result.get("rule_hits", []),
+            "confidence": confidence,
+            "calibration_loaded": calibration_loaded,
+            "fallback_reason": fallback_reason,
+            "f_features": f_features,
+            "action_supply": actions["supply"],
+            "action_ops": actions["ops"],
+        }
+
+    def predict_batch_v2(self, styles_info) -> list:
+        """批量 v2 prediction。
+
+        逐款调用 predict_v2。calibration 只加载一次（懒加载缓存复用）。
+
+        Args:
+            styles_info: list[StyleInfo 或 dict]
+
+        Returns:
+            list[dict]: 每款一个 predict_v2 结果 dict
+        """
+        if not styles_info:
+            return []
+        results = []
+        for si in styles_info:
+            try:
+                r = self.predict_v2(si)
+                results.append(r)
+            except Exception as exc:
+                sid = (
+                    si.style_id if hasattr(si, "style_id")
+                    else si.get("style_id", "?") if isinstance(si, dict)
+                    else "?"
+                )
+                log.exception("[V2] predict_v2 失败 style_id=%s: %s", sid, exc)
+                # 失败也返回一个基本结构，不要让整个 batch 挂掉
+                results.append({
+                    "style_id": sid,
+                    "category": "",
+                    "price": 0,
+                    "bomb_probability": 0.3,
+                    "grade_label": "保守备货 + 观察",
+                    "grade_code": "A",
+                    "is_p_style": False,
+                    "memory": {},
+                    "rule_hits": [],
+                    "confidence": {"max": 0.0, "avg": 0.0, "total": 0},
+                    "calibration_loaded": False,
+                    "fallback_reason": f"predict_v2 exception: {exc}",
+                    "f_features": {},
+                    "action_supply": "保守备货",
+                    "action_ops": "观察",
+                })
+        return results
+
 
 # ========== CLI 入口（保持原逻辑）==========
 def main(argv=None):

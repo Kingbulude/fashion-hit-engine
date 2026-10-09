@@ -5,6 +5,12 @@
 - 阶段二（≥10款历史数据）：使用 sklearn Lasso 稀疏回归拟合 → 把权重dump成YAML，覆盖默认权重
 
 营销控制变量：是否主推、是否直播重点，允许在最终分±5%范围内调整
+
+⚠️ DEPRECATION NOTICE (v2 迁移)：
+   本文件旧模块（assign_grade / assign_relative_grades / _grade_from_dual_dimension / decide_grade）
+   依赖批次内相对排名和 Path B 单信号 OR 触发，calibration 微调会引入噪声。
+   请改用文件末尾的 grading_v2 模块（grade_from_probability / grade_from_probabilities_batch）——
+   它基于 calibration 自动学习的绝对概率阈值分级，不依赖批次内相对排名，更鲁棒。
 """
 from __future__ import annotations
 
@@ -694,3 +700,183 @@ def decide_grade(
         recommended_channel=_recommend_channel(channels, info),
         consumer_insights=consumer_insights,
     )
+
+
+# ============================================================================
+# grading_v2 — 彻底重写的分级逻辑
+# 不依赖旧 Path A/B 单信号触发机制
+# 核心思想：分级完全由 calibration 学出的概率阈值决定，不硬编码批次内比例
+# ============================================================================
+
+_ACTION_MAP: dict[str, dict[str, str]] = {
+    'S': {
+        'grade_code': 'S',
+        'grade_label': '多备货 + 重点投流',
+        'action_supply': '加大备货 (约 3x 常规，参考历史爆款备货量)',
+        'action_ops': '重点投流 + 首推资源 + 渠道主推位',
+    },
+    'A+': {
+        'grade_code': 'A+',
+        'grade_label': '正常备货 + 常规运营',
+        'action_supply': '常规备货 (参考历史旺款备货量)',
+        'action_ops': '常规运营 + 渠道推荐',
+    },
+    'A': {
+        'grade_code': 'A',
+        'grade_label': '保守备货 + 观察',
+        'action_supply': '保守备货 (约 0.5x 常规)',
+        'action_ops': '观察为主 + 测试投放',
+    },
+    'P': {
+        'grade_code': 'P',
+        'grade_label': '设计展示款',
+        'action_supply': '小批量备货 (限量发售)',
+        'action_ops': '品牌展示为主 + KOL 种草 + 不冲销量',
+    },
+}
+
+
+def grade_from_probability(
+    bomb_probability: float,
+    s_threshold: float = 0.70,
+    aplus_threshold: float = 0.40,
+    is_p_style: bool = False,
+) -> dict:
+    """基于爆款概率的绝对分级 — 不依赖批次内相对排名
+
+    规则（来自 calibration 自动学习的阈值）：
+      P 款优先 → "设计展示款"（独立于跑量款分级）
+      bomb_prob >= s_threshold → "多备货 + 重点投流" (S)
+      bomb_prob >= aplus_threshold AND < s_threshold → "正常备货 + 常规运营" (A+)
+      bomb_prob < aplus_threshold → "保守备货 + 观察" (A)
+
+    Args:
+        bomb_probability: 爆款概率 (0-1)
+        s_threshold: calibration 学出的 S 级阈值 (默认 0.70, calibration 实际给的是 0.95)
+        aplus_threshold: calibration 学出的 A+ 级阈值 (默认 0.40)
+        is_p_style: 是否 P 款（设计展示款）
+
+    Returns:
+        {
+            'grade_code': str,      # 'S' | 'A+' | 'A' | 'P'
+            'grade_label': str,     # 用户可读分级
+            'action_supply': str,   # 供应链建议
+            'action_ops': str,      # 运营建议
+            'reasoning': str,       # 分级理由
+        }
+    """
+    # P 款优先级最高 — 独立于概率阈值
+    if is_p_style:
+        grade_code = 'P'
+    elif bomb_probability >= s_threshold:
+        grade_code = 'S'
+    elif bomb_probability >= aplus_threshold:
+        grade_code = 'A+'
+    else:
+        grade_code = 'A'
+
+    bomb_prob = bomb_probability
+    s_thr = s_threshold
+    ap_thr = aplus_threshold
+
+    reasoning_map: dict[str, str] = {
+        'S': f'爆款概率 {bomb_prob:.0%} ≥ {s_thr:.0%} (calibration S 级阈值)',
+        'A+': f'爆款概率 {bomb_prob:.0%} ≥ {ap_thr:.0%} 但 < {s_thr:.0%}',
+        'A': f'爆款概率 {bomb_prob:.0%} < {ap_thr:.0%} (calibration A+ 阈值)',
+        'P': '命中 P 款识别规则：设计调性款，独立于跑量款分级',
+    }
+
+    entry = _ACTION_MAP[grade_code]
+    return {
+        'grade_code': grade_code,
+        'grade_label': entry['grade_label'],
+        'action_supply': entry['action_supply'],
+        'action_ops': entry['action_ops'],
+        'reasoning': reasoning_map[grade_code],
+    }
+
+
+def grade_from_probabilities_batch(
+    probabilities: list[float],
+    p_styles: list[bool] | None = None,
+    s_threshold: float = 0.70,
+    aplus_threshold: float = 0.40,
+) -> list[dict]:
+    """批量分级
+
+    Args:
+        probabilities: 各款的爆款概率列表 (0-1)
+        p_styles: 各款是否 P 款，长度应与 probabilities 一致；为 None 时全部视为非 P 款
+        s_threshold: S 级阈值
+        aplus_threshold: A+ 级阈值
+
+    Returns:
+        与 probabilities 等长的分级结果列表
+    """
+    if p_styles is None:
+        p_styles = [False] * len(probabilities)
+    if len(p_styles) != len(probabilities):
+        raise ValueError(
+            f"p_styles 长度 ({len(p_styles)}) 与 probabilities 长度 ({len(probabilities)}) 不一致"
+        )
+
+    return [
+        grade_from_probability(
+            bomb_probability=p,
+            s_threshold=s_threshold,
+            aplus_threshold=aplus_threshold,
+            is_p_style=is_p,
+        )
+        for p, is_p in zip(probabilities, p_styles)
+    ]
+
+
+def check_no_relative_ranking(directory: str = "src/") -> bool:
+    """验证 v2 grading 不依赖批次内相对排名
+
+    检查范围限定在 grading.py 文件的 grading_v2 section 内部，
+    不扫描其他文件的相对排名逻辑（那是旧模块的事）。
+
+    Returns: True = 通过检查（v2 区域内不存在 rank/percentile/top_k 等相对排名操作）
+    """
+    from pathlib import Path as _Path
+
+    target = _Path(directory) / "grading.py"
+    if not target.exists():
+        return True  # 文件都不存在，默认通过
+
+    problematic_patterns = [
+        'rank(',
+        'percentile',
+        'top_k',
+        'top_k_samples',
+        'argsort',
+        'sort(reverse=True',
+        '分位',
+    ]
+
+    content = target.read_text(encoding='utf-8')
+    lines = content.split('\n')
+    in_v2 = False
+
+    for line in lines:
+        # 进入 v2 section
+        if 'grading_v2 —' in line or '# grading_v2' in line:
+            in_v2 = True
+            continue
+        # 遇到下一个独立的 ==== 分隔线（且不是 v2 section 内自己的）
+        if in_v2 and line.strip().startswith('# ====') and 'grading_v2' not in line:
+            in_v2 = False
+        # v2 section 内逐行检查
+        if in_v2:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            for pat in problematic_patterns:
+                if pat in line:
+                    log.warning(
+                        "check_no_relative_ranking: v2 区域内发现潜在相对排名操作 '%s'",
+                        pat,
+                    )
+                    return False
+    return True

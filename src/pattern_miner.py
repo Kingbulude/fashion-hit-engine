@@ -1,23 +1,31 @@
-"""PatternMiner — 从历史销售数据提炼可解释的爆款/败款模式
+"""PatternMiner — 爆款基因模式提炼 & 规则匹配
 
-核心思想：ResidualDecomposer 只做了"四象限投放归因"，
-没有回答 "款式本身的什么特征导致了爆/败"。
-PatternMiner 用 Decision Tree 从历史数据自动提炼：
-  "当一款同时具备 F06>7.2 + F09<4.8 + P15支持率>55% 时，
-   有 82% 概率成为 S 款"
+----------------------------------------------------------------------
+⚠️ DEPRECATION NOTICE（PatternMiner v1 vs v2）
+----------------------------------------------------------------------
+本模块同时承载两套规则系统，互不破坏：
 
-这些规则：
-  1. 人类可读（给买手/运营直接看）
-  2. 机器可用（存 YAML，下次评估时做 few-shot 注入）
-  3. 自动衰减（每条规则带 season/confidence，过期自动降权）
+  【v1 旧接口 — PatternMiner（基于 sklearn DecisionTree）】
+    mine_patterns() / PatternMineResult / PatternRule
+    save_patterns() / build_fewshot_context()
+    match_rules_for_style() / match_cbr_cases()
+    数据源：历史销售 DataFrame → 训练决策树 → 提取规则 → 落盘 YAML
+    用途：给 LLM few-shot prompt 注入"历史模式参考"
 
-设计原则：
-  - 不依赖额外 LLM 调用（纯 sklearn + pandas）
-  - 小样本友好（max_depth=4，min_samples_leaf=3 防过拟合）
-  - 与 HistoryStore 解耦（任何带 feature 列的 DataFrame 都能喂）
+  【v2 新接口 — RuleMatcher（独立规则引擎）】
+    class RuleMatcher
+    数据源：calibration v2 产物 pattern_rules.json（纯 JSON，无 sklearn 依赖）
+    用途：供 PredictionPipeline 实时调用，输出结构化的规则命中摘要
+    特点：
+      - 支持 >= / <= / > / < / == 五种运算符
+      - 规则所有 conditions AND 满足才算命中
+      - 自动跳过缺失 feature（不抛异常）
+      - 返回 rule_match_score / max_confidence / avg_confidence 等综合指标
+----------------------------------------------------------------------
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -876,3 +884,243 @@ def build_fewshot_context(
         "在评分和理由里体现你参考了哪些模式（引用案例编号如 #S-01）。"
     )
     return "\n".join(lines)
+
+
+# ======================================================================
+# v2 新接口 — RuleMatcher（独立规则引擎，供 PredictionPipeline 调用）
+# ======================================================================
+
+# 支持的比较运算符
+_OPS: dict[str, Any] = {
+    ">=": lambda a, b: a >= b,
+    "<=": lambda a, b: a <= b,
+    ">":  lambda a, b: a > b,
+    "<":  lambda a, b: a < b,
+    "==": lambda a, b: a == b,
+}
+
+
+def _eval_condition(
+    style_val: Any, op: str, threshold: Any
+) -> bool | None:
+    """评估单条 condition。
+
+    Returns:
+        True / False / None(缺失特征无法评估)
+    """
+    if style_val is None:
+        return None
+    cmp_fn = _OPS.get(op)
+    if cmp_fn is None:
+        log.warning("RuleMatcher: 未知运算符 '%s'，跳过", op)
+        return None
+    try:
+        return cmp_fn(float(style_val), float(threshold))
+    except (TypeError, ValueError):
+        log.warning(
+            "RuleMatcher: 无法比较 style_val=%r (op=%s) threshold=%r",
+            style_val, op, threshold,
+        )
+        return None
+
+
+class RuleMatcher:
+    """结构化爆款基因规则匹配引擎（PatternMiner v2 角色）。
+
+    与 v1 的关键区别：
+      - 直接读 calibration v2 产物 pattern_rules.json（纯 JSON，无 sklearn）
+      - 每条规则 conditions 全 AND 满足才算"命中"（而不是部分命中就计分）
+      - 返回标准化的命中摘要，供 PredictionPipeline 拼到最终预测报告里
+    """
+
+    def __init__(self, rules_path: str | Path):
+        """从 calibration 产物加载规则。
+
+        Args:
+            rules_path: pattern_rules.json 的路径
+                格式示例（calibration v2 产物）：
+                [
+                  {
+                    "rule_id": "S-03",
+                    "conditions": [
+                      {"feature": "F18", "op": ">=", "threshold": 3.0},
+                      {"feature": "F14", "op": ">=", "threshold": 4.0}
+                    ],
+                    "support": 7,
+                    "bomb_count": 4,
+                    "confidence": 0.571,
+                    "description": "..."
+                  },
+                  ...
+                ]
+        """
+        self.rules_path = Path(rules_path)
+        self.rules: list[dict[str, Any]] = []
+
+        if not self.rules_path.is_file():
+            log.warning("RuleMatcher: 规则文件不存在 → %s", self.rules_path)
+            return
+
+        try:
+            raw = json.loads(self.rules_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.error("RuleMatcher: 解析 %s 失败 → %s", self.rules_path, exc)
+            return
+
+        if isinstance(raw, list):
+            self.rules = raw
+        elif isinstance(raw, dict) and isinstance(raw.get("rules"), list):
+            self.rules = raw["rules"]
+        else:
+            log.warning("RuleMatcher: 规则文件格式异常（期望 list 或 {rules:[...]}）")
+            self.rules = []
+
+        log.info(
+            "RuleMatcher: 已加载 %d 条规则 ← %s",
+            len(self.rules), self.rules_path,
+        )
+
+    # ------------------------------------------------------------------
+    # 单款匹配
+    # ------------------------------------------------------------------
+    def match(self, style_features: dict) -> dict:
+        """对一个新款式匹配所有规则。
+
+        规则命中逻辑：
+          每条 rule 的所有 conditions 必须同时满足（AND）才算命中。
+          style_features 中不存在的 feature → 自动跳过该 condition（不抛异常）。
+          若一条规则的所有 condition 对应的 feature 都缺失 → 不算命中。
+
+        Args:
+            style_features: 新款式的特征 dict，如 {'F11': 5.0, 'F14': 7.0, ...}
+
+        Returns:
+            {
+                'rule_hits': [
+                    {
+                        'rule_id': 'S-03',
+                        'confidence': 0.571,
+                        'matched_conditions': [
+                            {'feature': 'F18', 'threshold': 3.0},
+                            {'feature': 'F14', 'threshold': 4.0},
+                        ],
+                    },
+                    ...
+                ],
+                'total_hits': int,                  # 命中的规则条数
+                'max_confidence': float,            # 命中规则中最高 confidence
+                'avg_confidence': float,            # 命中规则的平均 confidence
+                'rule_match_score': float,          # 加权综合分 = Σ(confidence × matched_conditions数)
+            }
+        """
+        rule_hits: list[dict[str, Any]] = []
+
+        for rule in self.rules:
+            conds = rule.get("conditions") or []
+            if not conds:
+                continue
+
+            matched_conds: list[dict[str, Any]] = []
+            all_satisfied = True
+            any_assessable = False  # 至少有一条 condition 能评估（特征存在）
+
+            for c in conds:
+                feat = c.get("feature")
+                op = c.get("op", ">=")
+                thresh = c.get("threshold")
+
+                if feat is None:
+                    all_satisfied = False
+                    break
+
+                val = style_features.get(feat)
+                if val is None:
+                    # 特征缺失 → 跳过这条 condition
+                    continue
+
+                any_assessable = True
+                ok = _eval_condition(val, op, thresh)
+                if ok is None or not ok:
+                    all_satisfied = False
+                    break
+
+                matched_conds.append(
+                    {"feature": feat, "threshold": thresh}
+                )
+
+            # 命中判定：所有可评估的 condition 都满足 + 至少有 1 条可评估
+            if all_satisfied and any_assessable and matched_conds:
+                rule_hits.append(
+                    {
+                        "rule_id": rule.get("rule_id", ""),
+                        "confidence": float(rule.get("confidence", 0.0)),
+                        "matched_conditions": matched_conds,
+                    }
+                )
+
+        total_hits = len(rule_hits)
+        confs = [h["confidence"] for h in rule_hits] if rule_hits else []
+        max_conf = max(confs) if confs else 0.0
+        avg_conf = (sum(confs) / len(confs)) if confs else 0.0
+
+        # 加权综合分 = Σ(confidence × matched_conditions数)
+        # 每条规则的 matched_conditions 数反映该规则"要求多严"，
+        # 匹配越严格的规则给越大权重
+        rule_match_score = sum(
+            h["confidence"] * len(h["matched_conditions"]) for h in rule_hits
+        )
+
+        return {
+            "rule_hits": rule_hits,
+            "total_hits": total_hits,
+            "max_confidence": round(max_conf, 4),
+            "avg_confidence": round(avg_conf, 4),
+            "rule_match_score": round(rule_match_score, 4),
+        }
+
+    # ------------------------------------------------------------------
+    # 批量匹配
+    # ------------------------------------------------------------------
+    def match_all(self, styles_features: pd.DataFrame) -> pd.DataFrame:
+        """批量匹配，返回每个款式的 rule_hits 摘要列。
+
+        Args:
+            styles_features: DataFrame，每一行是一个款式，列是特征（F11/F14/F18 等）。
+                可以带额外非特征列（如 style_id）——会原样保留。
+
+        Returns:
+            在原 DataFrame 基础上新增列：
+              - rule_hits: list[dict]  每条命中的规则摘要
+              - total_hits: int        命中规则条数
+              - max_confidence: float  命中规则最高置信度
+              - avg_confidence: float  命中规则平均置信度
+              - rule_match_score: float 加权综合分
+        """
+        df = styles_features.copy()
+
+        hit_list: list[list[dict]] = []
+        total_list: list[int] = []
+        max_conf_list: list[float] = []
+        avg_conf_list: list[float] = []
+        score_list: list[float] = []
+
+        for _, row in df.iterrows():
+            feats = {
+                col: float(row[col])
+                for col in row.index
+                if str(col).startswith("F") or str(col).startswith("P")
+            }
+            result = self.match(feats)
+            hit_list.append(result["rule_hits"])
+            total_list.append(result["total_hits"])
+            max_conf_list.append(result["max_confidence"])
+            avg_conf_list.append(result["avg_confidence"])
+            score_list.append(result["rule_match_score"])
+
+        df["rule_hits"] = hit_list
+        df["total_hits"] = total_list
+        df["max_confidence"] = max_conf_list
+        df["avg_confidence"] = avg_conf_list
+        df["rule_match_score"] = score_list
+
+        return df

@@ -21,6 +21,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -1736,6 +1737,104 @@ def render_page_summary():
             mime="application/zip", use_container_width=True,
         )
 
+    # === V2 NEW: Calibrated Prediction View ===
+    # 检查是否有 calibration v2 产物
+    brand_calib_dir = Path("brand_profiles") / st.session_state.get("brand_id", "mipo") / "calibrated"
+    has_v2 = (brand_calib_dir / "CALIBRATION_VERSION").exists()
+
+    if has_v2:
+        st.divider()
+        st.subheader("🎯 V2 校准后预测")
+
+        # 加载 calibration 报告
+        report = json.loads((brand_calib_dir / "calibration_report.json").read_text())
+        feat_imp = json.loads((brand_calib_dir / "feature_importance.json").read_text())
+
+        # 顶部指标
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("CV AUC", f"{report['calibrated_cv_auc_mean']:.3f}",
+                  f"+{(report['calibrated_cv_auc_mean'] - report['baseline_auc']) * 100:.1f}%")
+        c2.metric("S 级阈值", f"{report['s_threshold']:.2f}")
+        c3.metric("A+ 级阈值", f"{report['aplus_threshold']:.2f}")
+        c4.metric("Top-10 Recall", f"{report['full_train_recall_at_10'] * 100:.0f}%")
+
+        # 跑 v2 prediction
+        pp_v2 = PredictionPipeline(
+            brand_id=st.session_state.get("brand_id", "mipo"),
+            llm_backend=st.session_state.get("backend", "mock"),
+        )
+
+        v2_results = []
+        # 假设 styles 在 st.session_state 里（从 upload page 过来的）
+        styles = st.session_state.get("styles_info", [])
+        for s in styles:
+            r = pp_v2.predict_v2(s if isinstance(s, dict) else s.__dict__)
+            v2_results.append(r)
+
+        if v2_results:
+            v2_df = pd.DataFrame(v2_results).sort_values("bomb_probability", ascending=False)
+
+            # 分级分布条形图
+            st.markdown("**📊 分级分布（绝对阈值，无批次硬编码）**")
+            grade_colors = {"S": "#FF4B4B", "A+": "#FF9F1C", "A": "#4ECDC4", "P": "#A0A0A0"}
+            grade_counts = v2_df["grade_code"].value_counts()
+            fig, ax = plt.subplots(figsize=(8, 2))
+            bars = ax.bar(grade_counts.index, grade_counts.values,
+                          color=[grade_colors.get(g, "#888") for g in grade_counts.index])
+            ax.set_ylabel("款式数")
+            ax.set_title(f"S 线={report['s_threshold']:.2f} | A+ 线={report['aplus_threshold']:.2f}")
+            for bar, cnt in zip(bars, grade_counts.values):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
+                        str(cnt), ha="center")
+            st.pyplot(fig, use_container_width=True)
+
+            # 排行榜表格（带概率进度条）
+            st.markdown("**🏆 预测排行榜（按爆款概率降序）**")
+
+            def _grade_color(g):
+                return grade_colors.get(g, "#888")
+
+            display_df = v2_df[["style_id", "category", "price", "bomb_probability",
+                                "grade_code", "is_p_style", "action_supply", "action_ops"]].copy()
+            display_df = display_df.reset_index(drop=True)
+
+            # 概率进度条列
+            st.dataframe(
+                display_df.rename(columns={
+                    "style_id": "款号", "category": "品类", "price": "价格",
+                    "bomb_probability": "爆款概率", "grade_code": "分级",
+                    "is_p_style": "P款", "action_supply": "供应链建议", "action_ops": "运营建议"
+                }),
+                column_config={
+                    "爆款概率": st.column_config.ProgressColumn(
+                        "爆款概率", help="校准后 LightGBM 模型预测的爆款概率",
+                        format="%.3f", min_value=0.0, max_value=1.0
+                    ),
+                    "分级": st.column_config.TextColumn("分级", width="small"),
+                    "P款": st.column_config.CheckboxColumn("P款", width="small"),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+
+            # Top-5 邻居爆款率热力提示
+            with st.expander("🧠 品牌记忆库信号（邻居爆款率）", expanded=False):
+                mem_data = []
+                for _, row in v2_df.iterrows():
+                    mem = row.get("memory", {})
+                    mem_data.append({
+                        "款号": row["style_id"],
+                        "邻居爆款率": mem.get("neighbor_bomb_rate", 0),
+                        "邻居平均销量": mem.get("neighbor_avg_sales", 0),
+                        "邻居品类一致性": mem.get("neighbor_category_consistency", 0),
+                    })
+                st.dataframe(pd.DataFrame(mem_data).sort_values("邻居爆款率", ascending=False),
+                             hide_index=True, use_container_width=True)
+        else:
+            st.info("⚠️ 暂无款式数据，请先上传设计批次")
+    else:
+        st.info("🔧 还没有校准产物。请到「校准」页面基于历史数据跑一次校准，激活 V2 预测能力。")
+
 
 # ============================================================
 # 页面 3：🔍 单款详情报告
@@ -2248,6 +2347,128 @@ def render_page_detail():
         mime="text/markdown",
     )
 
+    # === V2 NEW: Calibrated Single-Style Detail ===
+    from pathlib import Path
+    import json as _json
+    from src.pipeline import PredictionPipeline
+
+    brand_id = st.session_state.get("brand_id", "mipo")
+    brand_calib_dir = Path("brand_profiles") / brand_id / "calibrated"
+    has_v2 = (brand_calib_dir / "CALIBRATION_VERSION").exists()
+
+    # 从 styles_info 里按 style_id 找 target_style，fallback 到 p.info
+    styles_info = st.session_state.get("styles_info", [])
+    target_style = None
+    for s in styles_info:
+        _sid = s.get("style_id") if isinstance(s, dict) else getattr(s, "style_id", None)
+        if _sid == selected:
+            target_style = s
+            break
+    if target_style is None:
+        target_style = p.info  # fallback: StyleInfo 对象
+
+    if has_v2 and target_style is not None:
+        st.divider()
+        st.subheader("🎯 V2 校准后预测详情")
+
+        # 跑 v2 prediction
+        pp_v2 = PredictionPipeline(
+            brand_id=brand_id,
+            llm_backend=st.session_state.get("backend", "mock"),
+        )
+
+        style_dict = target_style if isinstance(target_style, dict) else target_style.__dict__
+        v2 = pp_v2.predict_v2(style_dict)
+
+        # 核心指标三联卡
+        grade_colors = {"S": "#FF4B4B", "A+": "#FF9F1C", "A": "#4ECDC4", "P": "#A0A0A0"}
+        gc = v2["grade_code"]
+        c1, c2, c3 = st.columns([1, 1.5, 1.5])
+
+        with c1:
+            st.metric("爆款概率", f"{v2['bomb_probability']:.3f}")
+            st.progress(float(v2["bomb_probability"]), text=f"概率值: {v2['bomb_probability']*100:.1f}%")
+
+        with c2:
+            grade_box = st.container(border=True)
+            grade_box.markdown(f"### <span style='color:{grade_colors.get(gc,'#888')}'>{gc}</span> · {v2['grade_label']}", unsafe_allow_html=True)
+            if v2.get("is_p_style"):
+                grade_box.caption("🎨 命中 P 款规则（设计调性款）")
+
+        with c3:
+            act_box = st.container(border=True)
+            act_box.markdown("**📋 建议**")
+            act_box.caption(f"供应链: {v2['action_supply']}")
+            act_box.caption(f"运营: {v2['action_ops']}")
+
+        # 左: 品牌记忆库匹配
+        col_mem, col_rule = st.columns(2)
+
+        with col_mem:
+            st.markdown("### 🧠 品牌记忆库（相似款邻居）")
+            mem = v2.get("memory", {})
+            neighbors = mem.get("neighbors", [])
+
+            nc1, nc2, nc3 = st.columns(3)
+            nc1.metric("邻居爆款率", f"{mem.get('neighbor_bomb_rate', 0)*100:.0f}%")
+            nc2.metric("邻居平均销量", f"{mem.get('neighbor_avg_sales', 0):.0f}")
+            nc3.metric("品类一致性", f"{mem.get('neighbor_category_consistency', 0)*100:.0f}%")
+
+            if neighbors:
+                for i, nb in enumerate(neighbors[:5], 1):
+                    bomb_icon = "💣" if nb.get("is_bomb") else "  "
+                    st.markdown(f"{i}. **{nb.get('style_id','?')}** {bomb_icon} · 相似度 {nb.get('similarity',0):.2f} · 销量 {nb.get('sales_num',0)}")
+            else:
+                st.caption("记忆库为空")
+
+        with col_rule:
+            st.markdown("### 🧬 爆款基因规则命中")
+            rule_hits = v2.get("rule_hits", [])
+            conf = v2.get("confidence", {})
+
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("命中规则", conf.get("total", len(rule_hits)))
+            rc2.metric("最高置信度", f"{conf.get('max', 0)*100:.0f}%")
+            rc3.metric("规则评分", f"{v2.get('rule_match_score', 0):.2f}")
+
+            if rule_hits:
+                for hit in rule_hits:
+                    with st.expander(f"{hit['rule_id']} · 置信度 {hit['confidence']:.1%}"):
+                        for c in hit.get("matched_conditions", []):
+                            st.caption(f"  ✓ {c['feature']} ≥ {c['threshold']}")
+            else:
+                st.caption("未命中任何爆款基因规则")
+
+        # F11-F20 文本特征雷达图
+        f_feats = v2.get("f_features", {})
+        if f_feats:
+            with st.expander("📝 F11-F20 设计文本特征", expanded=False):
+                feat_df = pd.DataFrame([{"特征": k, "值": v} for k, v in f_feats.items() if k.startswith("F")])
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.dataframe(feat_df, hide_index=True, use_container_width=True)
+                with c2:
+                    try:
+                        import numpy as np
+                        labels = [r["特征"] for r in feat_df.to_dict("records")]
+                        values = [r["值"] for r in feat_df.to_dict("records")]
+                        # 归一化到 0-1 便于雷达图
+                        max_v = max(values) if max(values) > 0 else 1
+                        values_norm = [v/max_v for v in values]
+
+                        angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
+                        values_norm += values_norm[:1]
+                        angles += angles[:1]
+
+                        fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
+                        ax.fill(angles, values_norm, alpha=0.25)
+                        ax.plot(angles, values_norm, "o-", linewidth=2)
+                        ax.set_xticks(angles[:-1])
+                        ax.set_xticklabels(labels, fontsize=8)
+                        st.pyplot(fig, use_container_width=True)
+                    except Exception as e:
+                        st.caption(f"(雷达图渲染跳过: {e})")
+
 
 # ============================================================
 # 页面 4：📊 回测校准（含3Loop优化内核按钮）
@@ -2742,6 +2963,126 @@ def render_page_calibration():
                     f"✅ 3Loop校准完成！产物已写入 `brand_profiles/{brand_cfg.brand_id}/calibrated/`，"
                     "下次评估时会自动生效。"
                 )
+
+    # === V2 NEW: AUC-Optimized Calibration ===
+    from pathlib import Path
+    import json as _json
+    from src.calibration_v2 import run_calibration
+    from src.text_feature_extractor import batch_extract_text_features
+    from src.ground_truth import load_and_map_ground_truth
+    
+    st.divider()
+    st.subheader("🎯 V2 校准：AUC 优化 + 爆款基因提取")
+    st.caption("基于 LightGBM 分类器 + F11-F20 设计文本特征 + 品牌记忆库加权相似度。最小样本量 ≥ 20 款，至少 2 个真爆款。")
+    
+    # v2 calibration 状态检查
+    calib_dir = Path("brand_profiles") / st.session_state.get("brand_id", "mipo") / "calibrated"
+    calib_version_file = calib_dir / "CALIBRATION_VERSION"
+    has_v2 = calib_version_file.exists()
+    
+    if has_v2:
+        # === 已校准: 展示报告 ===
+        report = _json.loads((calib_dir / "calibration_report.json").read_text())
+        feat_imp = _json.loads((calib_dir / "feature_importance.json").read_text())
+        rules = _json.loads((calib_dir / "pattern_rules.json").read_text())
+        
+        st.success(f"✅ 已校准 | 总样本 {report['total_samples']} | 真爆款 {report['total_bombs']}")
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Baseline AUC", f"{report['baseline_auc']:.3f}")
+        c2.metric("CV AUC (v2)", f"{report['calibrated_cv_auc_mean']:.3f}", f"+{(report['calibrated_cv_auc_mean']-report['baseline_auc'])*100:.1f}%")
+        c3.metric("Top-10 Recall", f"{report['full_train_recall_at_10']*100:.0f}%")
+        c4.metric("校准阈值", f"S≥{report['s_threshold']:.2f} | A+≥{report['aplus_threshold']:.2f}")
+        
+        # Feature Importance 条形图（Top-15）
+        with st.expander("📊 Feature Importance (Permutation)", expanded=True):
+            top_n = min(15, len(feat_imp))
+            imp_df = pd.DataFrame(feat_imp[:top_n])
+            fig, ax = plt.subplots(figsize=(8, max(3, top_n*0.35)))
+            ax.barh(imp_df["feature"], imp_df["importance"], color="#4ECDC4")
+            ax.set_xlabel("Permutation Importance (drop in AUC when shuffled)")
+            ax.set_title(f"Top-{top_n} 重要特征")
+            ax.invert_yaxis()
+            for i, row in imp_df.iterrows():
+                ax.text(row["importance"] + 0.002, i, f"{row['importance']:.3f}", va="center", fontsize=8)
+            st.pyplot(fig, use_container_width=True)
+        
+        # 爆款基因规则
+        with st.expander("🧬 爆款基因规则 (Pattern Rules)", expanded=False):
+            if rules:
+                rule_df = pd.DataFrame([{
+                    "规则ID": r["rule_id"],
+                    "条件": " AND ".join([f"{c['feature']}{c['op']}{c['threshold']}" for c in r["conditions"]]),
+                    "支持度": r.get("support", 0),
+                    "爆款数": r.get("bomb_count", 0),
+                    "置信度": f"{r['confidence']:.1%}",
+                } for r in rules])
+                st.dataframe(rule_df, hide_index=True, use_container_width=True)
+            else:
+                st.caption("暂无规则")
+        
+        # 重新校准按钮
+        st.markdown("---")
+        st.markdown("**🔄 重新校准**")
+        st.caption("用新的历史销售数据覆盖旧校准产物")
+        upload_key = "v2_calib_upload"
+        uploaded = st.file_uploader(
+            "上传最新批次 Excel（需包含 sales_num + label_30d + design_text 列）",
+            type=["xlsx", "xls"], key=upload_key
+        )
+        if uploaded is not None:
+            import tempfile, os
+            tmp = os.path.join(tempfile.gettempdir(), uploaded.name)
+            with open(tmp, "wb") as f:
+                f.write(uploaded.read())
+            try:
+                df_v2 = load_and_map_ground_truth(tmp)
+                st.success(f"✅ 加载 {len(df_v2)} 款，其中 {int(df_v2['is_bomb'].sum())} 个真爆款")
+                
+                if st.button("🚀 开始 V2 校准"):
+                    with st.spinner("LightGBM 训练 + F11-F20 特征提取 + 阈值搜索..."):
+                        text_f = batch_extract_text_features(df_v2["design_text"].tolist())
+                        df_v2 = pd.concat([df_v2.reset_index(drop=True), text_f], axis=1)
+                        result = run_calibration(df_v2, brand_name=st.session_state.get("brand_id", "mipo"))
+                    st.success(f"✅ 校准完成！CV AUC {result.calibrated_cv_auc_mean:.3f} | Top-10 Recall {result.full_train_recall_at_10:.0%}")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ 数据加载失败: {e}")
+    else:
+        # === 未校准: 引导 + 上传入口 ===
+        st.warning("⚠️ 还没有 V2 校准产物。需要历史销售数据来训练 LightGBM 分类器 + 自动学习分级阈值。")
+        
+        st.markdown("**📥 第一步：上传历史销售数据**")
+        st.caption("Excel 格式要求：style_id | category | season | price | design_text | sales_num | label_30d(爆/旺/平/滞)")
+        
+        uploaded = st.file_uploader(
+            "上传历史销售数据 Excel（≥20 款，至少 2 个真爆款）",
+            type=["xlsx", "xls"], key="v2_init_upload"
+        )
+        if uploaded is not None:
+            import tempfile, os
+            tmp = os.path.join(tempfile.gettempdir(), uploaded.name)
+            with open(tmp, "wb") as f:
+                f.write(uploaded.read())
+            try:
+                df_v2 = load_and_map_ground_truth(tmp)
+                bomb_cnt = int(df_v2["is_bomb"].sum())
+                st.success(f"✅ 数据检查通过: {len(df_v2)} 款 | {bomb_cnt} 个真爆款")
+                
+                if len(df_v2) < 20 or bomb_cnt < 2:
+                    st.error(f"❌ 样本不足：需要 ≥20 款且 ≥2 个真爆款，当前 {len(df_v2)} 款 / {bomb_cnt} 爆款")
+                else:
+                    if st.button("🚀 开始首次 V2 校准", type="primary"):
+                        with st.spinner("F11-F20 特征提取 → LightGBM 5×CV → Permutation Importance → 阈值搜索 → 产物保存..."):
+                            text_f = batch_extract_text_features(df_v2["design_text"].tolist())
+                            df_v2 = pd.concat([df_v2.reset_index(drop=True), text_f], axis=1)
+                            result = run_calibration(df_v2, brand_name=st.session_state.get("brand_id", "mipo"))
+                        st.success(f"🎉 校准完成！Baseline AUC {result.baseline_auc:.3f} → CV AUC {result.calibrated_cv_auc_mean:.3f}")
+                        st.info("💡 现在可以回到「预测」页面上传新设计批次，V2 校准后模型会自动生效")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"❌ 数据加载失败: {e}")
+                st.exception(e)
 
 
 # ============================================================
