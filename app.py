@@ -1556,7 +1556,6 @@ def render_page_summary():
         st.markdown("### 🎯 V2 校准后预测（LightGBM + 品牌记忆 + 爆款基因规则）")
         
         # calibration 指标
-        from pathlib import Path as _Path
         _calib_dir = _Path("brand_profiles") / brand_cfg.brand_id / "calibrated"
         _has_calib = (_calib_dir / "CALIBRATION_VERSION").exists()
         if _has_calib:
@@ -2551,7 +2550,6 @@ def render_page_detail():
     )
 
     # === V2 NEW: Calibrated Single-Style Detail ===
-    from pathlib import Path
     import json as _json
     from src.pipeline import PredictionPipeline
 
@@ -3169,7 +3167,6 @@ def render_page_calibration():
                 )
 
     # === V2 NEW: AUC-Optimized Calibration ===
-    from pathlib import Path
     import json as _json
     from src.calibration_v2 import run_calibration
     from src.text_feature_extractor import batch_extract_text_features
