@@ -1,38 +1,25 @@
-# 童装爆款预测AI工具 · 依赖清单（阶段一·Python 3.11 兼容优先）
-# 版本要求全部放宽，保证 Windows pip 能解析成功
+# ========== 必须 ==========
+streamlit>=1.30.0
+pandas>=2.0.0
+numpy>=1.24.0
 
-# ===== 核心依赖 =====
-dashscope            # 阿里云百炼SDK
-requests
-httpx
+# ========== V2 回测校准 (可选, 缺了回测校准崩但预测主流程不崩) ==========
+lightgbm>=4.0.0
+scikit-learn>=1.3.0
 
-# ===== 数据处理 =====
-pandas
-numpy>=1.26          # 注：原 `numpy<2` 与 Python 3.14 不兼容（无 wheel）；scikit-learn 1.5+ 已支持 numpy 2
-openpyxl
+# ========== 数据加载 ==========
+openpyxl>=3.1.0     # Excel 读取
+pyarrow>=12.0.0     # parquet (calibration 产物)
 
-# ===== 机器学习（校准层） =====
-scikit-learn
-scipy
+# ========== 配置 ==========
+pyyaml>=6.0
+python-dotenv>=1.0.0
 
-# ===== 统计（可选·轻量）=====
-# statsmodels    # 暂不安装，后续训练量>50款再启用
+# ========== 可视化 (可选, 缺了降级显示文字条形图) ==========
+matplotlib>=3.7.0
+plotly>=5.15.0
+pillow>=10.0.0
 
-# ===== 图片处理 =====
-Pillow
-
-# ===== 进度与日志 =====
-tqdm
-# rich          # 阶段一暂不使用，减少冲突
-
-# ===== 报告生成 =====
-# jinja2        # 阶段一只输出Markdown，暂不用
-# matplotlib    # 阶段一暂不使用
-
-# ===== 前端（Web UI） =====
-streamlit>=1.35
-plotly>=5.20        # Streamlit内画雷达图、饼图
-
-# ===== 配置管理 =====
-pyyaml
-python-dotenv
+# ========== 工具 ==========
+tqdm>=4.65.0
+httpx>=0.25.0       # LLM client
