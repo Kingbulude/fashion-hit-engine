@@ -30,16 +30,36 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import RepeatedStratifiedKFold
-from sklearn.inspection import permutation_importance
-from sklearn.metrics import (
-    roc_auc_score, average_precision_score,
-    precision_score, recall_score
-)
-from sklearn.preprocessing import StandardScaler
+
+# === 可选 heavy deps: 缺失时不崩, 相关功能优雅降级 ===
+try:
+    import lightgbm as lgb
+    HAS_LIGHTGBM = True
+except ImportError:
+    lgb = None  # type: ignore
+    HAS_LIGHTGBM = False
+
+try:
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import RepeatedStratifiedKFold
+    from sklearn.inspection import permutation_importance
+    from sklearn.metrics import (
+        roc_auc_score, average_precision_score,
+        precision_score, recall_score
+    )
+    from sklearn.preprocessing import StandardScaler
+    HAS_SKLEARN = True
+except ImportError:
+    LogisticRegression = None  # type: ignore
+    RandomForestClassifier = None  # type: ignore
+    RepeatedStratifiedKFold = None  # type: ignore
+    permutation_importance = None  # type: ignore
+    roc_auc_score = average_precision_score = precision_score = recall_score = None  # type: ignore
+    StandardScaler = None  # type: ignore
+    HAS_SKLEARN = False
+
+HAS_CALIBRATION_DEPS = HAS_LIGHTGBM and HAS_SKLEARN
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +147,20 @@ def run_calibration(
         target_dir = Path(f"brand_profiles/{brand_name}/calibrated")
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # === 关键 deps 检查 —— 缺失时直接返回错误 result ===
+    if not HAS_CALIBRATION_DEPS:
+        missing = []
+        if not HAS_LIGHTGBM:
+            missing.append("lightgbm")
+        if not HAS_SKLEARN:
+            missing.append("scikit-learn")
+        raise RuntimeError(
+            f"回测校准需要额外依赖: {', '.join(missing)}\n"
+            f"请运行: pip install lightgbm scikit-learn\n"
+            f"当前安装: {'✓' if HAS_LIGHTGBM else '✗'} lightgbm, {'✓' if HAS_SKLEARN else '✗'} scikit-learn"
+        )
+
     result = CalibrationResult(brand_name=brand_name)
     result.total_samples = len(history_df)
     result.total_bombs = int(history_df['is_bomb'].sum())

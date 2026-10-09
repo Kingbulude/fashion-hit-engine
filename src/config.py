@@ -8,8 +8,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
-from dotenv import load_dotenv
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    yaml = None  # type: ignore
+    HAS_YAML = False
+
+try:
+    from dotenv import load_dotenv
+    HAS_DOTENV = True
+except ImportError:
+    load_dotenv = None  # type: ignore
+    HAS_DOTENV = False
 
 from .types import BrandConfig, BrandDecisionStructure, DecisionLayer
 
@@ -55,8 +66,8 @@ class AppConfig:
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
+        if HAS_YAML:
+            return yaml.safe_load(f) or {}
 
 # ========== 品牌配置加载（新架构 v2.0）==========
 
@@ -331,8 +342,8 @@ def load_config(
     if env_file.exists():
         load_dotenv(env_file)
     else:
-        load_dotenv()
-
+        if HAS_DOTENV:
+            load_dotenv()
     api = APIConfig(
         dashscope_api_key=(override_api_key if override_api_key is not None else os.getenv("DASHSCOPE_API_KEY", "")),
         zhipu_api_key=os.getenv("ZHIPU_API_KEY", ""),
