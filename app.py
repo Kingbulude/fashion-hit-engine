@@ -21,11 +21,30 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
-from PIL import Image
+
+# === 可选依赖：装了就用，没装自动降级不崩 ===
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    plt = None  # type: ignore
+    HAS_MATPLOTLIB = False
+
+try:
+    import plotly.graph_objects as go
+    HAS_PLOTLY = True
+except ImportError:
+    go = None  # type: ignore
+    HAS_PLOTLY = False
+
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    Image = None  # type: ignore
+    HAS_PIL = False
 
 # ========== 让直接 streamlit run app.py 能 import src/ 模块 ==========
 ROOT = Path(__file__).resolve().parent
@@ -1554,14 +1573,18 @@ def render_page_summary():
         # 分级分布
         _grade_colors = {"S": "#FF4B4B", "A+": "#FF9F1C", "A": "#4ECDC4", "P": "#A0A0A0"}
         _grade_counts = _v2_df["grade_code"].value_counts()
-        fig, ax = plt.subplots(figsize=(8, 1.8))
-        _bars = ax.bar(_grade_counts.index, _grade_counts.values, color=[_grade_colors.get(g, "#888") for g in _grade_counts.index])
-        ax.set_ylabel("款式数")
-        ax.set_title("分级分布（绝对阈值 · 无批次硬编码）")
-        for _bar, _cnt in zip(_bars, _grade_counts.values):
-            ax.text(_bar.get_x() + _bar.get_width()/2, _bar.get_height() + 0.05, str(_cnt), ha="center")
-        st.pyplot(fig, use_container_width=True)
-        
+        if HAS_MATPLOTLIB:
+            fig, ax = plt.subplots(figsize=(8, 1.8))
+            _bars = ax.bar(_grade_counts.index, _grade_counts.values, color=[_grade_colors.get(g, "#888") for g in _grade_counts.index])
+            ax.set_ylabel("款式数")
+            ax.set_title("分级分布（绝对阈值 · 无批次硬编码）")
+            for _bar, _cnt in zip(_bars, _grade_counts.values):
+                ax.text(_bar.get_x() + _bar.get_width()/2, _bar.get_height() + 0.05, str(_cnt), ha="center")
+            st.pyplot(fig, use_container_width=True)
+            
+        else:
+            _total = _grade_counts.sum()
+            st.caption("📊 分级分布: " + " | ".join(f"{g}={c} ({c/_total:.0%})" for g, c in _grade_counts.items()) + " | pip install matplotlib 可看条形图")
         # 主排行榜
         st.markdown("**🏆 预测排行榜（按爆款概率降序）**")
         _display = _v2_df[["style_id", "category", "price", "bomb_probability", "grade_code", "is_p_style", "action_supply", "action_ops"]].copy()
@@ -1877,46 +1900,50 @@ def render_page_summary():
             st.markdown("**📊 分级分布（绝对阈值，无批次硬编码）**")
             grade_colors = {"S": "#FF4B4B", "A+": "#FF9F1C", "A": "#4ECDC4", "P": "#A0A0A0"}
             grade_counts = v2_df["grade_code"].value_counts()
-            fig, ax = plt.subplots(figsize=(8, 2))
-            bars = ax.bar(grade_counts.index, grade_counts.values,
-                          color=[grade_colors.get(g, "#888") for g in grade_counts.index])
-            ax.set_ylabel("款式数")
-            ax.set_title(f"S 线={report['s_threshold']:.2f} | A+ 线={report['aplus_threshold']:.2f}")
-            for bar, cnt in zip(bars, grade_counts.values):
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
-                        str(cnt), ha="center")
-            st.pyplot(fig, use_container_width=True)
-
-            # 排行榜表格（带概率进度条）
-            st.markdown("**🏆 预测排行榜（按爆款概率降序）**")
-
-            def _grade_color(g):
-                return grade_colors.get(g, "#888")
-
-            display_df = v2_df[["style_id", "category", "price", "bomb_probability",
-                                "grade_code", "is_p_style", "action_supply", "action_ops"]].copy()
-            display_df = display_df.reset_index(drop=True)
-
-            # 概率进度条列
-            st.dataframe(
-                display_df.rename(columns={
-                    "style_id": "款号", "category": "品类", "price": "价格",
-                    "bomb_probability": "爆款概率", "grade_code": "分级",
-                    "is_p_style": "P款", "action_supply": "供应链建议", "action_ops": "运营建议"
-                }),
-                column_config={
-                    "爆款概率": st.column_config.ProgressColumn(
-                        "爆款概率", help="校准后 LightGBM 模型预测的爆款概率",
-                        format="%.3f", min_value=0.0, max_value=1.0
-                    ),
-                    "分级": st.column_config.TextColumn("分级", width="small"),
-                    "P款": st.column_config.CheckboxColumn("P款", width="small"),
-                },
-                hide_index=True,
-                use_container_width=True,
-            )
-
-            # Top-5 邻居爆款率热力提示
+            if HAS_MATPLOTLIB:
+                fig, ax = plt.subplots(figsize=(8, 2))
+                bars = ax.bar(grade_counts.index, grade_counts.values,
+                              color=[grade_colors.get(g, "#888") for g in grade_counts.index])
+                ax.set_ylabel("款式数")
+                ax.set_title(f"S 线={report['s_threshold']:.2f} | A+ 线={report['aplus_threshold']:.2f}")
+                for bar, cnt in zip(bars, grade_counts.values):
+                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
+                            str(cnt), ha="center")
+                st.pyplot(fig, use_container_width=True)
+    
+                # 排行榜表格（带概率进度条）
+                st.markdown("**🏆 预测排行榜（按爆款概率降序）**")
+    
+                def _grade_color(g):
+                    return grade_colors.get(g, "#888")
+    
+                display_df = v2_df[["style_id", "category", "price", "bomb_probability",
+                                    "grade_code", "is_p_style", "action_supply", "action_ops"]].copy()
+                display_df = display_df.reset_index(drop=True)
+    
+                # 概率进度条列
+                st.dataframe(
+                    display_df.rename(columns={
+                        "style_id": "款号", "category": "品类", "price": "价格",
+                        "bomb_probability": "爆款概率", "grade_code": "分级",
+                        "is_p_style": "P款", "action_supply": "供应链建议", "action_ops": "运营建议"
+                    }),
+                    column_config={
+                        "爆款概率": st.column_config.ProgressColumn(
+                            "爆款概率", help="校准后 LightGBM 模型预测的爆款概率",
+                            format="%.3f", min_value=0.0, max_value=1.0
+                        ),
+                        "分级": st.column_config.TextColumn("分级", width="small"),
+                        "P款": st.column_config.CheckboxColumn("P款", width="small"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                )
+    
+                # Top-5 邻居爆款率热力提示
+            else:
+                _total = grade_counts.sum()
+                st.caption("📊 分级分布: " + " | ".join(f"{g}={c} ({c/_total:.0%})" for g, c in grade_counts.items()) + " | pip install matplotlib 可看条形图")
             with st.expander("🧠 品牌记忆库信号（邻居爆款率）", expanded=False):
                 mem_data = []
                 for _, row in v2_df.iterrows():
@@ -2631,17 +2658,18 @@ def render_page_detail():
                         # 归一化到 0-1 便于雷达图
                         max_v = max(values) if max(values) > 0 else 1
                         values_norm = [v/max_v for v in values]
-
                         angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
                         values_norm += values_norm[:1]
                         angles += angles[:1]
-
-                        fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
-                        ax.fill(angles, values_norm, alpha=0.25)
-                        ax.plot(angles, values_norm, "o-", linewidth=2)
-                        ax.set_xticks(angles[:-1])
-                        ax.set_xticklabels(labels, fontsize=8)
-                        st.pyplot(fig, use_container_width=True)
+                        if HAS_MATPLOTLIB:
+                            fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
+                            ax.fill(angles, values_norm, alpha=0.25)
+                            ax.plot(angles, values_norm, "o-", linewidth=2)
+                            ax.set_xticks(angles[:-1])
+                            ax.set_xticklabels(labels, fontsize=8)
+                            st.pyplot(fig, use_container_width=True)
+                        else:
+                            st.caption("📊 雷达图需要 matplotlib, 请 `pip install matplotlib`")
                     except Exception as e:
                         st.caption(f"(雷达图渲染跳过: {e})")
 
@@ -3174,15 +3202,18 @@ def render_page_calibration():
         with st.expander("📊 Feature Importance (Permutation)", expanded=True):
             top_n = min(15, len(feat_imp))
             imp_df = pd.DataFrame(feat_imp[:top_n])
-            fig, ax = plt.subplots(figsize=(8, max(3, top_n*0.35)))
-            ax.barh(imp_df["feature"], imp_df["importance"], color="#4ECDC4")
-            ax.set_xlabel("Permutation Importance (drop in AUC when shuffled)")
-            ax.set_title(f"Top-{top_n} 重要特征")
-            ax.invert_yaxis()
-            for i, row in imp_df.iterrows():
-                ax.text(row["importance"] + 0.002, i, f"{row['importance']:.3f}", va="center", fontsize=8)
-            st.pyplot(fig, use_container_width=True)
-        
+            if HAS_MATPLOTLIB:
+                fig, ax = plt.subplots(figsize=(8, max(3, top_n*0.35)))
+                ax.barh(imp_df["feature"], imp_df["importance"], color="#4ECDC4")
+                ax.set_xlabel("Permutation Importance (drop in AUC when shuffled)")
+                ax.set_title(f"Top-{top_n} 重要特征")
+                ax.invert_yaxis()
+                for i, row in imp_df.iterrows():
+                    ax.text(row["importance"] + 0.002, i, f"{row['importance']:.3f}", va="center", fontsize=8)
+                st.pyplot(fig, use_container_width=True)
+            
+            else:
+                st.dataframe(imp_df, hide_index=True, use_container_width=True)
         # 爆款基因规则
         with st.expander("🧬 爆款基因规则 (Pattern Rules)", expanded=False):
             if rules:
